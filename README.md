@@ -1,7 +1,17 @@
+
+# About this fork 
+
+I have make some change to make it easier to use by some group of people :
+- Translate some text to Thai (ภาษาไทย)
+- Add config called `use_response_url` if set to `1`; app will respond to request using `response_url` instead of using `app.client.chat.post`
+  so user will be able to create poll in private channel without adding bot to that channel, It might slower or get timeout if script not response within 3 sec. 
+and response_url will show modal since slack not support and hidden type in modal 
+- Rearrange Menu to the end of poll so no more big menu btn between question and answer 
+
 # Open source poll for slack
 
 Welcome to the open source poll for slack.  
-This repository is hosted on [GitLab](https://gitlab.com/KazuAlex/openpollslack). [Github repository](https://github.com/KazuAlex/openpollslack) is only a mirror.  
+This repository is hosted on [GitLab](https://gitlab.com/openpollslack/openpollslack). [Github repository](https://github.com/KazuAlex/openpollslack) is only a mirror.  
 But feel free to open new issues on both.  
 
 ## Important update

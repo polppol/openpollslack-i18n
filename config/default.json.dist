@@ -1,6 +1,8 @@
 {
   "port": 5000,
   "command": "openpoll",
+  "bot_name": "Open Poll(TH)",
+  "use_response_url": 0,
   "help_link": "https://gitlab.com/kazualex/openpollslack.git",
   "client_id": "",
   "client_secret": "",

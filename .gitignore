@@ -1,4 +1,5 @@
 node_modules
+package-lock.json
 config/default.json
 config/open_poll.json
 config/polls.json
