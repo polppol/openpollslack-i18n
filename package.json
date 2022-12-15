@@ -30,6 +30,7 @@
     "compression": "^1.7.4",
     "config": "^3.3.6",
     "express": "^4.17.1",
+    "glob": "^8.0.3",
     "helmet": "^3.23.3",
     "mongodb": "^4.4.0",
     "request": "^2.88.2"

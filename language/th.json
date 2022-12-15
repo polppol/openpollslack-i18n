@@ -1,0 +1,14 @@
+{
+  "hello": "Hello World!",
+  "change_vote_poll_closed": "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว.",
+  "pro": "Pro",
+  "premium": "Premium",
+  "storage": "Storage",
+  "email": "Emails",
+  "domain": "Domains",
+  "sign_up": "Sign Up",
+  "cost_basic": "$ 10",
+  "cost_pro": "$ 25",
+  "cost_premium": "$ 50",
+  "per_month": "per month"
+}

@@ -7,13 +7,22 @@ const { Migrations } = require('./utils/migrations');
 
 const { Mutex } = require('async-mutex');
 
+const fileLang = require('fs');
+
+const globLang = require('glob');
+
+let language_dict = {};
+
 const port = config.get('port');
 const signing_secret = config.get('signing_secret');
 const slackCommand = config.get('command');
 const helpLink = config.get('help_link');
 const supportUrl = config.get('support_url');
+const appLang = config.get('app_lang');
 const isUseResponseUrl = config.get('use_response_url') == 1;
+const isMenuAtTheEnd = config.get('menu_at_the_end') == 1;
 const botName = config.get('bot_name');
+const isShowHelpLink = config.get('show_help_link') == 1;
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -41,6 +50,20 @@ try {
   console.error(e)
   process.exit();
 }
+
+globLang.sync( './language/*.json' ).forEach( function( file ) {
+  let dash = file.split("/");
+  if(dash.length == 3) {
+    let dot = dash[2].split(".");
+    if(dot.length == 2) {
+      let lang = dot[0];
+      fileLang.readFile(file, function(err, data) {
+        language_dict[lang] = JSON.parse(data.toString());
+        console.log("Lang found: "+lang)
+      });
+    }
+  }
+});
 
 const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
@@ -103,6 +126,67 @@ const sendMessageUsingUrl = async (url,newMessage) => {
     headers: {'Content-Type': 'application/json'}
   })//.then(res => res.json())//.then(console.debug)
   .then(console.debug)
+}
+
+const postChat = async (url,type,requestBody) => {
+  if(isUseResponseUrl)
+  {
+    delete requestBody['token'];
+    delete requestBody['channel'];
+    delete requestBody['user'];
+    switch (type)
+    {
+      case "post":
+        requestBody['response_type'] = 'in_channel';
+        requestBody['replace_original'] = false;
+        break;
+      case "update":
+        requestBody['response_type'] = 'in_channel';
+        requestBody['replace_original'] = true;
+        break;
+      case "ephemeral":
+        requestBody['response_type'] = 'ephemeral';
+        requestBody['replace_original'] = false;
+        break;
+      case "delete":
+        requestBody['delete_original'] = true;
+        break;
+      default:
+        console.error("Invalid post type:"+type);
+        return;
+    }
+    await sendMessageUsingUrl(url,requestBody);
+  }
+  else
+  {
+    try {
+      switch (type)
+      {
+        case "post":
+          await app.client.chat.postMessage(requestBody);
+          break;
+        case "update":
+          await app.client.chat.update(requestBody);
+          break;
+        case "ephemeral":
+          await app.client.chat.postEphemeral(requestBody);
+          break;
+        case "delete":
+          await app.client.chat.delete(requestBody);
+          break;
+        default:
+          console.error("Invalid post type:"+type)
+          return;
+      }
+    } catch (e) {
+      if (
+          e && e.data && e.data && e.data.error
+          && 'channel_not_found' === e.data.error
+      ) {
+        console.error('Channel not found error : ignored')
+      }
+    }
+  }
 }
 
 app.event('app_home_opened', async ({ event, client, context }) => {
@@ -469,24 +553,31 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
       },
     ];
 
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-      {
-        response_type: 'ephemeral',
-        replace_original: false,
-        blocks: blocks,
-      });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: channel,
-        user: userId,
-        blocks: blocks,
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: channel,
+      user: userId,
+      blocks: blocks,
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //   {
+    //     response_type: 'ephemeral',
+    //     replace_original: false,
+    //     blocks: blocks,
+    //   });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: channel,
+    //     user: userId,
+    //     blocks: blocks,
+    //   });
+    // }
 
 
     return;
@@ -551,39 +642,41 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
     if (null === blocks) {
       return;
     }
-	
-	if(isUseResponseUrl)
-	{
-		// await ack({
-        //   response_type: 'in_channel',
-        //   blocks: blocks,
-        //   text: `Poll : ${question}`,
-        // });
-      await sendMessageUsingUrl(body.response_url,
-      {
-        response_type: 'in_channel',
-        blocks: blocks,
-        text: `Poll : ${question}`,
-      });
-	}
-	else
-	{
-		try {
-		  await app.client.chat.postMessage({
-			token: context.botToken,
-			channel: channel,
-			blocks: blocks,
-			text: `Poll : ${question}`,
-		  });
-		} catch (e) {
-		  if (
-			e && e.data && e.data && e.data.error
-			&& 'channel_not_found' === e.data.error
-		  ) {
-			console.error('Channel not found error : ignored')
-		  }
-		}		
-	}
+
+    let mRequestBody = {
+      token: context.botToken,
+      channel: channel,
+      blocks: blocks,
+      text: `Poll : ${question}`,
+    };
+    await postChat(body.response_url,'post',mRequestBody);
+	// if(isUseResponseUrl)
+	// {
+    //   await sendMessageUsingUrl(body.response_url,
+    //   {
+    //     response_type: 'in_channel',
+    //     blocks: blocks,
+    //     text: `Poll : ${question}`,
+    //   });
+	// }
+	// else
+	// {
+	// 	try {
+	// 	  await app.client.chat.postMessage({
+	// 		token: context.botToken,
+	// 		channel: channel,
+	// 		blocks: blocks,
+	// 		text: `Poll : ${question}`,
+	// 	  });
+	// 	} catch (e) {
+	// 	  if (
+	// 		e && e.data && e.data && e.data.error
+	// 		&& 'channel_not_found' === e.data.error
+	// 	  ) {
+	// 		console.error('Channel not found error : ignored')
+	// 	  }
+	// 	}
+	// }
   }
 });
 
@@ -759,45 +852,59 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
 
   if (body.user.id != action.value) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-      {
-        response_type: 'ephemeral',
-        replace_original: false,
-        attachments: [],
-        text: "You can't delete poll from another user."
-      });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't delete poll from another user.",
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: "You can't delete poll from another user.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //   {
+    //     response_type: 'ephemeral',
+    //     replace_original: false,
+    //     attachments: [],
+    //     text: "You can't delete poll from another user."
+    //   });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't delete poll from another user.",
+    //   });
+    // }
     return;
   }
 
-  if(isUseResponseUrl)
-  {
-    await sendMessageUsingUrl(body.response_url,
-    {
-      delete_original: true,
-      //ts: body.message.ts,
-    });
-  }
-  else
-  {
-    await app.client.chat.delete({
-      token: context.botToken,
-      channel: body.channel.id,
-      ts: body.message.ts,
-    });
-  }
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    ts: body.message.ts,
+  };
+  await postChat(body.response_url,'delete',mRequestBody);
+  // if(isUseResponseUrl)
+  // {
+  //   await sendMessageUsingUrl(body.response_url,
+  //   {
+  //     delete_original: true,
+  //     //ts: body.message.ts,
+  //   });
+  // }
+  // else
+  // {
+  //   await app.client.chat.delete({
+  //     token: context.botToken,
+  //     channel: body.channel.id,
+  //     ts: body.message.ts,
+  //   });
+  // }
 
 });
 
@@ -824,49 +931,65 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
 
   if (body.user.id !== value.user) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'ephemeral',
-            replace_original: false,
-            attachments: [],
-            text: "You can't reveal poll from another user.",
-          });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't reveal poll from another user.",
-      });
-    }
-    return;
-  }
-
-  if(isUseResponseUrl)
-  {
-    await sendMessageUsingUrl(body.response_url,
-    {
-      response_type: 'ephemeral',
-      replace_original: false,
-      attachments: [],
-      text: 'Your poll is too old. Please create new one.',
-    });
-  }
-  else
-  {
-    await app.client.chat.postEphemeral({
+    let mRequestBody = {
       token: context.botToken,
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: 'Your poll is too old. Please create new one.',
-    });
+      text: "You can't reveal poll from another user.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //       {
+    //         response_type: 'ephemeral',
+    //         replace_original: false,
+    //         attachments: [],
+    //         text: "You can't reveal poll from another user.",
+    //       });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't reveal poll from another user.",
+    //   });
+    // }
+    return;
   }
+
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    user: body.user.id,
+    attachments: [],
+    text: 'Your poll is too old. Please create new one.',
+  };
+  await postChat(body.response_url,'ephemeral',mRequestBody);
+  // if(isUseResponseUrl)
+  // {
+  //   await sendMessageUsingUrl(body.response_url,
+  //   {
+  //     response_type: 'ephemeral',
+  //     replace_original: false,
+  //     attachments: [],
+  //     text: 'Your poll is too old. Please create new one.',
+  //   });
+  // }
+  // else
+  // {
+  //   await app.client.chat.postEphemeral({
+  //     token: context.botToken,
+  //     channel: body.channel.id,
+  //     user: body.user.id,
+  //     attachments: [],
+  //     text: 'Your poll is too old. Please create new one.',
+  //   });
+  // }
 
 });
 
@@ -922,27 +1045,37 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       } catch {}
 
       if (isClosed) {
-		  if(isUseResponseUrl)
-		  {//body.response_url
-			await sendMessageUsingUrl(body.response_url,
-			{
-              response_type: 'ephemeral',
-              replace_original: false,
+        let mRequestBody = {
+          token: context.botToken,
+            channel: body.channel.id,
+            user: body.user.id,
+            attachments: [],
               //text: "You can't change your votes on closed poll.",
-              text: "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว"
-            });
-		  }
-		  else
-		  {
-			await app.client.chat.postEphemeral({
-			  token: context.botToken,
-			  channel: body.channel.id,
-			  user: body.user.id,
-			  attachments: [],
-              //text: "You can't change your votes on closed poll.",
-			  text: "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว",
-			});
-		  }
+            //text: "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว",
+            text: language_dict[appLang]['change_vote_poll_closed'],
+        };
+        await postChat(body.response_url,'ephemeral',mRequestBody);
+		  // if(isUseResponseUrl)
+		  // {//body.response_url
+			// await sendMessageUsingUrl(body.response_url,
+			// {
+          //     response_type: 'ephemeral',
+          //     replace_original: false,
+          //     //text: "You can't change your votes on closed poll.",
+          //     text: "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว"
+          //   });
+		  // }
+		  // else
+		  // {
+			// await app.client.chat.postEphemeral({
+			//   token: context.botToken,
+			//   channel: body.channel.id,
+			//   user: body.user.id,
+			//   attachments: [],
+          //     //text: "You can't change your votes on closed poll.",
+			//   text: "ไม่สามารถเปลี่ยนตัวเลือกได้ เนื่องจากปิดโหวดแล้ว",
+			// });
+		  // }
           return;
       }
 
@@ -1013,28 +1146,37 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         }
 
         if (voteCount >= value.limit) {
-          if(isUseResponseUrl)
-          {
-            await sendMessageUsingUrl(body.response_url,
-                {
-                  response_type: 'ephemeral',
-                  replace_original: false,
-                  attachments: [],
-                  //text: "You can't vote anymore. Remove a vote to choose another option.",
-                  text: "คุณเลือกครบ `"+value.limit+"` ตัวเลือกแล้ว\nหากต้องการเปลี่ยนให้กดตัวเลือกที่เลื่อกไปแล้วออกก่อน",
-            });
-          }
-          else
-          {
-            await app.client.chat.postEphemeral({
-              token: context.botToken,
-              channel: channel,
-              user: body.user.id,
-              attachments: [],
-              //text: "You can't vote anymore. Remove a vote to choose another option.",
-              text: "คุณเลือกครบ `"+value.limit+"` ตัวเลือกแล้ว\nหากต้องการเปลี่ยนให้กดตัวเลือกที่เลื่อกไปแล้วออกก่อน",
-            });
-          }
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: body.user.id,
+            attachments: [],
+            //text: "You can't vote anymore. Remove a vote to choose another option.",
+            text: "คุณเลือกครบ `"+value.limit+"` ตัวเลือกแล้ว\nหากต้องการเปลี่ยนให้กดตัวเลือกที่เลื่อกไปแล้วออกก่อน",
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          // if(isUseResponseUrl)
+          // {
+          //   await sendMessageUsingUrl(body.response_url,
+          //       {
+          //         response_type: 'ephemeral',
+          //         replace_original: false,
+          //         attachments: [],
+          //         //text: "You can't vote anymore. Remove a vote to choose another option.",
+          //         text: "คุณเลือกครบ `"+value.limit+"` ตัวเลือกแล้ว\nหากต้องการเปลี่ยนให้กดตัวเลือกที่เลื่อกไปแล้วออกก่อน",
+          //   });
+          // }
+          // else
+          // {
+          //   await app.client.chat.postEphemeral({
+          //     token: context.botToken,
+          //     channel: channel,
+          //     user: body.user.id,
+          //     attachments: [],
+          //     //text: "You can't vote anymore. Remove a vote to choose another option.",
+          //     text: "คุณเลือกครบ `"+value.limit+"` ตัวเลือกแล้ว\nหากต้องการเปลี่ยนให้กดตัวเลือกที่เลื่อกไปแล้วออกก่อน",
+          //   });
+          // }
           return;
         }
       }
@@ -1112,72 +1254,96 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         }
       });
 
-	  if(isUseResponseUrl)
-	  {
-          await sendMessageUsingUrl(body.response_url,
-          {
-              ts: message.ts,
-              blocks: blocks,
-              text: message.text,
-          });
-	  }
-	  else
-	  {
-		  await app.client.chat.update({
-			token: context.botToken,
-			channel: channel,
-			ts: message.ts,
-			blocks: blocks,
-			text: message.text,
-		  });
-	  }
+      let mRequestBody = {
+        token: context.botToken,
+        channel: channel,
+        ts: message.ts,
+        blocks: blocks,
+        text: message.text,
+      };
+      await postChat(body.response_url,'update',mRequestBody);
+	  // if(isUseResponseUrl)
+	  // {
+      //     await sendMessageUsingUrl(body.response_url,
+      //     {
+      //         ts: message.ts,
+      //         blocks: blocks,
+      //         text: message.text,
+      //     });
+	  // }
+	  // else
+	  // {
+		//   await app.client.chat.update({
+		// 	token: context.botToken,
+		// 	channel: channel,
+		// 	ts: message.ts,
+		// 	blocks: blocks,
+		// 	text: message.text,
+		//   });
+	  // }
     } catch (e) {
       console.error(e);
-      if(isUseResponseUrl)
-      {
-        await sendMessageUsingUrl(body.response_url,
-            {
-              response_type: 'ephemeral',
-              replace_original: false,
-              attachments: [],
-              text: 'An error occurred during vote processing. Please try again in few seconds.',
-        });
-      }
-      else
-      {
-        await app.client.chat.postEphemeral({
-          token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: 'An error occurred during vote processing. Please try again in few seconds.',
-        });
-      }
-
-    } finally {
-      release();
-    }
-  } else {
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'ephemeral',
-            replace_original: false,
-            attachments: [],
-            text: 'An error occurred during vote processing. Please try again in few seconds.',
-      });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
+      let mRequestBody = {
         token: context.botToken,
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
         text: 'An error occurred during vote processing. Please try again in few seconds.',
-      });
+      };
+      await postChat(body.response_url,'ephemeral',mRequestBody);
+      // if(isUseResponseUrl)
+      // {
+      //   await sendMessageUsingUrl(body.response_url,
+      //       {
+      //         response_type: 'ephemeral',
+      //         replace_original: false,
+      //         attachments: [],
+      //         text: 'An error occurred during vote processing. Please try again in few seconds.',
+      //   });
+      // }
+      // else
+      // {
+      //   await app.client.chat.postEphemeral({
+      //     token: context.botToken,
+      //     channel: body.channel.id,
+      //     user: body.user.id,
+      //     attachments: [],
+      //     text: 'An error occurred during vote processing. Please try again in few seconds.',
+      //   });
+      // }
+
+    } finally {
+      release();
     }
+  } else {
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: 'An error occurred during vote processing. Please try again in few seconds.',
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //       {
+    //         response_type: 'ephemeral',
+    //         replace_original: false,
+    //         attachments: [],
+    //         text: 'An error occurred during vote processing. Please try again in few seconds.',
+    //   });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: 'An error occurred during vote processing. Please try again in few seconds.',
+    //   });
+    // }
 
   }
 });
@@ -1581,36 +1747,43 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, userId, cmd);
 
-	if(isUseResponseUrl)
-	{
-		console.debug('try to create question in using reponse URL '+response_url)
-		await sendMessageUsingUrl(response_url,
-		{
-			response_type: 'in_channel',
-			//replace_original: true,
-			blocks: blocks,
-			text: `Poll : ${question}`
-		});
-
-	}
-	else
-	{
-	  try {
-		await app.client.chat.postMessage({
-		  token: context.botToken,
-		  channel: channel,
-		  blocks: blocks,
-		  text: `Poll : ${question}`,
-		});
-	  } catch (e) {
-		if (
-		  e && e.data && e.data && e.data.error
-		  && 'channel_not_found' === e.data.error
-		) {
-		  console.error('Channel not found error : ignored')
-		}
-	  }
-	}
+    let mRequestBody = {
+      token: context.botToken,
+      channel: channel,
+      blocks: blocks,
+      text: `Poll : ${question}`,
+    };
+    await postChat(response_url,'post',mRequestBody);
+	// if(isUseResponseUrl)
+	// {
+	// 	console.debug('try to create question in using reponse URL '+response_url)
+	// 	await sendMessageUsingUrl(response_url,
+	// 	{
+	// 		response_type: 'in_channel',
+	// 		//replace_original: true,
+	// 		blocks: blocks,
+	// 		text: `Poll : ${question}`
+	// 	});
+    //
+	// }
+	// else
+	// {
+	//   try {
+	// 	await app.client.chat.postMessage({
+	// 	  token: context.botToken,
+	// 	  channel: channel,
+	// 	  blocks: blocks,
+	// 	  text: `Poll : ${question}`,
+	// 	});
+	//   } catch (e) {
+	// 	if (
+	// 	  e && e.data && e.data && e.data.error
+	// 	  && 'channel_not_found' === e.data.error
+	// 	) {
+	// 	  console.error('Channel not found error : ignored')
+	// 	}
+	//   }
+	// }
 });
 
 function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden) {
@@ -1711,19 +1884,34 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     });
   }
 
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: question,
-    },
-    // accessory: {
-    //   type: 'static_select',
-    //   placeholder: { type: 'plain_text', text: 'Config.' },
-    //   action_id: 'static_select_menu',
-    //   option_groups: staticSelectElements,
-    // },//Move to the end for more mobile friendly
-  });
+  if(isMenuAtTheEnd)
+  {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: question,
+      },
+      //Menu Move to the end for more mobile friendly
+    });
+  }
+  else
+  {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: question,
+      },
+      accessory: {
+        type: 'static_select',
+        placeholder: { type: 'plain_text', text: 'Menu' },
+        action_id: 'static_select_menu',
+        option_groups: staticSelectElements,
+      },
+    });
+  }
+
 
   let voteLimit = 0;
 
@@ -1816,35 +2004,51 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     });
   }
 
-  blocks.push({
-    type: 'context',
-    elements: [
-      // {
-      //   type: 'mrkdwn',
-      //   text: `<${helpLink}|Need help ?>`,
-      // },
-      {
+  if(isShowHelpLink)
+  {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `<${helpLink}|Need help ?>`,
+        },
+        {
+          type: 'mrkdwn',
+          text: ':information_source: '+cmd,
+        },
+      ],
+    });
+  }
+  else
+  {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: ':information_source: '+cmd,
+        },
+      ],
+    });
+  }
+
+  if(isMenuAtTheEnd)
+  {
+    blocks.push({
+      type: 'section',
+      text: {
         type: 'mrkdwn',
-        text: ':information_source: '+cmd,
+        text: ' ',
       },
-    ],
-  });
-
-
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: ' ',
-    },
-    accessory: {
-      type: 'static_select',
-      placeholder: { type: 'plain_text', text: 'Menu(สำหรับคนถาม)' },
-      action_id: 'static_select_menu',
-      option_groups: staticSelectElements,
-    }, //move to the end
-  });
-
+      accessory: {
+        type: 'static_select',
+        placeholder: { type: 'plain_text', text: 'Menu(สำหรับคนถาม)' },
+        action_id: 'static_select_menu',
+        option_groups: staticSelectElements,
+      }, //move to the end
+    });
+  }
 
   return blocks;
 }
@@ -1938,26 +2142,34 @@ async function supportAction(body, client, context) {
     }
   }];
 
-  if(isUseResponseUrl)
-  {
-    await sendMessageUsingUrl(body.response_url,
-    {
-      response_type: 'ephemeral',
-      replace_original: false,
-      blocks,
-      text: 'Support Open Poll',
-    });
-  }
-  else
-  {
-    await client.chat.postEphemeral({
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      blocks,
-      text: 'Support Open Poll',
-    });
-  }
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    user: body.user.id,
+    blocks,
+    text: 'Support Open Poll',
+  };
+  await postChat(body.response_url,'ephemeral',mRequestBody);
+  // if(isUseResponseUrl)
+  // {
+  //   await sendMessageUsingUrl(body.response_url,
+  //   {
+  //     response_type: 'ephemeral',
+  //     replace_original: false,
+  //     blocks,
+  //     text: 'Support Open Poll',
+  //   });
+  // }
+  // else
+  // {
+  //   await client.chat.postEphemeral({
+  //     token: context.botToken,
+  //     channel: body.channel.id,
+  //     user: body.user.id,
+  //     blocks,
+  //     text: 'Support Open Poll',
+  //   });
+  // }
 
 }
 
@@ -2053,25 +2265,33 @@ async function usersVotes(body, client, context, value) {
 
   if (body.user.id !== value.user) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'ephemeral',
-            replace_original: false,
-            text: "You can't see all users votes.",
-          });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't see all users votes.",
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: "You can't see all users votes.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //       {
+    //         response_type: 'ephemeral',
+    //         replace_original: false,
+    //         text: "You can't see all users votes.",
+    //       });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't see all users votes.",
+    //   });
+    // }
     return;
   }
 
@@ -2192,52 +2412,68 @@ async function revealOrHideVotes(body, context, value) {
 
   if (body.user.id !== value.user) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'ephemeral',
-            replace_original: false,
-            attachments: [],
-            text: "You can't reveal poll from another user.",
-          });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't reveal poll from another user.",
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: "You can't reveal poll from another user.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //       {
+    //         response_type: 'ephemeral',
+    //         replace_original: false,
+    //         attachments: [],
+    //         text: "You can't reveal poll from another user.",
+    //       });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't reveal poll from another user.",
+    //   });
+    // }
 
     return;
   }
 
   if (!value.hasOwnProperty('revealed')) {
     console.log('Missing `revealed` information on poll');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-        {
-          response_type: 'ephemeral',
-          replace_original: false,
-          attachments: [],
-          text: 'Unconsistent poll data',
-        });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: 'Unconsistent poll data',
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: 'Unconsistent poll data',
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //     {
+    //       response_type: 'ephemeral',
+    //       replace_original: false,
+    //       attachments: [],
+    //       text: 'Unconsistent poll data',
+    //     });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: 'Unconsistent poll data',
+    //   });
+    // }
     return;
   }
 
@@ -2378,74 +2614,98 @@ async function revealOrHideVotes(body, context, value) {
         }
       );
 
-      if(isUseResponseUrl)
-      {
-        await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'in_channel',
-            replace_original: true,
-            ts: message.ts,
-            blocks: blocks,
-            text: message.text,
-          });
-      }
-      else
-      {
-        await app.client.chat.update({
-          token: context.botToken,
-          channel: channel,
-          ts: message.ts,
-          blocks: blocks,
-          text: message.text,
-        });
-      }
+      let mRequestBody = {
+        token: context.botToken,
+        channel: channel,
+        ts: message.ts,
+        blocks: blocks,
+        text: message.text
+      };
+      await postChat(body.response_url,'update',mRequestBody);
+      // if(isUseResponseUrl)
+      // {
+      //   await sendMessageUsingUrl(body.response_url,
+      //     {
+      //       response_type: 'in_channel',
+      //       replace_original: true,
+      //       ts: message.ts,
+      //       blocks: blocks,
+      //       text: message.text,
+      //     });
+      // }
+      // else
+      // {
+      //   await app.client.chat.update({
+      //     token: context.botToken,
+      //     channel: channel,
+      //     ts: message.ts,
+      //     blocks: blocks,
+      //     text: message.text,
+      //   });
+      // }
 
     } catch (e) {
       console.error(e);
-      if(isUseResponseUrl)
-      {
-        await sendMessageUsingUrl(body.response_url,
-          {
-            response_type: 'ephemeral',
-            replace_original: false,
-            text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
-          });
-      }
-      else
-      {
-        await app.client.chat.postEphemeral({
-          token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
-        });
-      }
+      let mRequestBody = {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        attachments: [],
+        text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
+      };
+      await postChat(body.response_url,'ephemeral',mRequestBody);
+      // if(isUseResponseUrl)
+      // {
+      //   await sendMessageUsingUrl(body.response_url,
+      //     {
+      //       response_type: 'ephemeral',
+      //       replace_original: false,
+      //       text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
+      //     });
+      // }
+      // else
+      // {
+      //   await app.client.chat.postEphemeral({
+      //     token: context.botToken,
+      //     channel: body.channel.id,
+      //     user: body.user.id,
+      //     attachments: [],
+      //     text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
+      //   });
+      // }
 
     } finally {
       release();
     }
   } else {
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-        {
-          response_type: 'ephemeral',
-          replace_original: false,
-          attachments: [],
-          text: 'An error occurred during vote processing. Please try again in few seconds.',
-        });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: 'An error occurred during vote processing. Please try again in few seconds.',
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: 'An error occurred during vote processing. Please try again in few seconds.',
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //     {
+    //       response_type: 'ephemeral',
+    //       replace_original: false,
+    //       attachments: [],
+    //       text: 'An error occurred during vote processing. Please try again in few seconds.',
+    //     });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: 'An error occurred during vote processing. Please try again in few seconds.',
+    //   });
+    // }
 
   }
 }
@@ -2467,45 +2727,59 @@ async function deletePoll(body, context, value) {
 
   if (body.user.id != value.user) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-        {
-          response_type: 'ephemeral',
-          replace_original: false,
-          attachments: [],
-          text: "You can't delete poll from another user.",
-        });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't delete poll from another user.",
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: "You can't delete poll from another user.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //     {
+    //       response_type: 'ephemeral',
+    //       replace_original: false,
+    //       attachments: [],
+    //       text: "You can't delete poll from another user.",
+    //     });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't delete poll from another user.",
+    //   });
+    // }
 
     return;
   }
 
-  if(isUseResponseUrl)
-  {
-    await sendMessageUsingUrl(body.response_url,
-    {
-      delete_original: true,
-    });
-  }
-  else
-  {
-    await app.client.chat.delete({
-      token: context.botToken,
-      channel: body.channel.id,
-      ts: body.message.ts,
-    });
-  }
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    ts: body.message.ts,
+  };
+  await postChat(body.response_url,'delete',mRequestBody);
+  // if(isUseResponseUrl)
+  // {
+  //   await sendMessageUsingUrl(body.response_url,
+  //   {
+  //     delete_original: true,
+  //   });
+  // }
+  // else
+  // {
+  //   await app.client.chat.delete({
+  //     token: context.botToken,
+  //     channel: body.channel.id,
+  //     ts: body.message.ts,
+  //   });
+  // }
 
 }
 
@@ -2527,26 +2801,34 @@ async function closePoll(body, client, context, value) {
 
   if (body.user.id !== value.user) {
     console.log('invalid user');
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-      {
-        response_type: 'ephemeral',
-        replace_original: false,
-        attachments: [],
-        text: "You can't close the poll.",
-      });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "You can't close the poll.",
-      });
-    }
+    let mRequestBody = {
+      token: context.botToken,
+          channel: body.channel.id,
+          user: body.user.id,
+          attachments: [],
+          text: "You can't close the poll.",
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //   {
+    //     response_type: 'ephemeral',
+    //     replace_original: false,
+    //     attachments: [],
+    //     text: "You can't close the poll.",
+    //   });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: "You can't close the poll.",
+    //   });
+    // }
 
     return;
   }
@@ -2646,75 +2928,99 @@ async function closePoll(body, client, context, value) {
         }
       );
 
-      if(isUseResponseUrl)
-      {
-        await sendMessageUsingUrl(body.response_url,
-        {
-          response_type: 'in_channel',
-          replace_original: true,
-          ts: message.ts,
-          blocks: blocks,
-          text: message.text
-        });
-      }
-      else
-      {
-        await app.client.chat.update({
-          token: context.botToken,
-          channel,
-          ts: message.ts,
-          blocks: blocks,
-          text: message.text,
-        });
-      }
+      let mRequestBody = {
+        token: context.botToken,
+        channel,
+        ts: message.ts,
+        blocks: blocks,
+        text: message.text,
+      };
+      await postChat(body.response_url,'update',mRequestBody);
+      // if(isUseResponseUrl)
+      // {
+      //   await sendMessageUsingUrl(body.response_url,
+      //   {
+      //     response_type: 'in_channel',
+      //     replace_original: true,
+      //     ts: message.ts,
+      //     blocks: blocks,
+      //     text: message.text
+      //   });
+      // }
+      // else
+      // {
+      //   await app.client.chat.update({
+      //     token: context.botToken,
+      //     channel,
+      //     ts: message.ts,
+      //     blocks: blocks,
+      //     text: message.text,
+      //   });
+      // }
 
     } catch (e) {
       console.error(e);
-      if(isUseResponseUrl)
-      {
-        await sendMessageUsingUrl(body.response_url,
-        {
-          response_type: 'ephemeral',
-          replace_original: false,
-          attachments: [],
-          text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
-        });
-      }
-      else
-      {
-        await app.client.chat.postEphemeral({
-          token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
-        });
-      }
-
-    } finally {
-      release();
-    }
-  } else {
-    if(isUseResponseUrl)
-    {
-      await sendMessageUsingUrl(body.response_url,
-      {
-        response_type: 'ephemeral',
-        replace_original: false,
-        attachments: [],
-        text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
-      });
-    }
-    else
-    {
-      await app.client.chat.postEphemeral({
+      let mRequestBody = {
         token: context.botToken,
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
         text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
-      });
+      };
+      await postChat(body.response_url,'ephemeral',mRequestBody);
+      // if(isUseResponseUrl)
+      // {
+      //   await sendMessageUsingUrl(body.response_url,
+      //   {
+      //     response_type: 'ephemeral',
+      //     replace_original: false,
+      //     attachments: [],
+      //     text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+      //   });
+      // }
+      // else
+      // {
+      //   await app.client.chat.postEphemeral({
+      //     token: context.botToken,
+      //     channel: body.channel.id,
+      //     user: body.user.id,
+      //     attachments: [],
+      //     text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+      //   });
+      // }
+
+    } finally {
+      release();
     }
+  } else {
+    let mRequestBody = {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      attachments: [],
+      text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+    };
+    await postChat(body.response_url,'ephemeral',mRequestBody);
+    // if(isUseResponseUrl)
+    // {
+    //   await sendMessageUsingUrl(body.response_url,
+    //   {
+    //     response_type: 'ephemeral',
+    //     replace_original: false,
+    //     attachments: [],
+    //     text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+    //   });
+    // }
+    // else
+    // {
+    //   await app.client.chat.postEphemeral({
+    //     token: context.botToken,
+    //     channel: body.channel.id,
+    //     user: body.user.id,
+    //     attachments: [],
+    //     text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+    //   });
+    // }
 
   }
 }
