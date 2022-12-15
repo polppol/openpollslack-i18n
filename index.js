@@ -650,8 +650,7 @@ const modalBlockInput = {
     type: 'plain_text_input',
     placeholder: {
       type: 'plain_text',
-      text: langDict[appLang]['model_input_choice'],
-      //text: 'Write your choice (ใส่ตัวเลือก)',
+      text: langDict[appLang]['modal_input_choice'],
     },
   },
   label: {
@@ -769,7 +768,6 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
       text: {
         type: 'mrkdwn',
         text: langDict[appLang]['you_have_not_voted'],
-        //text: 'You have not voted yet',
       },
     });
   } else {
@@ -824,7 +822,6 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['can_not_delete_other'],
-      //text: "You can't delete poll from another user.",
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -867,7 +864,6 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['err_reveal_other'],
-      //text: "You can't reveal poll from another user.",
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -879,7 +875,6 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
     user: body.user.id,
     attachments: [],
     text: langDict[appLang]['err_poll_too_old'],
-    //text: 'Your poll is too old. Please create new one.',
   };
   await postChat(body.response_url,'ephemeral',mRequestBody);
 });
@@ -1116,7 +1111,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         user: body.user.id,
         attachments: [],
         text: langDict[appLang]['err_vote_exception'],
-        //text: 'An error occurred during vote processing. Please try again in few seconds.',
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1130,7 +1124,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['err_vote_exception'],
-      //text: 'An error occurred during vote processing. Please try again in few seconds.',
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1159,7 +1152,7 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['model_create_poll'],
+          text: langDict[appLang]['modal_create_poll'],
         },
       },
       {
@@ -1169,19 +1162,19 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['model_ch_manual_select'],
+          text: langDict[appLang]['modal_ch_manual_select'],
         },
       }
     ];
     //console.debug(response_url);
-    if(response_url!="" && response_url)
+    if(response_url!="" && response_url && isUseResponseUrl)
     {
       blocks = blocks.concat([
         {
           type: 'input',
           label: {
             type: 'plain_text',
-            text: langDict[appLang]['model_ch_response_url'],
+            text: langDict[appLang]['modal_ch_response_url'],
           },
           element: {
             type: 'plain_text_input',
@@ -1194,7 +1187,7 @@ async function createModal(context, client, trigger_id,response_url) {
           elements: [
             {
               type: 'mrkdwn',
-              text: langDict[appLang]['model_ch_response_url_hint'],
+              text: langDict[appLang]['modal_ch_response_url_hint'],
             },
           ],
         }
@@ -1202,8 +1195,8 @@ async function createModal(context, client, trigger_id,response_url) {
     }
     else
     {
-      let warnStr = "model_ch_warn";
-      if(isUseResponseUrl) warnStr = "model_ch_warn_with_response_url";
+      let warnStr = "modal_ch_warn";
+      if(isUseResponseUrl) warnStr = "modal_ch_warn_with_response_url";
       blocks = blocks.concat([
         {
           type: 'actions',
@@ -1214,7 +1207,7 @@ async function createModal(context, client, trigger_id,response_url) {
               action_id: 'modal_poll_channel',
               placeholder: {
                 type: 'plain_text',
-                text: langDict[appLang]['model_ch_select'],
+                text: langDict[appLang]['modal_ch_select'],
               },
             },
           ],
@@ -1225,8 +1218,6 @@ async function createModal(context, client, trigger_id,response_url) {
             {
               type: 'mrkdwn',
               text: parameterizedString(langDict[appLang][warnStr],{slack_command:slackCommand,bot_name:botName}),
-              //text: ':warning: คุณไม่ได้พิมพ์ /'+slackCommand+' ลงในห้องที่จะสร้างคำถาม\nกรุณาเลือกชื่อห้องจากด้านบน\nหากห้องที่เลือกเป็นรูปกุณแจให้ปิดหน้าต่างนี้แล้ว พิมพ์ @'+botName+' และกด Invite เพื่อให้ตัวสร้างคำถามเข้าไปอยู่ในห้องก่อน\n หรือใช้วิธีพิมพ์ /'+slackCommand+"ในห้องที่จะสร้างคำถามก็ได้",
-              //Please type /slackCommand directly into channel that you want to create poll, or select channel from above but you need to invite botName to channel first!
             },
           ],
         }
@@ -1243,7 +1234,7 @@ async function createModal(context, client, trigger_id,response_url) {
         block_id: 'options',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['model_option']
+          text: langDict[appLang]['modal_option']
         },
         accessory: {
           type: 'checkboxes',
@@ -1252,33 +1243,33 @@ async function createModal(context, client, trigger_id,response_url) {
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_anonymous']
+                text: langDict[appLang]['modal_option_anonymous']
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_anonymous_hint']
+                text: langDict[appLang]['modal_option_anonymous_hint']
               },
               value: 'anonymous'
             },
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_limited']
+                text: langDict[appLang]['modal_option_limited']
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_limited_hint']
+                text: langDict[appLang]['modal_option_limited_hint']
               },
               value: 'limit'
             },
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_hidden']
+                text: langDict[appLang]['modal_option_hidden']
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['model_option_hidden_hint']
+                text: langDict[appLang]['modal_option_hidden_hint']
               },
               value: 'hidden'
             }
@@ -1292,13 +1283,13 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'input',
         label: {
           type: 'plain_text',
-          text: langDict[appLang]['model_input_limit_text'],
+          text: langDict[appLang]['modal_input_limit_text'],
         },
         element: {
           type: 'plain_text_input',
           placeholder: {
             type: 'plain_text',
-            text: langDict[appLang]['model_input_limit_hint'],
+            text: langDict[appLang]['modal_input_limit_hint'],
           },
         },
         optional: true,
@@ -1311,13 +1302,13 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'input',
         label: {
           type: 'plain_text',
-          text: langDict[appLang]['model_input_question_text'],
+          text: langDict[appLang]['modal_input_question_text'],
         },
         element: {
           type: 'plain_text_input',
           placeholder: {
             type: 'plain_text',
-            text: langDict[appLang]['model_input_question_hint'],
+            text: langDict[appLang]['modal_input_question_hint'],
           },
         },
         block_id: 'question',
@@ -1329,7 +1320,7 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['model_input_choice_text'],
+          text: langDict[appLang]['modal_input_choice_text'],
         },
       },
       tempModalBlockInput,
@@ -1341,7 +1332,7 @@ async function createModal(context, client, trigger_id,response_url) {
             action_id: 'btn_add_choice',
             text: {
               type: 'plain_text',
-              text: langDict[appLang]['model_input_choice_add'],
+              text: langDict[appLang]['modal_input_choice_add'],
               emoji: true,
             },
           },
@@ -1651,29 +1642,24 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       elements.push({
         type: 'mrkdwn',
         text: langDict[appLang]['info_anonymous'],
-        //text: ':shushing_face: Anonymous poll',
       });
     }
     if (isLimited) {
       elements.push({
         type: 'mrkdwn',
         text: parameterizedString(langDict[appLang]['info_limited'],{limit:limit})+langDict[appLang]['info_s'],
-        //text: ':pencil2: กรุณาเลือก \`'+ limit + '\` ตัวเลือก' ,
       });
     }
     if (isHidden) {
       elements.push({
         type: 'mrkdwn',
         text: langDict[appLang]['info_hidden'],
-        //text: ':ninja: Votes are hidden'
       });
     }
   }
   elements.push({
     type: 'mrkdwn',
     text: parameterizedString(langDict[appLang]['info_by'],{user_id:userId}),
-    //text: ':writing_hand: by <@'+userId+'>',
-    //text: ' :writing_hand: ถามโดย <@'+userId+'>'
   });
   blocks.push({
     type: 'context',
@@ -1719,8 +1705,6 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
           type: 'plain_text',
           emoji: true,
           text: langDict[appLang]['btn_vote'],
-          //text: 'Vote',
-
         },
         value: JSON.stringify(btn_value),
       },
@@ -1988,7 +1972,6 @@ async function usersVotes(body, client, context, value) {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['err_see_all_vote_other'],
-      //text: "You can't see all users votes.",
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -2121,7 +2104,6 @@ async function revealOrHideVotes(body, context, value) {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['err_reveal_other'],
-      //text: "You can't reveal poll from another user.",
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -2135,7 +2117,7 @@ async function revealOrHideVotes(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: 'Unconsistent poll data',
+      text: langDict[appLang]['err_poll_unconsistent_exception'],
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2334,7 +2316,6 @@ async function deletePoll(body, context, value) {
       user: body.user.id,
       attachments: [],
       text: langDict[appLang]['err_delete_other'],
-      //text: "You can't delete poll from another user.",
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2373,7 +2354,7 @@ async function closePoll(body, client, context, value) {
           channel: body.channel.id,
           user: body.user.id,
           attachments: [],
-          text: "You can't close the poll.",
+          text: langDict[appLang]['err_close_other'],
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2489,7 +2470,7 @@ async function closePoll(body, client, context, value) {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+        text: langDict[appLang]['err_close_other'],
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
     } finally {
@@ -2501,7 +2482,7 @@ async function closePoll(body, client, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: 'An error occurred while attempt to close the poll. Please try again in few seconds.',
+      text: langDict[appLang]['err_close_other'],
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
@@ -2642,28 +2623,24 @@ async function buildInfosBlocks(blocks, pollInfos) {
     infosBlocks.push({
       type: 'mrkdwn',
       text: langDict[appLang]['info_anonymous'],
-      //text: ':shushing_face: Anonymous poll',
     });
   }
   if (infos.limited) {
     infosBlocks.push({
       type: 'mrkdwn',
       text : parameterizedString(langDict[appLang]['info_limited'],{limit:infos.limit})+langDict[appLang]['info_s'],
-      //text: `:pencil2: กรุณาเลือก \`${infos.limit}\` ตัวเลือก`,
     });
   }
   if (infos.hidden) {
     infosBlocks.push({
       type: 'mrkdwn',
       text: langDict[appLang]['info_hidden'],
-      //text: ':ninja: Votes are hidden',
     });
   }
   if (infos.closed) {
     infosBlocks.push({
       type: 'mrkdwn',
       text: langDict[appLang]['info_closed'],
-      //text: ':x: Closed',
     });
   }
   infosBlocks.push(blocks[infosIndex].elements.pop());
