@@ -2,13 +2,12 @@
 # About this fork 
 
 I have make some change to make it easier to use by some group of people :
-- Translate some text to Thai (ภาษาไทย)
+- Add config called `app_lang` for translation, Translate some text to Thai (ภาษาไทย)
 - Add config called `use_response_url` if set to `1`; app will respond to request using `response_url` instead of using `app.client.chat.post`
   so user will be able to create poll in private channel without adding bot to that channel, But it might slower or get timeout if script not response within slack time limit. 
 also, response_url will show in modal since slack not support hidden type in modal 
 - Add config called `menu_at_the_end` if set to `1`; Rearrange Menu to the end of poll so no more big menu btn between question and answer 
-- Add config called `show_help_link` if set to `0`; help link will be removed from poll 
-- Add config called `app_lang` for translation  
+- Add config called `show_help_link` if set to `0`; help link will be removed from poll
 
 # Open source poll for slack
 
