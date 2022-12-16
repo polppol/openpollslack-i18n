@@ -19,10 +19,10 @@ const slackCommand = config.get('command');
 const helpLink = config.get('help_link');
 const supportUrl = config.get('support_url');
 const appLang = config.get('app_lang');
-const isUseResponseUrl = config.get('use_response_url') == 1;
-const isMenuAtTheEnd = config.get('menu_at_the_end') == 1;
+const isUseResponseUrl = config.get('use_response_url');
+const isMenuAtTheEnd = config.get('menu_at_the_end');
 const botName = config.get('bot_name');
-const isShowHelpLink = config.get('show_help_link') == 1;
+const isShowHelpLink = config.get('show_help_link');
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -54,9 +54,9 @@ try {
 let langCount = 0;
 globLang.sync( './language/*.json' ).forEach( function( file ) {
   let dash = file.split("/");
-  if(dash.length == 3) {
+  if(dash.length === 3) {
     let dot = dash[2].split(".");
-    if(dot.length == 2) {
+    if(dot.length === 2) {
       let lang = dot[0];
       console.log("Lang file ["+lang+"]: "+file);
       let fileData = fileLang.readFileSync(file);
@@ -105,18 +105,37 @@ const receiver = new ExpressReceiver({
   },
   installationStore: {
     storeInstallation: async (installation) => {
-      const team = await orgCol.findOne({ 'team.id': installation.team.id });
+      let mTeamId = "";
+      if (installation.isEnterpriseInstall && installation.enterprise !== undefined) {
+        mTeamId = installation.enterprise.id;
+      }
+      if (installation.team !== undefined) {
+        // single team app installation
+        mTeamId = installation.team.id;
+      }
+
+      const team = await orgCol.findOne({ 'team.id': mTeamId });
       if (team) {
-        await orgCol.replaceOne({ 'team.id': installation.team.id }, installation);
+        await orgCol.replaceOne({ 'team.id': mTeamId }, installation);
       } else {
         await orgCol.insertOne(installation);
       }
 
       return installation.team.id;
     },
-    fetchInstallation: async (InstallQuery) => {
+    fetchInstallation: async (installQuery) => {
+      let mTeamId = "";
+      if (installQuery.isEnterpriseInstall && installQuery.enterpriseId !== undefined) {
+        // org wide app installation lookup
+        mTeamId = installQuery.enterpriseId;
+      }
+      if (installQuery.teamId !== undefined) {
+        // single team app installation lookup
+        mTeamId = installQuery.teamId;
+      }
+
       try {
-        return await orgCol.findOne({ 'team.id': InstallQuery.teamId });
+        return await orgCol.findOne({ 'team.id': mTeamId });
       } catch (e) {
         console.error(e)
         throw new Error('No matching authorizations');
@@ -814,7 +833,7 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
     return;
   }
 
-  if (body.user.id != action.value) {
+  if (body.user.id !== action.value) {
     console.log('invalid user');
     let mRequestBody = {
       token: context.botToken,
@@ -984,8 +1003,8 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         },
       )
 
-      button_id = 3 + (value.id * 2);
-      context_id = 3 + (value.id * 2) + 1;
+      let button_id = 3 + (value.id * 2);
+      let context_id = 3 + (value.id * 2) + 1;
       let blockBtn = blocks[button_id];
       let block = blocks[context_id];
       let voters = value.voters ? value.voters : [];
@@ -1023,13 +1042,13 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       }
 
       if (removeVote) {
-        poll[value.id] = poll[value.id].filter(voter_id => voter_id != user_id);
+        poll[value.id] = poll[value.id].filter(voter_id => voter_id !== user_id);
       } else {
         poll[value.id].push(user_id);
       }
 
       for (const i in blocks) {
-        b = blocks[i];
+        let b = blocks[i];
         if (
           b.hasOwnProperty('accessory')
           && b.accessory.hasOwnProperty('value')
@@ -1167,7 +1186,7 @@ async function createModal(context, client, trigger_id,response_url) {
       }
     ];
     //console.debug(response_url);
-    if(response_url!="" && response_url && isUseResponseUrl)
+    if(response_url!== "" && response_url && isUseResponseUrl)
     {
       blocks = blocks.concat([
         {
@@ -1632,11 +1651,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     });
   }
 
-
-  let voteLimit = 0;
-
   let elements = [];
-  let pollOptionTxt = "";
   if (isAnonymous || isLimited || isHidden) {
     if (isAnonymous) {
       elements.push({
@@ -1665,7 +1680,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     type: 'context',
     elements: elements,
   });
-  if(langDict[appLang]['info_addon']!="")
+  if(langDict[appLang]['info_addon']!=="")
   {
     blocks.push({
       type: 'context',
@@ -1690,7 +1705,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
 
   for (let i in options) {
     let option = options[i];
-    btn_value = JSON.parse(JSON.stringify(button_value));
+    let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
     let block = {
       type: 'section',
@@ -2308,7 +2323,7 @@ async function deletePoll(body, context, value) {
     return;
   }
 
-  if (body.user.id != value.user) {
+  if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
       token: context.botToken,
