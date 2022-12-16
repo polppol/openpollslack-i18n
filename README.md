@@ -8,7 +8,9 @@ I have make some change to make it more customizable :
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might slower or get timeout if script not response within slack time limit. 
 also, response_url will show in modal since slack not support hidden type in modal 
 - Add config called `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
+- Add config called `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - Add config called `show_help_link` if set to `false`; help link will be removed from poll
+- Add config called `show_command_info` if set to `false`; command that use to create poll will be removed
 
 # Open source poll for slack
 

@@ -23,6 +23,9 @@ const isUseResponseUrl = config.get('use_response_url');
 const isMenuAtTheEnd = config.get('menu_at_the_end');
 const botName = config.get('bot_name');
 const isShowHelpLink = config.get('show_help_link');
+const isShowCommandInfo = config.get('show_command_info');
+const isShowNumberInChoice = config.get('add_number_emoji_to_choice');
+const isShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -222,6 +225,15 @@ const postChat = async (url,type,requestBody) => {
       }
     }
   }
+}
+
+const slackNumToEmoji = (seq) => {
+  let outText = "["+seq+"]";
+  if(langDict[appLang].hasOwnProperty('emoji_'+seq))
+  {
+    outText = langDict[appLang]['emoji_'+seq];
+  }
+  return outText;
 }
 
 app.event('app_home_opened', async ({ event, client, context }) => {
@@ -1703,7 +1715,13 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     id: null,
   };
 
+  let optionCount = 0;
   for (let i in options) {
+    optionCount++;
+    let emojiPrefix = "";
+    let emojiBthPostfix = "";
+    if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(optionCount)+" ";
+    if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(optionCount);
     let option = options[i];
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
@@ -1711,7 +1729,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: option,
+        text: emojiPrefix+""+option,
       },
       accessory: {
         type: 'button',
@@ -1719,7 +1737,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         text: {
           type: 'plain_text',
           emoji: true,
-          text: langDict[appLang]['btn_vote'],
+          text: langDict[appLang]['btn_vote']+""+emojiBthPostfix,
         },
         value: JSON.stringify(btn_value),
       },
@@ -1742,21 +1760,37 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
 
   if(isShowHelpLink)
   {
-    blocks.push({
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `<${helpLink}|`+langDict[appLang]['info_need_help']+`>`,
-        },
-        {
-          type: 'mrkdwn',
-          text: ':information_source: '+cmd,
-        },
-      ],
-    });
+    if(isShowCommandInfo)
+    {
+      blocks.push({
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `<${helpLink}|`+langDict[appLang]['info_need_help']+`>`,
+          },
+          {
+            type: 'mrkdwn',
+            text: langDict[appLang]['info_need_help']+' '+cmd,
+          },
+        ],
+      });
+    }
+    else
+    {
+      blocks.push({
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `<${helpLink}|`+langDict[appLang]['info_need_help']+`>`,
+          }
+        ],
+      });
+    }
+
   }
-  else
+  else if(isShowCommandInfo)
   {
     blocks.push({
       type: 'context',

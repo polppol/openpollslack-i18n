@@ -1,5 +1,4 @@
 {
-  "hello": "Hello World!",
   "info_anonymous": ":shushing_face: Anonymous poll",
   "info_limited": ":warning: Limited to `{{limit}}` vote",
   "info_s": "s",
@@ -15,6 +14,7 @@
   "info_all_user_vote": "Users votes",
   "info_need_help": "Need help ?",
   "info_create_poll": "Create a poll",
+  "info_command_source": ":information_source:",
   "btn_vote": "Vote",
   "btn_create": "Create",
   "btn_cancel": "Cancel",
@@ -61,5 +61,15 @@
   "err_vote_over_limit": "You can't vote anymore. Remove a vote to choose another option. (limit =`{{limit}}`)",
   "err_vote_exception": "An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "An error occurred during vote processing. Please try again in few seconds.",
-  "err_poll_close_exception": "Unconsistent poll data"
+  "err_poll_close_exception": "Unconsistent poll data",
+  "emoji_1": ":one:",
+  "emoji_2": ":two:",
+  "emoji_3": ":three:",
+  "emoji_4": ":four:",
+  "emoji_5": ":five:",
+  "emoji_6": ":six:",
+  "emoji_7": ":seven:",
+  "emoji_8": ":eight:",
+  "emoji_9": ":nine:",
+  "emoji_10": ":keycap_ten:"
 }
