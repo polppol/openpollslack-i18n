@@ -75,8 +75,7 @@ console.log("Selected Lang: "+appLang);
 const parameterizedString = (str,varArray) => {
   let outputStr = str;
   for (let key in varArray) {
-    if (varArray.hasOwnProperty(key))
-    {
+    if (varArray.hasOwnProperty(key)) {
       outputStr = outputStr.replaceAll("{{"+key+"}}",varArray[key])
     }
   }
@@ -172,8 +171,7 @@ const postChat = async (url,type,requestBody) => {
     delete requestBody['token'];
     delete requestBody['channel'];
     delete requestBody['user'];
-    switch (type)
-    {
+    switch (type) {
       case "post":
         requestBody['response_type'] = 'in_channel';
         requestBody['replace_original'] = false;
@@ -198,8 +196,7 @@ const postChat = async (url,type,requestBody) => {
   else
   {
     try {
-      switch (type)
-      {
+      switch (type) {
         case "post":
           await app.client.chat.postMessage(requestBody);
           break;
@@ -229,8 +226,7 @@ const postChat = async (url,type,requestBody) => {
 
 const slackNumToEmoji = (seq) => {
   let outText = "["+seq+"]";
-  if(langDict[appLang].hasOwnProperty('emoji_'+seq))
-  {
+  if(langDict[appLang].hasOwnProperty('emoji_'+seq)) {
     outText = langDict[appLang]['emoji_'+seq];
   }
   return outText;
@@ -619,6 +615,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
     let isLimited = false;
     let limit = null;
     let isHidden = false;
+    let isAllowUserAddChoice = false;
     let fetchArgs = true;
 
     while (fetchArgs) {
@@ -659,7 +656,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
       }
     }
 
-    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, userId, cmd);
+    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd);
 
     if (null === blocks) {
       return;
@@ -702,7 +699,6 @@ const modalBlockInput = {
 })();
 
 app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
-  await ack();
 
   if (
     !body
@@ -743,12 +739,21 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     external_id: body.view.id,
   };
 
-  const result = await client.views.update({
-    token: context.botToken,
-    hash: hash,
-    view: view,
-    view_id: body.view.id,
-  });
+  try {
+    const result = await client.views.update({
+      token: context.botToken,
+      hash: hash,
+      view: view,
+      view_id: body.view.id,
+    });
+
+    await ack();
+  }
+  catch (e) {
+    //do not act so user can see some error
+    console.debug("Error on btn_add_choice (maybe user click too fast");
+  }
+
 });
 
 app.action('btn_my_votes', async ({ ack, body, client, context }) => {
@@ -1160,6 +1165,46 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   }
 });
+app.action('btn_add_choice_after_post', async ({ action, ack, body, context }) => {
+  await ack();
+  let addChoiceIndex = body.message.blocks.length-1;
+  let newChoiceIndex = body.message.blocks.length-2;
+  if(isMenuAtTheEnd) newChoiceIndex--;
+  if (
+    !body
+    || !action
+    || !body.user
+    || !body.user.id
+    || !body.message
+    || !body.message.blocks
+    || !body.message.ts
+    || !body.channel
+    || !body.channel.id
+  ) {
+    console.log('error');
+    return;
+  }
+
+  const user_id = body.user.id;
+  const message = body.message;
+  let blocks = message.blocks;
+
+  const channel = body.channel.id;
+
+  let value = JSON.parse(action.value);
+
+
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    user: body.user.id,
+    attachments: [],
+    text: "TEST New option will be "+value.id,
+  };
+  await postChat(body.response_url,'ephemeral',mRequestBody);
+  return;
+
+});
 
 app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   await ack();
@@ -1175,6 +1220,7 @@ async function createModal(context, client, trigger_id,response_url) {
       anonymous: false,
       limited: false,
       hidden: false,
+      user_add_choice: false,
       response_url: response_url,
       channel: null,
     };
@@ -1292,6 +1338,17 @@ async function createModal(context, client, trigger_id,response_url) {
                 text: langDict[appLang]['modal_option_hidden_hint']
               },
               value: 'hidden'
+            },
+            {
+              text: {
+                type: 'mrkdwn',
+                text: "TEST"
+              },
+              description: {
+                type: 'mrkdwn',
+                text: "TEST"
+              },
+              value: 'user_add_choice'
             }
           ]
         }
@@ -1411,12 +1468,17 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
     external_id: body.view.id,
   };
 
-  const result = await client.views.update({
-    token: context.botToken,
-    hash: body.view.hash,
-    view: view,
-    view_id: body.view.id,
-  });
+  try {
+    const result = await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view: view,
+      view_id: body.view.id,
+    });
+  }
+  catch (e) {
+    console.debug("Error on modal_poll_channel (maybe user click too fast");
+  }
 });
 
 app.action('modal_poll_options', async ({ action, ack, body, client, context }) => {
@@ -1441,6 +1503,8 @@ app.action('modal_poll_options', async ({ action, ack, body, client, context }) 
       privateMetadata.limited = true;
     } else if ('hidden' === option.value) {
       privateMetadata.hidden = true;
+    } else if ('user_add_choice' === option.value) {
+      privateMetadata.user_add_choice = true;
     }
   }
 
@@ -1454,13 +1518,18 @@ app.action('modal_poll_options', async ({ action, ack, body, client, context }) 
     blocks: body.view.blocks,
     external_id: body.view.id,
   };
-
-  const result = await client.views.update({
-    token: context.botToken,
-    hash: body.view.hash,
-    view: view,
-    view_id: body.view.id,
-  });
+  try {
+    const result = await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view: view,
+      view_id: body.view.id,
+    });
+  }
+  catch (e){
+    //just ignore it will be process again on modal_poll_submit
+    console.debug("Error on modal_poll_submit (maybe user click too fast");
+  }
 });
 
 app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
@@ -1485,12 +1554,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   const state = view.state;
   let question = null;
   const options = [];
-  const isAnonymous = privateMetadata.anonymous;
-  const isLimited = privateMetadata.limited;
   let limit = 1;
-  const isHidden = privateMetadata.hidden;
-  const channel = privateMetadata.channel;
-  const response_url = privateMetadata.response_url;
 
   if (state.values) {
     for (const optionName in state.values) {
@@ -1501,9 +1565,34 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
         limit = parseInt(option.value, 10);
       } else if (optionName.startsWith('choice_')) {
         options.push(option.value);
+      } else if ('options' === optionName) {
+        const checkedbox = state.values[optionName]['modal_poll_options']['selected_options'];
+        if (checkedbox) {
+          for (const each in checkedbox) {
+            const checkedValue = checkedbox[each].value;
+            if ('anonymous' === checkedValue) {
+              privateMetadata.anonymous = true;
+            } else if ('limit' === checkedValue) {
+              privateMetadata.limited = true;
+            } else if ('hidden' === checkedValue) {
+              privateMetadata.hidden = true;
+            } else if ('user_add_choice' === checkedValue) {
+              privateMetadata.user_add_choice = true;
+            }
+          }
+        }
       }
     }
   }
+
+  if(isNaN(limit)) limit = 1;
+
+  const isAnonymous = privateMetadata.anonymous;
+  const isLimited = privateMetadata.limited;
+  const isHidden = privateMetadata.hidden;
+  const channel = privateMetadata.channel;
+  const isAllowUserAddChoice = privateMetadata.user_add_choice;
+  const response_url = privateMetadata.response_url;
 
   if (
     !question
@@ -1512,9 +1601,9 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
     return;
   }
 
-  const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden);
+  const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice);
 
-  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, userId, cmd);
+  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd);
 
     let mRequestBody = {
       token: context.botToken,
@@ -1525,7 +1614,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
     await postChat(response_url,'post',mRequestBody);
 });
 
-function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden) {
+function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice) {
   let cmd = `/${slackCommand}`;
   if (isAnonymous) {
     cmd += ` anonymous`
@@ -1551,7 +1640,7 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   return cmd;
 }
 
-function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, userId, cmd) {
+function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd) {
   if (
     !question
     || !options
@@ -1698,6 +1787,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     limited: isLimited,
     limit: limit,
     hidden: isHidden,
+    user_add_choice: isAllowUserAddChoice,
     voters: [],
     id: null,
   };
@@ -1742,6 +1832,28 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     blocks.push(block);
     blocks.push({
       type: 'divider',
+    });
+  }
+
+  if(isAllowUserAddChoice)
+  {
+    let btn_value = JSON.parse(JSON.stringify(button_value));
+    btn_value.id =  optionCount+1;
+
+    blocks.push({
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text",
+            "text": langDict[appLang]['btn_add_choice'],
+            "emoji": true
+          },
+          "value": JSON.stringify(btn_value),
+          "action_id": "btn_add_choice_after_post"
+        }
+      ]
     });
   }
 
