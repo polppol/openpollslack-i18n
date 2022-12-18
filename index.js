@@ -1175,6 +1175,7 @@ async function createModal(context, client, trigger_id,response_url) {
       anonymous: false,
       limited: false,
       hidden: false,
+      response_url: response_url,
       channel: null,
     };
 
@@ -1202,23 +1203,11 @@ async function createModal(context, client, trigger_id,response_url) {
     {
       blocks = blocks.concat([
         {
-          type: 'input',
-          label: {
-            type: 'plain_text',
-            text: langDict[appLang]['modal_ch_response_url'],
-          },
-          element: {
-            type: 'plain_text_input',
-            initial_value: response_url,
-          },
-          block_id: 'response_url',
-        },
-        {
           type: 'context',
           elements: [
             {
               type: 'mrkdwn',
-              text: langDict[appLang]['modal_ch_response_url_hint'],
+              text: langDict[appLang]['modal_ch_response_url_auto'],
             },
           ],
         }
@@ -1495,13 +1484,13 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   const state = view.state;
   let question = null;
-  let response_url = null;
   const options = [];
   const isAnonymous = privateMetadata.anonymous;
   const isLimited = privateMetadata.limited;
   let limit = 1;
   const isHidden = privateMetadata.hidden;
   const channel = privateMetadata.channel;
+  const response_url = privateMetadata.response_url;
 
   if (state.values) {
     for (const optionName in state.values) {
@@ -1512,8 +1501,6 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
         limit = parseInt(option.value, 10);
       } else if (optionName.startsWith('choice_')) {
         options.push(option.value);
-      } else if ('response_url' === optionName) {
-        response_url = option.value;
       }
     }
   }

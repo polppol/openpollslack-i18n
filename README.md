@@ -5,8 +5,7 @@ I have make some change to make it more customizable :
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (ภาษาไทย)
 - `bot_name` for refering bot name in some help text
 - `use_response_url` if set to `true`; app will respond to request using `response_url` instead of using `app.client.chat.post`
-  so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might slower or get timeout if script not response within slack time limit. 
-also, response_url will show in modal since slack not support hidden type in modal 
+  so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
 - `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `show_help_link` if set to `false`; help link will be removed from poll
