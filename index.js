@@ -1188,46 +1188,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   }
 });
-app.action('btn_add_choice_after_post', async ({ action, ack, body, context }) => {
-  await ack();
-  let addChoiceIndex = body.message.blocks.length-1;
-  let newChoiceIndex = body.message.blocks.length-2;
-  if(isMenuAtTheEnd) newChoiceIndex--;
-  if (
-    !body
-    || !action
-    || !body.user
-    || !body.user.id
-    || !body.message
-    || !body.message.blocks
-    || !body.message.ts
-    || !body.channel
-    || !body.channel.id
-  ) {
-    console.log('error');
-    return;
-  }
-
-  const user_id = body.user.id;
-  const message = body.message;
-  let blocks = message.blocks;
-
-  const channel = body.channel.id;
-
-  let value = JSON.parse(action.value);
-
-
-  let mRequestBody = {
-    token: context.botToken,
-    channel: body.channel.id,
-    user: body.user.id,
-    attachments: [],
-    text: "TEST New option will be "+value.id,
-  };
-  await postChat(body.response_url,'ephemeral',mRequestBody);
-  return;
-
-});
 
 app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   await ack();
@@ -1361,17 +1321,6 @@ async function createModal(context, client, trigger_id,response_url) {
                 text: stri18n(appLang,'modal_option_hidden_hint')
               },
               value: 'hidden'
-            },
-            {
-              text: {
-                type: 'mrkdwn',
-                text: "TEST"
-              },
-              description: {
-                type: 'mrkdwn',
-                text: "TEST"
-              },
-              value: 'user_add_choice'
             }
           ]
         }
