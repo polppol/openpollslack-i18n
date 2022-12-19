@@ -16,7 +16,7 @@
   "info_create_poll": "Create a poll",
   "info_command_source": ":information_source:",
   "btn_vote": "Vote",
-  "btn_add_choice": "Add choice",
+  "btn_add_choice": "+ Add choice",
   "btn_create": "Create",
   "btn_cancel": "Cancel",
   "menu_text": "Menu",
