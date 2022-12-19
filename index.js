@@ -349,6 +349,13 @@ app.event('app_home_opened', async ({ event, client, context }) => {
             },
           },
           {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Allow choices from others*\n`add-choice` inside command.\nThis option allow other member to add more choice to this poll.",
+            },
+          },
+          {
             type: "divider",
           },
           {
@@ -659,6 +666,10 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
         fetchArgs = true;
         cmdBody = cmdBody.substring(6).trim();
         isHidden = true;
+      } else if (cmdBody.startsWith('add-choice')) {
+        fetchArgs = true;
+        cmdBody = cmdBody.substring(10).trim();
+        isAllowUserAddChoice = true;
       }
     }
 
@@ -1190,9 +1201,9 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 });
 app.action('btn_add_choice_after_post', async ({ action, ack, body, context,client }) => {
   await ack();
-  let addChoiceIndex = body.message.blocks.length-1;
-  let newChoiceIndex = body.message.blocks.length-2;
-  if(isMenuAtTheEnd) newChoiceIndex--;
+  // let addChoiceIndex = body.message.blocks.length-1;
+  // let newChoiceIndex = body.message.blocks.length-2;
+  // if(isMenuAtTheEnd) newChoiceIndex--;
   if (
     !body
     || !action
@@ -1207,38 +1218,39 @@ app.action('btn_add_choice_after_post', async ({ action, ack, body, context,clie
     console.log('error');
     return;
   }
-
-  const user_id = body.user.id;
-  const message = body.message;
-  let blocks = message.blocks;
-
-  const channel = body.channel.id;
-
-  let value = JSON.parse(action.value);
-
-  console.debug(body.message.blocks);
-  //find next option id
-  let lastestOptionId = 0;
-  for(const idx in body.message.blocks)
-  {
-    if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
-      if(body.message.blocks[idx]['type'] == 'section') {
-        if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
-          if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
-              body.message.blocks[idx]['accessory'].hasOwnProperty('value')
-          ) {
-              const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
-              const voteBtnId = parseInt(voteBtnVal['id']);
-              lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
-
-          }
-        }
-      }
-    }
-  }
+  //
+  // const user_id = body.user.id;
+  // const message = body.message;
+  // let blocks = message.blocks;
+  //
+  // const channel = body.channel.id;
+  //
+  // let value = JSON.parse(action.value);
+  //
+  console.debug(body);
+  // //find next option id
+  // let lastestOptionId = 0;
+  // for(const idx in body.message.blocks)
+  // {
+  //   if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
+  //     if(body.message.blocks[idx]['type'] == 'section') {
+  //       if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
+  //         if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
+  //             body.message.blocks[idx]['accessory'].hasOwnProperty('value')
+  //         ) {
+  //             const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
+  //             const voteBtnId = parseInt(voteBtnVal['id']);
+  //             lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
+  //
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
 
   /////////////////////
   const privateMetadata = {
+    message_ts: body.message.ts,
     response_url: body.response_url,
   };
 
@@ -1295,6 +1307,71 @@ app.action('btn_add_choice_after_post', async ({ action, ack, body, context,clie
     });
   } catch (e) {
     console.error(e);
+  }
+
+
+  // let mRequestBody = {
+  //   token: context.botToken,
+  //   channel: body.channel.id,
+  //   user: body.user.id,
+  //   attachments: [],
+  //   text: "TEST New option will be "+value.id+" autocalc = "+lastestOptionId,
+  // };
+  // await postChat(body.response_url,'ephemeral',mRequestBody);
+  // return;
+
+});
+app.view('modal_add_choice_after_post_submit', async ({ ack, body, view, context,client }) => {
+  console.log('modal_add_choice_after_post_submit')
+  console.debug(body);
+  console.debug(JSON.parse(body.view.private_metadata));
+  return;
+  await ack();
+  let addChoiceIndex = body.message.blocks.length-1;
+  let newChoiceIndex = body.message.blocks.length-2;
+  if(isMenuAtTheEnd) newChoiceIndex--;
+  if (
+    !body
+    || !action
+    || !body.user
+    || !body.user.id
+    || !body.message
+    || !body.message.blocks
+    || !body.message.ts
+    || !body.channel
+    || !body.channel.id
+  ) {
+    console.log('error');
+    return;
+  }
+
+  const user_id = body.user.id;
+  const message = body.message;
+  let blocks = message.blocks;
+
+  const channel = body.channel.id;
+
+  let value = JSON.parse(action.value);
+
+  console.debug(body.message.blocks);
+  //find next option id
+  let lastestOptionId = 0;
+  for(const idx in body.message.blocks)
+  {
+    if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
+      if(body.message.blocks[idx]['type'] == 'section') {
+        if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
+          if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
+              body.message.blocks[idx]['accessory'].hasOwnProperty('value')
+          ) {
+              const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
+              const voteBtnId = parseInt(voteBtnVal['id']);
+              lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
+
+          }
+        }
+      }
+    }
   }
 
 
@@ -1446,11 +1523,11 @@ async function createModal(context, client, trigger_id,response_url) {
             {
               text: {
                 type: 'mrkdwn',
-                text: "TEST"
+                text: stri18n(appLang,'modal_option_add_choice')
               },
               description: {
                 type: 'mrkdwn',
-                text: "TEST"
+                text: stri18n(appLang,'modal_option_add_choice_hint')
               },
               value: 'user_add_choice'
             }
@@ -1732,6 +1809,9 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   if (isHidden) {
     cmd += ` hidden`
   }
+  if (isHidden) {
+    cmd += ` add-choice`
+  }
 
   question = question.replace(/"/g, "\\\"");
   cmd += ` "${question}"`
@@ -1944,20 +2024,44 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id =  optionCount+1;
 
+  //   blocks.push({
+  //     "type": "actions",
+  //     "elements": [
+  //       {
+  //         "type": "button",
+  //         "text": {
+  //           "type": "plain_text",
+  //           "text": stri18n(appLang,'btn_add_choice'),
+  //           "emoji": true
+  //         },
+  //         "value": JSON.stringify(btn_value),
+  //         "action_id": "btn_add_choice_after_post"
+  //       }
+  //     ]
+  //   });
+  // }
+
     blocks.push({
-      "type": "actions",
-      "elements": [
-        {
-          "type": "button",
-          "text": {
-            "type": "plain_text",
-            "text": stri18n(appLang,'btn_add_choice'),
-            "emoji": true
-          },
-          "value": JSON.stringify(btn_value),
-          "action_id": "btn_add_choice_after_post"
+      "type": "input",
+      "dispatch_action": true,
+      "element": {
+        "type": "plain_text_input",
+        "action_id": "plain_text_input-action",
+        "dispatch_action_config": {
+          "trigger_actions_on": [
+            "on_enter_pressed"
+          ]
+        },
+        "placeholder": {
+          "type": "plain_text",
+          "text": "พิมพ์ตัวเลือกที่จะเพิ่มและกด Enter"
         }
-      ]
+      },
+      "label": {
+        "type": "plain_text",
+        "text": "เพื่มตัวเลือก...",
+        "emoji": true
+      }
     });
   }
 

@@ -2,6 +2,7 @@
 # About this fork 
 
 I have make some change to make it more customizable :
+## config/default.json
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (ภาษาไทย)
 - `bot_name` for refering bot name in some help text
 - `use_response_url` if set to `true`; app will respond to request using `response_url` instead of using `app.client.chat.post`
@@ -10,6 +11,12 @@ I have make some change to make it more customizable :
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+
+## Command usages
+### Allow choices add by others
+```
+/poll add-choice "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
+```
 
 # Open source poll for slack
 
