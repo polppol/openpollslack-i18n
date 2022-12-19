@@ -68,9 +68,16 @@ globLang.sync( './language/*.json' ).forEach( function( file ) {
     }
   }
 });
-//console.debug(langDict);
 console.log("Lang Count: "+langCount);
 console.log("Selected Lang: "+appLang);
+if(!langDict.hasOwnProperty('en')) {
+  console.error("language/en.json NOT FOUND!");
+  throw new Error("language/en.json NOT FOUND!");
+}
+if(!langDict.hasOwnProperty(appLang)) {
+  console.error(`language/${appLang}.json NOT FOUND!`);
+  throw new Error(`language/${appLang}.json NOT FOUND!`);
+}
 
 const parameterizedString = (str,varArray) => {
   let outputStr = str;
@@ -81,6 +88,22 @@ const parameterizedString = (str,varArray) => {
   }
   return outputStr;
 }
+
+const stri18n = (lang,key) => {
+  if(langDict.hasOwnProperty(lang)) {
+    if(langDict[lang].hasOwnProperty(key)) {
+      return langDict[lang][key];
+    }
+  }
+  //failback to en
+  if(langDict['en'].hasOwnProperty(key)) {
+    return langDict['en'][key];
+  }
+  else {
+    return `MissingStr`;
+  }
+}
+
 
 const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
@@ -678,7 +701,7 @@ const modalBlockInput = {
     type: 'plain_text_input',
     placeholder: {
       type: 'plain_text',
-      text: langDict[appLang]['modal_input_choice'],
+      text: stri18n(appLang,'modal_input_choice'),
     },
   },
   label: {
@@ -803,7 +826,7 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: langDict[appLang]['you_have_not_voted'],
+        text: stri18n(appLang,'you_have_not_voted'),
       },
     });
   } else {
@@ -818,11 +841,11 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
         type: 'modal',
         title: {
           type: 'plain_text',
-          text: langDict[appLang]['info_your_vote'],
+          text: stri18n(appLang,'info_your_vote'),
         },
         close: {
           type: 'plain_text',
-          text: langDict[appLang]['info_close'],
+          text: stri18n(appLang,'info_close'),
         },
         blocks: votes,
       }
@@ -857,7 +880,7 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['can_not_delete_other'],
+      text: stri18n(appLang,'can_not_delete_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -899,7 +922,7 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_reveal_other'],
+      text: stri18n(appLang,'err_reveal_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -910,7 +933,7 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
     channel: body.channel.id,
     user: body.user.id,
     attachments: [],
-    text: langDict[appLang]['err_poll_too_old'],
+    text: stri18n(appLang,'err_poll_too_old'),
   };
   await postChat(body.response_url,'ephemeral',mRequestBody);
 });
@@ -973,7 +996,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             channel: body.channel.id,
             user: body.user.id,
             attachments: [],
-            text: langDict[appLang]['err_change_vote_poll_closed'],
+            text: stri18n(appLang,'err_change_vote_poll_closed'),
         };
         await postChat(body.response_url,'ephemeral',mRequestBody);
           return;
@@ -1051,7 +1074,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             channel: channel,
             user: body.user.id,
             attachments: [],
-            text : parameterizedString(langDict[appLang]['err_vote_over_limit'],{limit:value.limit}),
+            text : parameterizedString(stri18n(appLang,'err_vote_over_limit'),{limit:value.limit}),
           };
           await postChat(body.response_url,'ephemeral',mRequestBody);
           return;
@@ -1146,7 +1169,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: langDict[appLang]['err_vote_exception'],
+        text: stri18n(appLang,'err_vote_exception'),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1159,7 +1182,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_vote_exception'],
+      text: stri18n(appLang,'err_vote_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1230,7 +1253,7 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['modal_create_poll'],
+          text: stri18n(appLang,'modal_create_poll'),
         },
       },
       {
@@ -1240,7 +1263,7 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['modal_ch_manual_select'],
+          text: stri18n(appLang,'modal_ch_manual_select'),
         },
       }
     ];
@@ -1253,7 +1276,7 @@ async function createModal(context, client, trigger_id,response_url) {
           elements: [
             {
               type: 'mrkdwn',
-              text: langDict[appLang]['modal_ch_response_url_auto'],
+              text: stri18n(appLang,'modal_ch_response_url_auto'),
             },
           ],
         }
@@ -1273,7 +1296,7 @@ async function createModal(context, client, trigger_id,response_url) {
               action_id: 'modal_poll_channel',
               placeholder: {
                 type: 'plain_text',
-                text: langDict[appLang]['modal_ch_select'],
+                text: stri18n(appLang,'modal_ch_select'),
               },
             },
           ],
@@ -1300,7 +1323,7 @@ async function createModal(context, client, trigger_id,response_url) {
         block_id: 'options',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['modal_option']
+          text: stri18n(appLang,'modal_option')
         },
         accessory: {
           type: 'checkboxes',
@@ -1309,33 +1332,33 @@ async function createModal(context, client, trigger_id,response_url) {
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_anonymous']
+                text: stri18n(appLang,'modal_option_anonymous')
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_anonymous_hint']
+                text: stri18n(appLang,'modal_option_anonymous_hint')
               },
               value: 'anonymous'
             },
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_limited']
+                text: stri18n(appLang,'modal_option_limited')
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_limited_hint']
+                text: stri18n(appLang,'modal_option_limited_hint')
               },
               value: 'limit'
             },
             {
               text: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_hidden']
+                text: stri18n(appLang,'modal_option_hidden')
               },
               description: {
                 type: 'mrkdwn',
-                text: langDict[appLang]['modal_option_hidden_hint']
+                text: stri18n(appLang,'modal_option_hidden_hint')
               },
               value: 'hidden'
             },
@@ -1360,13 +1383,13 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'input',
         label: {
           type: 'plain_text',
-          text: langDict[appLang]['modal_input_limit_text'],
+          text: stri18n(appLang,'modal_input_limit_text'),
         },
         element: {
           type: 'plain_text_input',
           placeholder: {
             type: 'plain_text',
-            text: langDict[appLang]['modal_input_limit_hint'],
+            text: stri18n(appLang,'modal_input_limit_hint'),
           },
         },
         optional: true,
@@ -1379,13 +1402,13 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'input',
         label: {
           type: 'plain_text',
-          text: langDict[appLang]['modal_input_question_text'],
+          text: stri18n(appLang,'modal_input_question_text'),
         },
         element: {
           type: 'plain_text_input',
           placeholder: {
             type: 'plain_text',
-            text: langDict[appLang]['modal_input_question_hint'],
+            text: stri18n(appLang,'modal_input_question_hint'),
           },
         },
         block_id: 'question',
@@ -1397,7 +1420,7 @@ async function createModal(context, client, trigger_id,response_url) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: langDict[appLang]['modal_input_choice_text'],
+          text: stri18n(appLang,'modal_input_choice_text'),
         },
       },
       tempModalBlockInput,
@@ -1409,7 +1432,7 @@ async function createModal(context, client, trigger_id,response_url) {
             action_id: 'btn_add_choice',
             text: {
               type: 'plain_text',
-              text: langDict[appLang]['modal_input_choice_add'],
+              text: stri18n(appLang,'modal_input_choice_add'),
               emoji: true,
             },
           },
@@ -1426,15 +1449,15 @@ async function createModal(context, client, trigger_id,response_url) {
         private_metadata: JSON.stringify(privateMetadata),
         title: {
           type: 'plain_text',
-          text: langDict[appLang]['info_create_poll'],
+          text: stri18n(appLang,'info_create_poll'),
         },
         submit: {
           type: 'plain_text',
-          text: langDict[appLang]['btn_create'],
+          text: stri18n(appLang,'btn_create'),
         },
         close: {
           type: 'plain_text',
-          text: langDict[appLang]['btn_cancel'],
+          text: stri18n(appLang,'btn_cancel'),
         },
         blocks: blocks,
       }
@@ -1605,13 +1628,13 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd);
 
-    let mRequestBody = {
-      token: context.botToken,
-      channel: channel,
-      blocks: blocks,
-      text: `Poll : ${question}`,
-    };
-    await postChat(response_url,'post',mRequestBody);
+  let mRequestBody = {
+    token: context.botToken,
+    channel: channel,
+    blocks: blocks,
+    text: `Poll : ${question}`,
+  };
+  await postChat(response_url,'post',mRequestBody);
 });
 
 function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice) {
@@ -1654,43 +1677,43 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
   const staticSelectElements = [{
     label: {
       type: 'plain_text',
-      text: langDict[appLang]['menu_poll_action'],
+      text: stri18n(appLang,'menu_poll_action'),
     },
     options: [{
       text: {
         type: 'plain_text',
-        text: isHidden ? langDict[appLang]['menu_reveal_vote'] : langDict[appLang]['menu_hide_vote'],
+        text: isHidden ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote'),
       },
       value:
         JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: langDict[appLang]['menu_all_user_vote'],
+        text: stri18n(appLang,'menu_all_user_vote'),
       },
       value: JSON.stringify({action: 'btn_users_votes', user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: langDict[appLang]['menu_delete_poll'],
+        text: stri18n(appLang,'menu_delete_poll'),
       },
       value: JSON.stringify({action: 'btn_delete', user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: langDict[appLang]['menu_close_poll'],
+        text: stri18n(appLang,'menu_close_poll'),
       },
       value: JSON.stringify({action: 'btn_close', user: userId}),
     }],
   }, {
     label: {
       type: 'plain_text',
-      text: langDict[appLang]['menu_user_action'],
+      text: stri18n(appLang,'menu_user_action'),
     },
     options: [{
       text: {
         type: 'plain_text',
-        text: langDict[appLang]['menu_user_self_vote'],
+        text: stri18n(appLang,'menu_user_self_vote'),
       },
       value: JSON.stringify({action: 'btn_my_votes', user: userId}),
     }],
@@ -1700,12 +1723,12 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     staticSelectElements.push({
       label: {
         type: 'plain_text',
-        text: langDict[appLang]['menu_support'],
+        text: stri18n(appLang,'menu_support'),
       },
       options: [{
         text: {
           type: 'plain_text',
-          text: langDict[appLang]['menu_love_open_poll'],
+          text: stri18n(appLang,'menu_love_open_poll'),
         },
         value: JSON.stringify({action: 'btn_love_open_poll', user: userId}),
       }],
@@ -1744,37 +1767,37 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     if (isAnonymous) {
       elements.push({
         type: 'mrkdwn',
-        text: langDict[appLang]['info_anonymous'],
+        text: stri18n(appLang,'info_anonymous'),
       });
     }
     if (isLimited) {
       elements.push({
         type: 'mrkdwn',
-        text: parameterizedString(langDict[appLang]['info_limited'],{limit:limit})+langDict[appLang]['info_s'],
+        text: parameterizedString(stri18n(appLang,'info_limited'),{limit:limit})+stri18n(appLang,'info_s'),
       });
     }
     if (isHidden) {
       elements.push({
         type: 'mrkdwn',
-        text: langDict[appLang]['info_hidden'],
+        text: stri18n(appLang,'info_hidden'),
       });
     }
   }
   elements.push({
     type: 'mrkdwn',
-    text: parameterizedString(langDict[appLang]['info_by'],{user_id:userId}),
+    text: parameterizedString(stri18n(appLang,'info_by'),{user_id:userId}),
   });
   blocks.push({
     type: 'context',
     elements: elements,
   });
-  if(langDict[appLang]['info_addon']!=="")
+  if(stri18n(appLang,'info_addon')!=="")
   {
     blocks.push({
       type: 'context',
       elements: [{
         type: 'mrkdwn',
-        text: langDict[appLang]['info_addon'],
+        text: stri18n(appLang,'info_addon'),
       }],
     });
   }
@@ -1814,7 +1837,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         text: {
           type: 'plain_text',
           emoji: true,
-          text: langDict[appLang]['btn_vote']+""+emojiBthPostfix,
+          text: stri18n(appLang,'btn_vote')+""+emojiBthPostfix,
         },
         value: JSON.stringify(btn_value),
       },
@@ -1825,7 +1848,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       elements: [
         {
           type: 'mrkdwn',
-          text: isHidden ? langDict[appLang]['info_wait_reveal'] : langDict[appLang]['info_no_vote'],
+          text: isHidden ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
         }
       ],
     };
@@ -1847,7 +1870,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
           "type": "button",
           "text": {
             "type": "plain_text",
-            "text": langDict[appLang]['btn_add_choice'],
+            "text": stri18n(appLang,'btn_add_choice'),
             "emoji": true
           },
           "value": JSON.stringify(btn_value),
@@ -1866,11 +1889,11 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         elements: [
           {
             type: 'mrkdwn',
-            text: `<${helpLink}|`+langDict[appLang]['info_need_help']+`>`,
+            text: `<${helpLink}|`+stri18n(appLang,'info_need_help')+`>`,
           },
           {
             type: 'mrkdwn',
-            text: langDict[appLang]['info_need_help']+' '+cmd,
+            text: stri18n(appLang,'info_need_help')+' '+cmd,
           },
         ],
       });
@@ -1882,7 +1905,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         elements: [
           {
             type: 'mrkdwn',
-            text: `<${helpLink}|`+langDict[appLang]['info_need_help']+`>`,
+            text: `<${helpLink}|`+stri18n(appLang,'info_need_help')+`>`,
           }
         ],
       });
@@ -1912,7 +1935,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       },
       accessory: {
         type: 'static_select',
-        placeholder: { type: 'plain_text', text: langDict[appLang]['menu_text'] },
+        placeholder: { type: 'plain_text', text: stri18n(appLang,'menu_text') },
         action_id: 'static_select_menu',
         option_groups: staticSelectElements,
       }, //move to the end
@@ -2067,7 +2090,7 @@ async function myVotes(body, client, context) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: langDict[appLang]['info_not_vote_yet'],
+        text: stri18n(appLang,'info_not_vote_yet'),
       },
     });
   } else {
@@ -2082,11 +2105,11 @@ async function myVotes(body, client, context) {
         type: 'modal',
         title: {
           type: 'plain_text',
-          text: langDict[appLang]['info_your_vote'],
+          text: stri18n(appLang,'info_your_vote'),
         },
         close: {
           type: 'plain_text',
-          text: langDict[appLang]['info_close'],
+          text: stri18n(appLang,'info_close'),
         },
         blocks: votes,
       }
@@ -2119,7 +2142,7 @@ async function usersVotes(body, client, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_see_all_vote_other'],
+      text: stri18n(appLang,'err_see_all_vote_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -2188,7 +2211,7 @@ async function usersVotes(body, client, context, value) {
         elements: [{
           type: 'mrkdwn',
           text: !voters.length
-            ? langDict[appLang]['info_no_vote']
+            ? stri18n(appLang,'info_no_vote')
             : voters.map(el => {
                 return `<@${el}>`;
               }).join(', '),
@@ -2205,11 +2228,11 @@ async function usersVotes(body, client, context, value) {
         type: 'modal',
         title: {
           type: 'plain_text',
-          text: langDict[appLang]['info_all_user_vote'],
+          text: stri18n(appLang,'info_all_user_vote'),
         },
         close: {
           type: 'plain_text',
-          text: langDict[appLang]['info_close'],
+          text: stri18n(appLang,'info_close'),
         },
         blocks: votes,
       },
@@ -2251,7 +2274,7 @@ async function revealOrHideVotes(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_reveal_other'],
+      text: stri18n(appLang,'err_reveal_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -2265,7 +2288,7 @@ async function revealOrHideVotes(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_poll_unconsistent_exception'],
+      text: stri18n(appLang,'err_poll_unconsistent_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2359,10 +2382,10 @@ async function revealOrHideVotes(body, context, value) {
           let newVoters = '';
 
           if (isHidden) {
-            newVoters = langDict[appLang]['info_wait_reveal'];
+            newVoters = stri18n(appLang,'info_wait_reveal');
           } else {
             if (poll[val.id].length === 0) {
-              newVoters = langDict[appLang]['info_no_vote'];
+              newVoters = stri18n(appLang,'info_no_vote');
             } else {
               newVoters = '';
               for (const voter of poll[val.id]) {
@@ -2435,7 +2458,7 @@ async function revealOrHideVotes(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_vote_exception'],
+      text: stri18n(appLang,'err_vote_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
@@ -2463,7 +2486,7 @@ async function deletePoll(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_delete_other'],
+      text: stri18n(appLang,'err_delete_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2502,7 +2525,7 @@ async function closePoll(body, client, context, value) {
           channel: body.channel.id,
           user: body.user.id,
           attachments: [],
-          text: langDict[appLang]['err_close_other'],
+          text: stri18n(appLang,'err_close_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
     return;
@@ -2618,7 +2641,7 @@ async function closePoll(body, client, context, value) {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: langDict[appLang]['err_close_other'],
+        text: stri18n(appLang,'err_close_other'),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
     } finally {
@@ -2630,7 +2653,7 @@ async function closePoll(body, client, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: langDict[appLang]['err_close_other'],
+      text: stri18n(appLang,'err_close_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
@@ -2770,25 +2793,25 @@ async function buildInfosBlocks(blocks, pollInfos) {
   if (infos.anonymous) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: langDict[appLang]['info_anonymous'],
+      text: stri18n(appLang,'info_anonymous'),
     });
   }
   if (infos.limited) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text : parameterizedString(langDict[appLang]['info_limited'],{limit:infos.limit})+langDict[appLang]['info_s'],
+      text : parameterizedString(stri18n(appLang,'info_limited'),{limit:infos.limit})+stri18n(appLang,'info_s'),
     });
   }
   if (infos.hidden) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: langDict[appLang]['info_hidden'],
+      text: stri18n(appLang,'info_hidden'),
     });
   }
   if (infos.closed) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: langDict[appLang]['info_closed'],
+      text: stri18n(appLang,'info_closed'),
     });
   }
   infosBlocks.push(blocks[infosIndex].elements.pop());
@@ -2804,11 +2827,11 @@ async function buildMenu(blocks, pollInfos) {
     return blocks[menuAtIndex].accessory.option_groups[0].options.map(el => {
       const value = JSON.parse(el.value);
       if (value && 'btn_close' === value.action) {
-        el.text.text = infos['closed'] ? langDict[appLang]['menu_reopen_poll'] : langDict[appLang]['menu_close_poll'];
+        el.text.text = infos['closed'] ? stri18n(appLang,'menu_reopen_poll') : stri18n(appLang,'menu_close_poll');
         value.closed = !value.closed;
         el.value = JSON.stringify(value);
       } else if (value && 'btn_reveal' === value.action) {
-        el.text.text = infos['hidden'] ? langDict[appLang]['menu_reveal_vote'] : langDict[appLang]['menu_hide_vote'];
+        el.text.text = infos['hidden'] ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote');
         value.revealed = !value.closed;
         el.value = JSON.stringify(value);
       }
@@ -2819,7 +2842,7 @@ async function buildMenu(blocks, pollInfos) {
     return blocks[menuAtIndex].accessory.options.map((el) => {
       const value = JSON.parse(el.value);
       if (value && 'btn_reveal' === value.action) {
-        el.text.text = infos['hidden'] ? langDict[appLang]['menu_reveal_vote'] : langDict[appLang]['menu_hide_vote'];
+        el.text.text = infos['hidden'] ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote');
         value.revealed = !value.closed;
         el.value = JSON.stringify(value);
       }
