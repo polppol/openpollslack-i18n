@@ -39,6 +39,8 @@
   "modal_option_limited_hint": "*This option limit the number of choices by user*",
   "modal_option_hidden": "*Hidden*",
   "modal_option_hidden_hint": "*This option hide the votes until reveal*",
+  "modal_option_add_choice": "*Allow choices from others*",
+  "modal_option_add_choice_hint": "This option allow other member to add more choice to this poll.",
   "modal_input_limit_text": "Choose your limit",
   "modal_input_limit_hint": "Type a number)",
   "modal_input_question_text": "Ask your question :",
