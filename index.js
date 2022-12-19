@@ -1188,6 +1188,127 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   }
 });
+app.action('btn_add_choice_after_post', async ({ action, ack, body, context,client }) => {
+  await ack();
+  let addChoiceIndex = body.message.blocks.length-1;
+  let newChoiceIndex = body.message.blocks.length-2;
+  if(isMenuAtTheEnd) newChoiceIndex--;
+  if (
+    !body
+    || !action
+    || !body.user
+    || !body.user.id
+    || !body.message
+    || !body.message.blocks
+    || !body.message.ts
+    || !body.channel
+    || !body.channel.id
+  ) {
+    console.log('error');
+    return;
+  }
+
+  const user_id = body.user.id;
+  const message = body.message;
+  let blocks = message.blocks;
+
+  const channel = body.channel.id;
+
+  let value = JSON.parse(action.value);
+
+  console.debug(body.message.blocks);
+  //find next option id
+  let lastestOptionId = 0;
+  for(const idx in body.message.blocks)
+  {
+    if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
+      if(body.message.blocks[idx]['type'] == 'section') {
+        if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
+          if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
+              body.message.blocks[idx]['accessory'].hasOwnProperty('value')
+          ) {
+              const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
+              const voteBtnId = parseInt(voteBtnVal['id']);
+              lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
+
+          }
+        }
+      }
+    }
+  }
+
+  /////////////////////
+  const privateMetadata = {
+    response_url: body.response_url,
+  };
+
+  let modal_blocks = [
+    {
+      "type": "input",
+      "element": {
+        "type": "plain_text_input",
+        "placeholder": {
+          "type": "plain_text",
+          "text": "พิมพ์ตัวเลือกที่จะเพิ่ม"
+        }
+      },
+      "label": {
+        "type": "plain_text",
+        "text": "เพื่มตัวเลือก",
+        "emoji": true
+      },
+      "optional": false,
+      "block_id": "new_choice"
+    }
+  ];
+
+  ////////////////////
+
+
+  try {
+    await client.views.open({
+      token: context.botToken,
+      trigger_id: body.trigger_id,
+      view: {
+        "type": "modal",
+        "callback_id": "modal_add_choice_after_post_submit",
+        "private_metadata": JSON.stringify(privateMetadata),
+        "title": {
+          "type": "plain_text",
+          "text": "เพื่มตัวเลือก",
+          "emoji": true
+        },
+        "submit": {
+          "type": "plain_text",
+          "text": "Submit",
+          "emoji": true
+        },
+        "close": {
+          "type": "plain_text",
+          "text": "Cancel",
+          "emoji": true
+        },
+        "blocks":
+          modal_blocks
+
+      }
+    });
+  } catch (e) {
+    console.error(e);
+  }
+
+
+  let mRequestBody = {
+    token: context.botToken,
+    channel: body.channel.id,
+    user: body.user.id,
+    attachments: [],
+    text: "TEST New option will be "+value.id+" autocalc = "+lastestOptionId,
+  };
+  await postChat(body.response_url,'ephemeral',mRequestBody);
+  return;
+
+});
 
 app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   await ack();
@@ -1321,6 +1442,17 @@ async function createModal(context, client, trigger_id,response_url) {
                 text: stri18n(appLang,'modal_option_hidden_hint')
               },
               value: 'hidden'
+            },
+            {
+              text: {
+                type: 'mrkdwn',
+                text: "TEST"
+              },
+              description: {
+                type: 'mrkdwn',
+                text: "TEST"
+              },
+              value: 'user_add_choice'
             }
           ]
         }
