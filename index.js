@@ -1067,10 +1067,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       let voters = value.voters ? value.voters : [];
 
       let removeVote = false;
-      console.log("poll");
-      console.log(poll);
-      console.log("value.id");
-      console.log(value.id);
 
       if (poll[value.id].includes(user_id)) {
         removeVote = true;
