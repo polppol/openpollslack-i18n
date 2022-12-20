@@ -15,6 +15,8 @@
   "info_need_help": "Need help ?",
   "info_create_poll": "Create a poll",
   "info_command_source": ":information_source:",
+  "info_others_add_choice": "Add another choice...",
+  "info_others_add_choice_hint": "Type your new choice here",
   "btn_vote": "Vote",
   "btn_add_choice": "+ Add choice",
   "btn_create": "Create",

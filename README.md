@@ -75,6 +75,17 @@ Remember the four freedoms of the GPL :
 ```
 /poll anonymous limit 2 "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
 ```
+
+### Allow choices add by others
+```
+/poll add-choice "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
+```
+
+### Allow choices add by others with Limited and Anonymous
+```
+/poll add-choice anonymous limit 2 "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
+```
+
   
 For both question and choices, feel free to use slack's emoji, `*bold*` `~strike~` `_italics_` and `` `code` ``  
 
