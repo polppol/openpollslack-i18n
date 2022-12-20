@@ -95,7 +95,7 @@ const stri18n = (lang,key) => {
       return langDict[lang][key];
     }
   }
-  //failback to en
+  //fallback to en if not exist
   if(langDict['en'].hasOwnProperty(key)) {
     return langDict['en'][key];
   }
@@ -183,9 +183,7 @@ const sendMessageUsingUrl = async (url,newMessage) => {
     method: 'POST',
     body: JSON.stringify(newMessage),
     headers: {'Content-Type': 'application/json'}
-  })//.then(res => res.json())
-  //.then(console.debug)
-  ;
+  });
 }
 
 const postChat = async (url,type,requestBody) => {
@@ -531,7 +529,6 @@ app.event('app_home_opened', async ({ event, client, context }) => {
 });
 
 app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, say }) => {
-  //if(!isResponseInCh)
   await ack();
 
   let cmdBody = (command && command.text) ? command.text.trim() : null;
@@ -784,7 +781,7 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     await ack();
   }
   catch (e) {
-    //do not act so user can see some error
+    //do not ack so user can see some error
     console.debug("Error on btn_add_choice (maybe user click too fast");
   }
 
@@ -1046,7 +1043,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         poll = data.votes;
       }
 
-      //check number of options
+      //if not exist that mean this choice just add to poll
       if(!poll.hasOwnProperty(value.id))
       {
         console.log("Vote array not found creating value.id="+value.id);
@@ -1123,10 +1120,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             val.voters = [];
           }
 
-          console.log("val");
-          console.log(val);
-          console.log("poll[val.id]");
-          console.log(poll[val.id]);
           if (!poll.hasOwnProperty(val.id)) {
             poll[val.id] = [];
           }
@@ -1221,133 +1214,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   }
 });
-app.action('btn_add_choice_after_post', async ({ action, ack, body, context,client }) => {
-  await ack();
-  // let addChoiceIndex = body.message.blocks.length-1;
-  // let newChoiceIndex = body.message.blocks.length-2;
-  // if(isMenuAtTheEnd) newChoiceIndex--;
-  if (
-    !body
-    || !action
-    || !body.user
-    || !body.user.id
-    || !body.message
-    || !body.message.blocks
-    || !body.message.ts
-    || !body.channel
-    || !body.channel.id
-  ) {
-    console.log('error');
-    return;
-  }
-  //
-  // const user_id = body.user.id;
-  // const message = body.message;
-  // let blocks = message.blocks;
-  //
-  // const channel = body.channel.id;
-  //
-  // let value = JSON.parse(action.value);
-  //
-  console.debug(body);
-  // //find next option id
-  // let lastestOptionId = 0;
-  // for(const idx in body.message.blocks)
-  // {
-  //   if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
-  //     if(body.message.blocks[idx]['type'] == 'section') {
-  //       if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
-  //         if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
-  //             body.message.blocks[idx]['accessory'].hasOwnProperty('value')
-  //         ) {
-  //             const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
-  //             const voteBtnId = parseInt(voteBtnVal['id']);
-  //             lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
-  //
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
-
-  /////////////////////
-  const privateMetadata = {
-    message_ts: body.message.ts,
-    response_url: body.response_url,
-  };
-
-  let modal_blocks = [
-    {
-      "type": "input",
-      "element": {
-        "type": "plain_text_input",
-        "placeholder": {
-          "type": "plain_text",
-          "text": "พิมพ์ตัวเลือกที่จะเพิ่ม"
-        }
-      },
-      "label": {
-        "type": "plain_text",
-        "text": "เพื่มตัวเลือก",
-        "emoji": true
-      },
-      "optional": false,
-      "block_id": "new_choice"
-    }
-  ];
-
-  ////////////////////
-
-
-  try {
-    await client.views.open({
-      token: context.botToken,
-      trigger_id: body.trigger_id,
-      view: {
-        "type": "modal",
-        "callback_id": "modal_add_choice_after_post_submit",
-        "private_metadata": JSON.stringify(privateMetadata),
-        "title": {
-          "type": "plain_text",
-          "text": "เพื่มตัวเลือก",
-          "emoji": true
-        },
-        "submit": {
-          "type": "plain_text",
-          "text": "Submit",
-          "emoji": true
-        },
-        "close": {
-          "type": "plain_text",
-          "text": "Cancel",
-          "emoji": true
-        },
-        "blocks":
-          modal_blocks
-
-      }
-    });
-  } catch (e) {
-    console.error(e);
-  }
-
-
-  // let mRequestBody = {
-  //   token: context.botToken,
-  //   channel: body.channel.id,
-  //   user: body.user.id,
-  //   attachments: [],
-  //   text: "TEST New option will be "+value.id+" autocalc = "+lastestOptionId,
-  // };
-  // await postChat(body.response_url,'ephemeral',mRequestBody);
-  // return;
-
-});
 app.action('add_choice_after_post', async ({ ack, body, action, context,client }) => {
-  console.log('add_choice_after_post')
-  console.debug(body);
-  console.debug(action);
-  //console.debug(JSON.parse(body.view.private_metadata));
   await ack();
   let newChoiceIndex = body.message.blocks.length-1;
   if(isShowHelpLink||isShowCommandInfo) newChoiceIndex--;
@@ -1374,9 +1241,6 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
   const channel = body.channel.id;
 
   const value = action.value.trim();
-
-
-  console.debug(body.message.blocks);
 
   if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
     mutexes[`${message.team}/${channel}/${message.ts}`] = new Mutex();
@@ -1415,9 +1279,6 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                 if (isShowNumberInChoice) {
                   thisChoice = thisChoice.replace(slackNumToEmoji((voteBtnId + 1)) + " ", '');
                 }
-                // console.debug(`${voteBtnId} :`);
-                // console.debug(thisChoice);
-                // console.debug(voteBtnVal);
 
                 if (thisChoice == value) {
                   let mRequestBody = {
@@ -1437,28 +1298,11 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
           }
         }
       }
-
-
-      let mRequestBody = {
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: "TEST New option will be " + value + " new index = " + (lastestOptionId + 1) + " Runing Num = " + slackNumToEmoji((lastestOptionId + 2)),
-      };
-      await postChat(body.response_url, 'ephemeral', mRequestBody);
-
-
-      console.debug("ORG:");
-      console.debug(blocks);
-
       //update post
       const tempAddBlock = blocks[newChoiceIndex];
-      //console.debug(tempAddBlock);
 
       lastestVoteBtnVal['id'] = (lastestOptionId + 1);
       lastestVoteBtnVal['voters'] = [];
-      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value));
 
       let block = {
         type: 'context',
@@ -1471,11 +1315,9 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
       };
       blocks.splice(newChoiceIndex+1,0,block);
 
-
       blocks.splice(newChoiceIndex+2,0,{
         type: 'divider',
       });
-
 
       let mRequestBody2 = {
         token: context.botToken,
@@ -1486,14 +1328,8 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
       };
       await postChat(body.response_url, 'update', mRequestBody2);
 
-      console.debug("NEW1:");
-      console.debug(blocks);
-
       //re-add add-choice section
       blocks.splice(newChoiceIndex+3, 0,tempAddBlock);
-
-      console.debug("NEW2:");
-      console.debug(blocks);
 
       mRequestBody2 = {
         token: context.botToken,
@@ -2112,9 +1948,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     id: null,
   };
 
-  //let optionCount = 0;
   for (let i in options) {
-    //optionCount++;
     let option = options[i];
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
@@ -2142,26 +1976,6 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
 
   if(isAllowUserAddChoice)
   {
-    let btn_value = JSON.parse(JSON.stringify(button_value));
-    //btn_value.id =  optionCount+1;
-
-  //   blocks.push({
-  //     "type": "actions",
-  //     "elements": [
-  //       {
-  //         "type": "button",
-  //         "text": {
-  //           "type": "plain_text",
-  //           "text": stri18n(appLang,'btn_add_choice'),
-  //           "emoji": true
-  //         },
-  //         "value": JSON.stringify(btn_value),
-  //         "action_id": "btn_add_choice_after_post"
-  //       }
-  //     ]
-  //   });
-  // }
-
     blocks.push({
       "type": "input",
       "dispatch_action": true,
@@ -2175,12 +1989,12 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         },
         "placeholder": {
           "type": "plain_text",
-          "text": "พิมพ์ตัวเลือกที่จะเพิ่มและกด Enter..."
+          "text": stri18n(appLang,'info_others_add_choice_hint')
         }
       },
       "label": {
         "type": "plain_text",
-        "text": "เพื่มตัวเลือก...",
+        "text": stri18n(appLang,'info_others_add_choice'),
         "emoji": true
       }
     });
@@ -2244,11 +2058,10 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         placeholder: { type: 'plain_text', text: stri18n(appLang,'menu_text') },
         action_id: 'static_select_menu',
         option_groups: staticSelectElements,
-      }, //move to the end
+      },
     });
   }
 
-  console.debug(blocks);
   return blocks;
 }
 
