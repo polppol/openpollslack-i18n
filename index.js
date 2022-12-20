@@ -1010,7 +1010,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           return;
       }
 
-      console.debug(blocks);
       let poll = null;
       const data = await votesCol.findOne({ channel: channel, ts: message.ts });
       if (data === null) {
@@ -1027,7 +1026,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             && b.accessory.hasOwnProperty('value')
           ) {
             const val = JSON.parse(b.accessory.value);
-            console.debug("Found val="+val);
             poll[val.id] = val.voters ? val.voters : [];
           }
         }
