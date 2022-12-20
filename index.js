@@ -1303,6 +1303,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
 
       lastestVoteBtnVal['id'] = (lastestOptionId + 1);
       lastestVoteBtnVal['voters'] = [];
+      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value));
 
       let block = {
         type: 'context',
