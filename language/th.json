@@ -66,6 +66,8 @@
   "err_vote_exception": "เกิดข้อผิดพลาดกรุณาลองใหม่อีกครั้ง/An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "เกิดข้อผิดพลาดกรุณาลองใหม่อีกครั้ง/An error occurred while attempt to close the poll. Please try again in few seconds.",
   "err_poll_unconsistent_exception": "เกิดข้อผิดพลาดกรุณาลองใหม่อีกครั้ง/Unconsistent poll data",
+  "err_duplicate_add_choice": "มีตัวเลือก [{{text}}] อยู่แล้ว",
+  "err_mutex_lock": "[Try #{{{count_try}}] Error while attempt to acquire mutex lock. (กรุณารอสักครู่และลองใหม่)",
   "emoji_1": ":one:",
   "emoji_2": ":two:",
   "emoji_3": ":three:",

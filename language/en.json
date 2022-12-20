@@ -66,6 +66,8 @@
   "err_vote_exception": "An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "Unconsistent poll data",
+  "err_duplicate_add_choice": "[{{text}}`] already exists in choice",
+  "err_mutex_lock": "[Try #{{{count_try}}] Error while attempt to acquire mutex lock.",
   "emoji_1": ":one:",
   "emoji_2": ":two:",
   "emoji_3": ":three:",

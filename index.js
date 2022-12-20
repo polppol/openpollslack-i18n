@@ -1013,6 +1013,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           return;
       }
 
+      console.debug(blocks);
       let poll = null;
       const data = await votesCol.findOne({ channel: channel, ts: message.ts });
       if (data === null) {
@@ -1029,6 +1030,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             && b.accessory.hasOwnProperty('value')
           ) {
             const val = JSON.parse(b.accessory.value);
+            console.debug("Found val="+val);
             poll[val.id] = val.voters ? val.voters : [];
           }
         }
@@ -1042,6 +1044,13 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         });
       } else {
         poll = data.votes;
+      }
+
+      //check number of options
+      if(!poll.hasOwnProperty(value.id))
+      {
+        console.log("Vote array not found creating value.id="+value.id);
+        poll[value.id] = [];
       }
 
       const isHidden = await getInfos(
@@ -1061,6 +1070,11 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       let voters = value.voters ? value.voters : [];
 
       let removeVote = false;
+      console.log("poll");
+      console.log(poll);
+      console.log("value.id");
+      console.log(value.id);
+
       if (poll[value.id].includes(user_id)) {
         removeVote = true;
       }
@@ -1109,13 +1123,21 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             val.voters = [];
           }
 
+          console.log("val");
+          console.log(val);
+          console.log("poll[val.id]");
+          console.log(poll[val.id]);
+          if (!poll.hasOwnProperty(val.id)) {
+            poll[val.id] = [];
+          }
+
           val.voters = poll[val.id];
           let newVoters = '';
 
           if (isHidden) {
-            newVoters = 'Wait for reveal';
+            newVoters = stri18n(appLang,'info_wait_reveal');
           } else if (poll[val.id].length === 0) {
-            newVoters = 'No votes';
+            newVoters = stri18n(appLang,'info_no_vote');
           } else {
             newVoters = '';
             for (const voter of poll[val.id]) {
@@ -1321,14 +1343,14 @@ app.action('btn_add_choice_after_post', async ({ action, ack, body, context,clie
   // return;
 
 });
-app.view('modal_add_choice_after_post_submit', async ({ ack, body, view, context,client }) => {
-  console.log('modal_add_choice_after_post_submit')
+app.action('add_choice_after_post', async ({ ack, body, action, context,client }) => {
+  console.log('add_choice_after_post')
   console.debug(body);
-  console.debug(JSON.parse(body.view.private_metadata));
-  return;
+  console.debug(action);
+  //console.debug(JSON.parse(body.view.private_metadata));
   await ack();
-  let addChoiceIndex = body.message.blocks.length-1;
-  let newChoiceIndex = body.message.blocks.length-2;
+  let newChoiceIndex = body.message.blocks.length-1;
+  if(isShowHelpLink||isShowCommandInfo) newChoiceIndex--;
   if(isMenuAtTheEnd) newChoiceIndex--;
   if (
     !body
@@ -1351,38 +1373,152 @@ app.view('modal_add_choice_after_post_submit', async ({ ack, body, view, context
 
   const channel = body.channel.id;
 
-  let value = JSON.parse(action.value);
+  const value = action.value.trim();
+
 
   console.debug(body.message.blocks);
-  //find next option id
-  let lastestOptionId = 0;
-  for(const idx in body.message.blocks)
-  {
-    if(body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
-      if(body.message.blocks[idx]['type'] == 'section') {
-        if(body.message.blocks[idx]['accessory']['type'] == 'button' ) {
-          if(body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
-              body.message.blocks[idx]['accessory'].hasOwnProperty('value')
-          ) {
-              const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
-              const voteBtnId = parseInt(voteBtnVal['id']);
-              lastestOptionId = voteBtnId > lastestOptionId?voteBtnId:lastestOptionId;
 
+  if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
+    mutexes[`${message.team}/${channel}/${message.ts}`] = new Mutex();
+  }
+  let release = null;
+  let countTry = 0;
+  do {
+    ++countTry;
+
+    try {
+      release = await mutexes[`${message.team}/${channel}/${message.ts}`].acquire();
+    } catch (e) {
+      console.log(`[Try #${countTry}] Error while attempt to acquire mutex lock.`, e)
+    }
+  } while (!release && countTry < 3);
+  if (release) {
+    try {
+      //find next option id
+      let lastestOptionId = 0;
+      let lastestVoteBtnVal = [];
+      for (const idx in body.message.blocks) {
+        if (body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
+          if (body.message.blocks[idx]['type'] == 'section') {
+            if (body.message.blocks[idx]['accessory']['type'] == 'button') {
+              if (body.message.blocks[idx]['accessory'].hasOwnProperty('action_id') &&
+                  body.message.blocks[idx]['accessory'].hasOwnProperty('value')
+              ) {
+                const voteBtnVal = JSON.parse(body.message.blocks[idx]['accessory']['value']);
+                const voteBtnId = parseInt(voteBtnVal['id']);
+                if (voteBtnId > lastestOptionId) {
+                  lastestOptionId = voteBtnId;
+                  lastestVoteBtnVal = voteBtnVal;
+                }
+
+                let thisChoice = body.message.blocks[idx]['text']['text'].trim();
+                if (isShowNumberInChoice) {
+                  thisChoice = thisChoice.replace(slackNumToEmoji((voteBtnId + 1)) + " ", '');
+                }
+                // console.debug(`${voteBtnId} :`);
+                // console.debug(thisChoice);
+                // console.debug(voteBtnVal);
+
+                if (thisChoice == value) {
+                  let mRequestBody = {
+                    token: context.botToken,
+                    channel: body.channel.id,
+                    user: body.user.id,
+                    attachments: [],
+                    text: parameterizedString(stri18n(appLang, 'err_duplicate_add_choice'), {text: value}),
+                  };
+                  await postChat(body.response_url, 'ephemeral', mRequestBody);
+                  return;
+                }
+
+
+              }
+            }
           }
         }
       }
+
+
+      let mRequestBody = {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        attachments: [],
+        text: "TEST New option will be " + value + " new index = " + (lastestOptionId + 1) + " Runing Num = " + slackNumToEmoji((lastestOptionId + 2)),
+      };
+      await postChat(body.response_url, 'ephemeral', mRequestBody);
+
+
+      console.debug("ORG:");
+      console.debug(blocks);
+
+      //update post
+      const tempAddBlock = blocks[newChoiceIndex];
+      //console.debug(tempAddBlock);
+
+      lastestVoteBtnVal['id'] = (lastestOptionId + 1);
+      lastestVoteBtnVal['voters'] = [];
+      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value));
+
+      let block = {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: lastestVoteBtnVal['hidden'] ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
+          }
+        ],
+      };
+      blocks.splice(newChoiceIndex+1,0,block);
+
+
+      blocks.splice(newChoiceIndex+2,0,{
+        type: 'divider',
+      });
+
+
+      let mRequestBody2 = {
+        token: context.botToken,
+        channel: channel,
+        ts: message.ts,
+        blocks: blocks,
+        text: message.text
+      };
+      await postChat(body.response_url, 'update', mRequestBody2);
+
+      console.debug("NEW1:");
+      console.debug(blocks);
+
+      //re-add add-choice section
+      blocks.splice(newChoiceIndex+3, 0,tempAddBlock);
+
+      console.debug("NEW2:");
+      console.debug(blocks);
+
+      mRequestBody2 = {
+        token: context.botToken,
+        channel: channel,
+        ts: message.ts,
+        blocks: blocks,
+        text: message.text
+      };
+      await postChat(body.response_url, 'update', mRequestBody2);
+
+    } catch (e) {
+      console.error(e);
+      let mRequestBody = {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        attachments: [],
+        text: `An error occurred during add choice process. Please try again in few seconds.`,
+      };
+      await postChat(body.response_url, 'ephemeral', mRequestBody);
+    } finally {
+      release();
     }
   }
 
-
-  let mRequestBody = {
-    token: context.botToken,
-    channel: body.channel.id,
-    user: body.user.id,
-    attachments: [],
-    text: "TEST New option will be "+value.id+" autocalc = "+lastestOptionId,
-  };
-  await postChat(body.response_url,'ephemeral',mRequestBody);
   return;
 
 });
@@ -1976,53 +2112,38 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     id: null,
   };
 
-  let optionCount = 0;
+  //let optionCount = 0;
   for (let i in options) {
-    optionCount++;
-    let emojiPrefix = "";
-    let emojiBthPostfix = "";
-    if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(optionCount)+" ";
-    if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(optionCount);
+    //optionCount++;
     let option = options[i];
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
+
+    blocks.push(buildVoteBlock(btn_value, option));
+
     let block = {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: emojiPrefix+""+option,
-      },
-      accessory: {
-        type: 'button',
-        action_id: 'btn_vote',
-        text: {
-          type: 'plain_text',
-          emoji: true,
-          text: stri18n(appLang,'btn_vote')+""+emojiBthPostfix,
-        },
-        value: JSON.stringify(btn_value),
-      },
-    };
-    blocks.push(block);
-    block = {
       type: 'context',
       elements: [
         {
           type: 'mrkdwn',
-          text: isHidden ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
+          text: btn_value['hidden'] ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
         }
       ],
     };
     blocks.push(block);
+
+
     blocks.push({
       type: 'divider',
     });
+
+
   }
 
   if(isAllowUserAddChoice)
   {
     let btn_value = JSON.parse(JSON.stringify(button_value));
-    btn_value.id =  optionCount+1;
+    //btn_value.id =  optionCount+1;
 
   //   blocks.push({
   //     "type": "actions",
@@ -2046,7 +2167,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       "dispatch_action": true,
       "element": {
         "type": "plain_text_input",
-        "action_id": "plain_text_input-action",
+        "action_id": "add_choice_after_post",
         "dispatch_action_config": {
           "trigger_actions_on": [
             "on_enter_pressed"
@@ -2054,7 +2175,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         },
         "placeholder": {
           "type": "plain_text",
-          "text": "พิมพ์ตัวเลือกที่จะเพิ่มและกด Enter"
+          "text": "พิมพ์ตัวเลือกที่จะเพิ่มและกด Enter..."
         }
       },
       "label": {
@@ -2127,6 +2248,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     });
   }
 
+  console.debug(blocks);
   return blocks;
 }
 
@@ -3037,4 +3159,30 @@ async function buildMenu(blocks, pollInfos) {
   }
 
   return null;
+}
+
+function buildVoteBlock(btn_value, option_text) {
+  let emojiPrefix = "";
+  let emojiBthPostfix = "";
+  let voteId = parseInt(btn_value.id);
+  if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(voteId+1)+" ";
+  if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(voteId+1);
+  let block = {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: emojiPrefix+""+option_text,
+    },
+    accessory: {
+      type: 'button',
+      action_id: 'btn_vote',
+      text: {
+        type: 'plain_text',
+        emoji: true,
+        text: stri18n(appLang,'btn_vote')+""+emojiBthPostfix,
+      },
+      value: JSON.stringify(btn_value),
+    },
+  };
+  return block;
 }
