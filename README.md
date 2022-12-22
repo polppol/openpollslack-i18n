@@ -3,7 +3,8 @@
 
 I have make some change to make it more customizable :
 ## config/default.json
-- `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (ภาษาไทย)
+- `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
+- `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI (Most of the UI text, some error and exception message might still in default app language ) 
 - `bot_name` for refering bot name in some help text
 - `use_response_url` if set to `true`; app will respond to request using `response_url` instead of using `app.client.chat.post`
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
@@ -16,6 +17,11 @@ I have make some change to make it more customizable :
 ### Allow choices add by others
 ```
 /poll add-choice "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
+```
+
+### Change poll language for current poll only
+```
+/poll lang th "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
 ```
 
 # Open source poll for slack
@@ -86,6 +92,10 @@ Remember the four freedoms of the GPL :
 /poll add-choice anonymous limit 2 "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
 ```
 
+### Change poll language for current poll only
+```
+/poll lang th "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
+```
   
 For both question and choices, feel free to use slack's emoji, `*bold*` `~strike~` `_italics_` and `` `code` ``  
 

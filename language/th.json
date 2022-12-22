@@ -1,4 +1,7 @@
 {
+  "info_lang_name": "ไทย",
+  "info_lang_select_hint": "Select Language",
+  "info_lang_select_label": "Poll Language:",
   "info_anonymous": ":shushing_face: โหวตแบบไม่ระบุตัวตน",
   "info_limited": ":pencil2: กรุณาเลือก `{{limit}}` ตัวเลือก",
   "info_s": "",

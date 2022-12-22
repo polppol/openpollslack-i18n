@@ -13,12 +13,15 @@ const globLang = require('glob');
 
 let langDict = {};
 
+let langList = {};
+
 const port = config.get('port');
 const signing_secret = config.get('signing_secret');
 const slackCommand = config.get('command');
 const helpLink = config.get('help_link');
 const supportUrl = config.get('support_url');
 const appLang = config.get('app_lang');
+const isAppLangSelectable = config.get('app_lang_user_selectable');
 const isUseResponseUrl = config.get('use_response_url');
 const isMenuAtTheEnd = config.get('menu_at_the_end');
 const botName = config.get('bot_name');
@@ -64,6 +67,10 @@ globLang.sync( './language/*.json' ).forEach( function( file ) {
       console.log("Lang file ["+lang+"]: "+file);
       let fileData = fileLang.readFileSync(file);
       langDict[lang] = JSON.parse(fileData.toString());
+      if(langDict[lang].hasOwnProperty('info_lang_name'))
+        langList[lang] = langDict[lang]['info_lang_name'];
+      else
+        langList[lang] = lang;
       langCount++;
     }
   }
@@ -245,10 +252,10 @@ const postChat = async (url,type,requestBody) => {
   }
 }
 
-const slackNumToEmoji = (seq) => {
+const slackNumToEmoji = (seq,userLang) => {
   let outText = "["+seq+"]";
-  if(langDict[appLang].hasOwnProperty('emoji_'+seq)) {
-    outText = langDict[appLang]['emoji_'+seq];
+  if(langDict[userLang].hasOwnProperty('emoji_'+seq)) {
+    outText = langDict[userLang]['emoji_'+seq];
   }
   return outText;
 }
@@ -638,6 +645,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
     let question = null;
     const options = [];
 
+    let userLang = appLang;
     let isAnonymous = false;
     let isLimited = false;
     let limit = null;
@@ -659,6 +667,17 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
           limit = parseInt(cmdBody.substring(0, cmdBody.indexOf(' ')));
           cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
         }
+      } else if (cmdBody.startsWith('lang')) {
+        fetchArgs = true;
+        cmdBody = cmdBody.substring(4).trim();
+        isLimited = true;
+        let inputLang = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+        if(langList.hasOwnProperty(inputLang)){
+          userLang = inputLang;
+          console.debug("SET LANG OK ="+inputLang);
+        }
+
+        cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
       } else if (cmdBody.startsWith('hidden')) {
         fetchArgs = true;
         cmdBody = cmdBody.substring(6).trim();
@@ -687,7 +706,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
       }
     }
 
-    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd);
+    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd);
 
     if (null === blocks) {
       return;
@@ -973,6 +992,11 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   let value = JSON.parse(action.value);
 
+  let userLang = appLang;
+  if(value.hasOwnProperty('user_lang'))
+    if(value.user_lang!="" && value.user_lang != null)
+      userLang = value.user_lang;
+
   if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
     mutexes[`${message.team}/${channel}/${message.ts}`] = new Mutex();
   }
@@ -1004,7 +1028,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             channel: body.channel.id,
             user: body.user.id,
             attachments: [],
-            text: stri18n(appLang,'err_change_vote_poll_closed'),
+            text: stri18n(userLang,'err_change_vote_poll_closed'),
         };
         await postChat(body.response_url,'ephemeral',mRequestBody);
           return;
@@ -1090,7 +1114,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
             channel: channel,
             user: body.user.id,
             attachments: [],
-            text : parameterizedString(stri18n(appLang,'err_vote_over_limit'),{limit:value.limit}),
+            text : parameterizedString(stri18n(userLang,'err_vote_over_limit'),{limit:value.limit}),
           };
           await postChat(body.response_url,'ephemeral',mRequestBody);
           return;
@@ -1122,9 +1146,9 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           let newVoters = '';
 
           if (isHidden) {
-            newVoters = stri18n(appLang,'info_wait_reveal');
+            newVoters = stri18n(userLang,'info_wait_reveal');
           } else if (poll[val.id].length === 0) {
-            newVoters = stri18n(appLang,'info_no_vote');
+            newVoters = stri18n(userLang,'info_no_vote');
           } else {
             newVoters = '';
             for (const voter of poll[val.id]) {
@@ -1156,14 +1180,15 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           team: message.team,
           channel,
           ts: message.ts,
-        }
+        },
+        userLang
       );
       blocks[menuAtIndex].accessory.option_groups[0].options =
         await buildMenu(blocks, {
           team: message.team,
           channel,
           ts: message.ts,
-        });
+        },userLang);
 
       await votesCol.updateOne({
         channel,
@@ -1189,7 +1214,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: stri18n(appLang,'err_vote_exception'),
+        text: stri18n(userLang,'err_vote_exception'),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1202,7 +1227,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: stri18n(appLang,'err_vote_exception'),
+      text: stri18n(userLang,'err_vote_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
@@ -1253,8 +1278,9 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
   if (release) {
     try {
       //find next option id
-      let lastestOptionId = 0;
+      let lastestOptionId = -1;
       let lastestVoteBtnVal = [];
+      let userLang = appLang;
       for (const idx in body.message.blocks) {
         if (body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
           if (body.message.blocks[idx]['type'] == 'section') {
@@ -1267,11 +1293,16 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                 if (voteBtnId > lastestOptionId) {
                   lastestOptionId = voteBtnId;
                   lastestVoteBtnVal = voteBtnVal;
+                  //console.debug("sdfsdfsdfsd");
+                  console.debug(voteBtnVal);
+                  if(voteBtnVal.hasOwnProperty('user_lang'))
+                    if(voteBtnVal['user_lang']!="" && voteBtnVal['user_lang'] != null)
+                      userLang = voteBtnVal['user_lang'];
                 }
 
                 let thisChoice = body.message.blocks[idx]['text']['text'].trim();
                 if (isShowNumberInChoice) {
-                  thisChoice = thisChoice.replace(slackNumToEmoji((voteBtnId + 1)) + " ", '');
+                  thisChoice = thisChoice.replace(slackNumToEmoji((voteBtnId + 1),userLang) + " ", '');
                 }
 
                 if (thisChoice == value) {
@@ -1280,7 +1311,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                     channel: body.channel.id,
                     user: body.user.id,
                     attachments: [],
-                    text: parameterizedString(stri18n(appLang, 'err_duplicate_add_choice'), {text: value}),
+                    text: parameterizedString(stri18n(userLang, 'err_duplicate_add_choice'), {text: value}),
                   };
                   await postChat(body.response_url, 'ephemeral', mRequestBody);
                   return;
@@ -1304,7 +1335,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
         elements: [
           {
             type: 'mrkdwn',
-            text: lastestVoteBtnVal['hidden'] ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
+            text: lastestVoteBtnVal['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
           }
         ],
       };
@@ -1365,6 +1396,7 @@ async function createModal(context, client, trigger_id,response_url) {
     tempModalBlockInput.block_id = 'choice_0';
 
     const privateMetadata = {
+      user_lang: appLang,
       anonymous: false,
       limited: false,
       hidden: false,
@@ -1438,6 +1470,49 @@ async function createModal(context, client, trigger_id,response_url) {
       ]);
     }
 
+    if(isAppLangSelectable)
+    {
+      let allOptions = [];
+      let defaultOption = {};
+      for (const langKey in langList) {
+        const thisLangOp = {
+          "text": {
+            "type": "plain_text",
+            "text": langList[langKey],
+            "emoji": true
+          },
+          "value": langKey
+        };
+        if(appLang == langKey)
+        {
+          defaultOption = thisLangOp;
+        }
+        allOptions.push(thisLangOp);
+      }
+
+      blocks = blocks.concat([
+        {
+          "type": "input",
+          "element": {
+            "type": "static_select",
+            "placeholder": {
+              "type": "plain_text",
+              "text": stri18n(appLang,'info_lang_select_hint'),
+              "emoji": true
+            },
+            "options": allOptions,
+            "initial_option" : defaultOption,
+            //"action_id": "modal_select_lang"
+          },
+          "label": {
+            "type": "plain_text",
+            "text": stri18n(appLang,'info_lang_select_label'),
+            "emoji": true
+          },
+          block_id: 'user_lang',
+        }
+      ]);
+    }
 
     blocks = blocks.concat([
       {
@@ -1564,6 +1639,8 @@ async function createModal(context, client, trigger_id,response_url) {
         ],
       },
     ]);
+
+    //console.debug(JSON.stringify(blocks));
 
     const result = await client.views.open({
       token: context.botToken,
@@ -1701,14 +1778,23 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   const state = view.state;
   let question = null;
+  let userLang = appLang;
   const options = [];
   let limit = 1;
 
   if (state.values) {
     for (const optionName in state.values) {
+      console.debug("optionName:"+optionName);
       const option = state.values[optionName][Object.keys(state.values[optionName])[0]];
       if ('question' === optionName) {
         question = option.value;
+      } else if ('user_lang' === optionName) {
+        console.debug("LANG SELECT:"+option.selected_option.value)
+        console.debug(option)
+        if(langList.hasOwnProperty(option.selected_option.value)){
+          userLang = option.selected_option.value;
+          console.debug("OK")
+        }
       } else if ('limit' === optionName) {
         limit = parseInt(option.value, 10);
       } else if (optionName.startsWith('choice_')) {
@@ -1734,7 +1820,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   }
 
   if(isNaN(limit)) limit = 1;
-
+  privateMetadata.user_lang = userLang;
   const isAnonymous = privateMetadata.anonymous;
   const isLimited = privateMetadata.limited;
   const isHidden = privateMetadata.hidden;
@@ -1749,9 +1835,9 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
     return;
   }
 
-  const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice);
+  const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang);
 
-  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd);
+  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd);
 
   let mRequestBody = {
     token: context.botToken,
@@ -1762,7 +1848,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   await postChat(response_url,'post',mRequestBody);
 });
 
-function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice) {
+function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang) {
   let cmd = `/${slackCommand}`;
   if (isAnonymous) {
     cmd += ` anonymous`
@@ -1776,8 +1862,11 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   if (isHidden) {
     cmd += ` hidden`
   }
-  if (isHidden) {
+  if (isAllowUserAddChoice) {
     cmd += ` add-choice`
+  }
+  if (userLang!=null) {
+    cmd += ` lang ${userLang}`
   }
 
   question = question.replace(/"/g, "\\\"");
@@ -1791,7 +1880,7 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   return cmd;
 }
 
-function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userId, cmd) {
+function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd) {
   if (
     !question
     || !options
@@ -1800,48 +1889,50 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     return null;
   }
 
+  //const userLang = appLang;
+
   const blocks = [];
 
   const staticSelectElements = [{
     label: {
       type: 'plain_text',
-      text: stri18n(appLang,'menu_poll_action'),
+      text: stri18n(userLang,'menu_poll_action'),
     },
     options: [{
       text: {
         type: 'plain_text',
-        text: isHidden ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote'),
+        text: isHidden ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote'),
       },
       value:
         JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: stri18n(appLang,'menu_all_user_vote'),
+        text: stri18n(userLang,'menu_all_user_vote'),
       },
       value: JSON.stringify({action: 'btn_users_votes', user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: stri18n(appLang,'menu_delete_poll'),
+        text: stri18n(userLang,'menu_delete_poll'),
       },
       value: JSON.stringify({action: 'btn_delete', user: userId}),
     }, {
       text: {
         type: 'plain_text',
-        text: stri18n(appLang,'menu_close_poll'),
+        text: stri18n(userLang,'menu_close_poll'),
       },
       value: JSON.stringify({action: 'btn_close', user: userId}),
     }],
   }, {
     label: {
       type: 'plain_text',
-      text: stri18n(appLang,'menu_user_action'),
+      text: stri18n(userLang,'menu_user_action'),
     },
     options: [{
       text: {
         type: 'plain_text',
-        text: stri18n(appLang,'menu_user_self_vote'),
+        text: stri18n(userLang,'menu_user_self_vote'),
       },
       value: JSON.stringify({action: 'btn_my_votes', user: userId}),
     }],
@@ -1851,12 +1942,12 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     staticSelectElements.push({
       label: {
         type: 'plain_text',
-        text: stri18n(appLang,'menu_support'),
+        text: stri18n(userLang,'menu_support'),
       },
       options: [{
         text: {
           type: 'plain_text',
-          text: stri18n(appLang,'menu_love_open_poll'),
+          text: stri18n(userLang,'menu_love_open_poll'),
         },
         value: JSON.stringify({action: 'btn_love_open_poll', user: userId}),
       }],
@@ -1895,37 +1986,37 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     if (isAnonymous) {
       elements.push({
         type: 'mrkdwn',
-        text: stri18n(appLang,'info_anonymous'),
+        text: stri18n(userLang,'info_anonymous'),
       });
     }
     if (isLimited) {
       elements.push({
         type: 'mrkdwn',
-        text: parameterizedString(stri18n(appLang,'info_limited'),{limit:limit})+stri18n(appLang,'info_s'),
+        text: parameterizedString(stri18n(userLang,'info_limited'),{limit:limit})+stri18n(userLang,'info_s'),
       });
     }
     if (isHidden) {
       elements.push({
         type: 'mrkdwn',
-        text: stri18n(appLang,'info_hidden'),
+        text: stri18n(userLang,'info_hidden'),
       });
     }
   }
   elements.push({
     type: 'mrkdwn',
-    text: parameterizedString(stri18n(appLang,'info_by'),{user_id:userId}),
+    text: parameterizedString(stri18n(userLang,'info_by'),{user_id:userId}),
   });
   blocks.push({
     type: 'context',
     elements: elements,
   });
-  if(stri18n(appLang,'info_addon')!=="")
+  if(stri18n(userLang,'info_addon')!=="")
   {
     blocks.push({
       type: 'context',
       elements: [{
         type: 'mrkdwn',
-        text: stri18n(appLang,'info_addon'),
+        text: stri18n(userLang,'info_addon'),
       }],
     });
   }
@@ -1934,6 +2025,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
   });
 
   let button_value = {
+    user_lang: userLang,
     anonymous: isAnonymous,
     limited: isLimited,
     limit: limit,
@@ -1955,7 +2047,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       elements: [
         {
           type: 'mrkdwn',
-          text: btn_value['hidden'] ? stri18n(appLang,'info_wait_reveal') : stri18n(appLang,'info_no_vote'),
+          text: btn_value['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
         }
       ],
     };
@@ -1984,12 +2076,12 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         },
         "placeholder": {
           "type": "plain_text",
-          "text": stri18n(appLang,'info_others_add_choice_hint')
+          "text": stri18n(userLang,'info_others_add_choice_hint')
         }
       },
       "label": {
         "type": "plain_text",
-        "text": stri18n(appLang,'info_others_add_choice'),
+        "text": stri18n(userLang,'info_others_add_choice'),
         "emoji": true
       }
     });
@@ -2004,11 +2096,11 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         elements: [
           {
             type: 'mrkdwn',
-            text: `<${helpLink}|`+stri18n(appLang,'info_need_help')+`>`,
+            text: `<${helpLink}|`+stri18n(userLang,'info_need_help')+`>`,
           },
           {
             type: 'mrkdwn',
-            text: stri18n(appLang,'info_need_help')+' '+cmd,
+            text: stri18n(userLang,'info_need_help')+' '+cmd,
           },
         ],
       });
@@ -2020,7 +2112,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         elements: [
           {
             type: 'mrkdwn',
-            text: `<${helpLink}|`+stri18n(appLang,'info_need_help')+`>`,
+            text: `<${helpLink}|`+stri18n(userLang,'info_need_help')+`>`,
           }
         ],
       });
@@ -2050,7 +2142,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       },
       accessory: {
         type: 'static_select',
-        placeholder: { type: 'plain_text', text: stri18n(appLang,'menu_text') },
+        placeholder: { type: 'plain_text', text: stri18n(userLang,'menu_text') },
         action_id: 'static_select_menu',
         option_groups: staticSelectElements,
       },
@@ -2171,6 +2263,7 @@ async function myVotes(body, client, context) {
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
+  let userLang = appLang;
 
   for (const block of blocks) {
     if (
@@ -2185,6 +2278,11 @@ async function myVotes(body, client, context) {
       continue;
     }
     const value = JSON.parse(block.accessory.value);
+
+
+    if(value.hasOwnProperty('user_lang'))
+      if(value.user_lang!="" && value.user_lang != null)
+        userLang = value.user_lang;
 
     if (value.voters.includes(userId)) {
       votes.push({
@@ -2205,7 +2303,7 @@ async function myVotes(body, client, context) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: stri18n(appLang,'info_not_vote_yet'),
+        text: stri18n(userLang,'info_not_vote_yet'),
       },
     });
   } else {
@@ -2220,11 +2318,11 @@ async function myVotes(body, client, context) {
         type: 'modal',
         title: {
           type: 'plain_text',
-          text: stri18n(appLang,'info_your_vote'),
+          text: stri18n(userLang,'info_your_vote'),
         },
         close: {
           type: 'plain_text',
-          text: stri18n(appLang,'info_close'),
+          text: stri18n(userLang,'info_close'),
         },
         blocks: votes,
       }
@@ -2304,6 +2402,7 @@ async function usersVotes(body, client, context, value) {
   } catch(e) {
   }
 
+  let userLang = appLang;
   for (const block of blocks) {
     if (
       block.hasOwnProperty('accessory')
@@ -2311,6 +2410,12 @@ async function usersVotes(body, client, context, value) {
     ) {
       const value = JSON.parse(block.accessory.value);
       const voters = poll ? (poll[value.id] || []) : [];
+
+
+      if(value.hasOwnProperty('user_lang'))
+        if(value.user_lang!="" && value.user_lang != null)
+          userLang = value.user_lang;
+
       votes.push({
         type: 'divider',
       });
@@ -2326,7 +2431,7 @@ async function usersVotes(body, client, context, value) {
         elements: [{
           type: 'mrkdwn',
           text: !voters.length
-            ? stri18n(appLang,'info_no_vote')
+            ? stri18n(userLang,'info_no_vote')
             : voters.map(el => {
                 return `<@${el}>`;
               }).join(', '),
@@ -2343,11 +2448,11 @@ async function usersVotes(body, client, context, value) {
         type: 'modal',
         title: {
           type: 'plain_text',
-          text: stri18n(appLang,'info_all_user_vote'),
+          text: stri18n(userLang,'info_all_user_vote'),
         },
         close: {
           type: 'plain_text',
-          text: stri18n(appLang,'info_close'),
+          text: stri18n(userLang,'info_close'),
         },
         blocks: votes,
       },
@@ -2430,6 +2535,8 @@ async function revealOrHideVotes(body, context, value) {
     }
   } while (!release && countTry < 3);
 
+  let userLang = appLang;
+  let isUserLangFound = false;
   if (release) {
     try {
       let poll = null;
@@ -2462,6 +2569,20 @@ async function revealOrHideVotes(body, context, value) {
         });
       } else {
         poll = data.votes;
+      }
+
+      for (const b of blocks) {
+        if(isUserLangFound) break;
+        if (
+            b.hasOwnProperty('accessory')
+            && b.accessory.hasOwnProperty('value')
+        ) {
+          const val = JSON.parse(b.accessory.value);
+          if(val.hasOwnProperty('user_lang')) {
+            isUserLangFound = true;
+            userLang = val.user_lang;
+          }
+        }
       }
 
       const infos = await getInfos(
@@ -2497,10 +2618,10 @@ async function revealOrHideVotes(body, context, value) {
           let newVoters = '';
 
           if (isHidden) {
-            newVoters = stri18n(appLang,'info_wait_reveal');
+            newVoters = stri18n(userLang,'info_wait_reveal');
           } else {
             if (poll[val.id].length === 0) {
-              newVoters = stri18n(appLang,'info_no_vote');
+              newVoters = stri18n(userLang,'info_no_vote');
             } else {
               newVoters = '';
               for (const voter of poll[val.id]) {
@@ -2527,13 +2648,13 @@ async function revealOrHideVotes(body, context, value) {
           team: message.team,
           channel,
           ts: message.ts,
-        });
+        },userLang);
       } else if (blocks[menuAtIndex].accessory.option_groups) {
         blocks[menuAtIndex].accessory.option_groups[0].options = await buildMenu(blocks, {
           team: message.team,
           channel,
           ts: message.ts,
-        });
+        },userLang);
       }
 
       const infosIndex = blocks.findIndex(el => el.type === 'context' && el.elements)
@@ -2543,7 +2664,8 @@ async function revealOrHideVotes(body, context, value) {
           team: message.team,
           channel,
           ts: message.ts,
-        }
+        },
+        userLang
       );
 
       let mRequestBody = {
@@ -2688,6 +2810,7 @@ async function closePoll(body, client, context, value) {
         $set: { closed: !isClosed }
       });
 
+      let userLang = appLang;
       if (isClosed) {
         for (const i in blocks) {
           const block = blocks[i];
@@ -2701,6 +2824,11 @@ async function closePoll(body, client, context, value) {
             value.closed = false;
 
             blocks[i].accessory.value = JSON.stringify(value);
+
+            if(value.hasOwnProperty('user_lang'))
+              if(value.user_lang!="" && value.user_lang != null)
+                userLang = value.user_lang;
+
           }
         }
       } else {
@@ -2716,6 +2844,10 @@ async function closePoll(body, client, context, value) {
             value.closed = true;
 
             blocks[i].accessory.value = JSON.stringify(value);
+
+            if(value.hasOwnProperty('user_lang'))
+              if(value.user_lang!="" && value.user_lang != null)
+                userLang = value.user_lang;
           }
         }
       }
@@ -2727,7 +2859,7 @@ async function closePoll(body, client, context, value) {
             team: message.team,
             channel,
             ts: message.ts,
-          });
+          }),userLang;
       }
 
       const infosIndex =
@@ -2738,7 +2870,8 @@ async function closePoll(body, client, context, value) {
           team: message.team,
           channel,
           ts: message.ts,
-        }
+        },
+        userLang
       );
 
       let mRequestBody = {
@@ -2756,7 +2889,7 @@ async function closePoll(body, client, context, value) {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: stri18n(appLang,'err_close_other'),
+        text: stri18n(userLang,'err_close_other'),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
     } finally {
@@ -2768,7 +2901,7 @@ async function closePoll(body, client, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: stri18n(appLang,'err_close_other'),
+      text: stri18n(userLang,'err_close_other'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
@@ -2899,7 +3032,8 @@ async function getInfos(infos, blocks, pollInfos) {
   return result;
 }
 
-async function buildInfosBlocks(blocks, pollInfos) {
+async function buildInfosBlocks(blocks, pollInfos,userLang) {
+  if(userLang == null) userLang = appLang;
   const infosIndex =
     blocks.findIndex(el => el.type === 'context' && el.elements);
   const infosBlocks = [];
@@ -2908,45 +3042,46 @@ async function buildInfosBlocks(blocks, pollInfos) {
   if (infos.anonymous) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: stri18n(appLang,'info_anonymous'),
+      text: stri18n(userLang,'info_anonymous'),
     });
   }
   if (infos.limited) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text : parameterizedString(stri18n(appLang,'info_limited'),{limit:infos.limit})+stri18n(appLang,'info_s'),
+      text : parameterizedString(stri18n(userLang,'info_limited'),{limit:infos.limit})+stri18n(userLang,'info_s'),
     });
   }
   if (infos.hidden) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: stri18n(appLang,'info_hidden'),
+      text: stri18n(userLang,'info_hidden'),
     });
   }
   if (infos.closed) {
     infosBlocks.push({
       type: 'mrkdwn',
-      text: stri18n(appLang,'info_closed'),
+      text: stri18n(userLang,'info_closed'),
     });
   }
   infosBlocks.push(blocks[infosIndex].elements.pop());
   return infosBlocks;
 }
 
-async function buildMenu(blocks, pollInfos) {
+async function buildMenu(blocks, pollInfos,userLang) {
   let menuAtIndex = 0;
   if(isMenuAtTheEnd) menuAtIndex = blocks.length-1;
+  if(userLang == null) userLang = appLang;
   const infos = await getInfos(['closed', 'hidden'], blocks, pollInfos);
 
   if (blocks[menuAtIndex].accessory.option_groups) {
     return blocks[menuAtIndex].accessory.option_groups[0].options.map(el => {
       const value = JSON.parse(el.value);
       if (value && 'btn_close' === value.action) {
-        el.text.text = infos['closed'] ? stri18n(appLang,'menu_reopen_poll') : stri18n(appLang,'menu_close_poll');
+        el.text.text = infos['closed'] ? stri18n(userLang,'menu_reopen_poll') : stri18n(userLang,'menu_close_poll');
         value.closed = !value.closed;
         el.value = JSON.stringify(value);
       } else if (value && 'btn_reveal' === value.action) {
-        el.text.text = infos['hidden'] ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote');
+        el.text.text = infos['hidden'] ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote');
         value.revealed = !value.closed;
         el.value = JSON.stringify(value);
       }
@@ -2957,7 +3092,7 @@ async function buildMenu(blocks, pollInfos) {
     return blocks[menuAtIndex].accessory.options.map((el) => {
       const value = JSON.parse(el.value);
       if (value && 'btn_reveal' === value.action) {
-        el.text.text = infos['hidden'] ? stri18n(appLang,'menu_reveal_vote') : stri18n(appLang,'menu_hide_vote');
+        el.text.text = infos['hidden'] ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote');
         value.revealed = !value.closed;
         el.value = JSON.stringify(value);
       }
@@ -2973,8 +3108,12 @@ function buildVoteBlock(btn_value, option_text) {
   let emojiPrefix = "";
   let emojiBthPostfix = "";
   let voteId = parseInt(btn_value.id);
-  if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(voteId+1)+" ";
-  if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(voteId+1);
+  let userLang = appLang;
+  if(btn_value.hasOwnProperty('user_lang'))
+    if(btn_value['user_lang']!="" && btn_value['user_lang'] != null)
+    userLang = btn_value['user_lang'];
+  if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(voteId+1,userLang)+" ";
+  if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(voteId+1,userLang);
   let block = {
     type: 'section',
     text: {
@@ -2987,7 +3126,7 @@ function buildVoteBlock(btn_value, option_text) {
       text: {
         type: 'plain_text',
         emoji: true,
-        text: stri18n(appLang,'btn_vote')+""+emojiBthPostfix,
+        text: stri18n(userLang,'btn_vote')+""+emojiBthPostfix,
       },
       value: JSON.stringify(btn_value),
     },

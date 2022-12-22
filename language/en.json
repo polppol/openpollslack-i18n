@@ -1,4 +1,7 @@
 {
+  "info_lang_name": "English",
+  "info_lang_select_hint": "Select Language",
+  "info_lang_select_label": "Poll Language:",
   "info_anonymous": ":shushing_face: Anonymous poll",
   "info_limited": ":warning: Limited to `{{limit}}` vote",
   "info_s": "s",
@@ -68,7 +71,7 @@
   "err_vote_exception": "An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "An error occurred during vote processing. Please try again in few seconds.",
   "err_poll_close_exception": "Unconsistent poll data",
-  "err_duplicate_add_choice": "[{{text}}`] already exists in choice",
+  "err_duplicate_add_choice": "[{{text}}] already exists in choice",
   "err_mutex_lock": "[Try #{{{count_try}}] Error while attempt to acquire mutex lock.",
   "emoji_1": ":one:",
   "emoji_2": ":two:",
