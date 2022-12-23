@@ -254,9 +254,10 @@ const postChat = async (url,type,requestBody) => {
 
 const slackNumToEmoji = (seq,userLang) => {
   let outText = "["+seq+"]";
-  if(langDict[userLang].hasOwnProperty('emoji_'+seq)) {
-    outText = langDict[userLang]['emoji_'+seq];
-  }
+  if(langDict.hasOwnProperty(userLang))
+    if(langDict[userLang].hasOwnProperty('emoji_'+seq))
+      outText = langDict[userLang]['emoji_'+seq];
+
   return outText;
 }
 
@@ -674,7 +675,6 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
         let inputLang = (cmdBody.substring(0, cmdBody.indexOf(' ')));
         if(langList.hasOwnProperty(inputLang)){
           userLang = inputLang;
-          console.debug("SET LANG OK ="+inputLang);
         }
 
         cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
@@ -1293,8 +1293,6 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                 if (voteBtnId > lastestOptionId) {
                   lastestOptionId = voteBtnId;
                   lastestVoteBtnVal = voteBtnVal;
-                  //console.debug("sdfsdfsdfsd");
-                  console.debug(voteBtnVal);
                   if(voteBtnVal.hasOwnProperty('user_lang'))
                     if(voteBtnVal['user_lang']!="" && voteBtnVal['user_lang'] != null)
                       userLang = voteBtnVal['user_lang'];
@@ -1641,7 +1639,6 @@ async function createModal(context, client, trigger_id,response_url) {
     ]);
 
     //console.debug(JSON.stringify(blocks));
-
     const result = await client.views.open({
       token: context.botToken,
       trigger_id: trigger_id,
@@ -1784,16 +1781,12 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   if (state.values) {
     for (const optionName in state.values) {
-      console.debug("optionName:"+optionName);
       const option = state.values[optionName][Object.keys(state.values[optionName])[0]];
       if ('question' === optionName) {
         question = option.value;
       } else if ('user_lang' === optionName) {
-        console.debug("LANG SELECT:"+option.selected_option.value)
-        console.debug(option)
         if(langList.hasOwnProperty(option.selected_option.value)){
           userLang = option.selected_option.value;
-          console.debug("OK")
         }
       } else if ('limit' === optionName) {
         limit = parseInt(option.value, 10);
