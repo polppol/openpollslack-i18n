@@ -1261,6 +1261,8 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
 
   const value = action.value.trim();
 
+  let userLang = appLang;
+
   if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
     mutexes[`${message.team}/${channel}/${message.ts}`] = new Mutex();
   }
@@ -1280,7 +1282,6 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
       //find next option id
       let lastestOptionId = -1;
       let lastestVoteBtnVal = [];
-      let userLang = appLang;
       for (const idx in body.message.blocks) {
         if (body.message.blocks[idx].hasOwnProperty('type') && body.message.blocks[idx].hasOwnProperty('accessory')) {
           if (body.message.blocks[idx]['type'] == 'section') {
@@ -1371,7 +1372,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: `An error occurred during add choice process. Please try again in few seconds.`,
+        text: stri18n(userLang,'err_add_choice_exception'),
       };
       await postChat(body.response_url, 'ephemeral', mRequestBody);
     } finally {
@@ -2676,7 +2677,7 @@ async function revealOrHideVotes(body, context, value) {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: `An error occurred during ${isHidden ? 'hide' : 'reveal'} process. Please try again in few seconds.`,
+        text: (isHidden ? stri18n(userLang,'err_poll_hide_exception'): stri18n(userLang,'err_poll_reveal_exception')),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
     } finally {
@@ -2688,7 +2689,7 @@ async function revealOrHideVotes(body, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: stri18n(appLang,'err_vote_exception'),
+      text: stri18n(userLang,'err_vote_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
