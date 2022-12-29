@@ -87,6 +87,7 @@ if(!langDict.hasOwnProperty(appLang)) {
 }
 
 const parameterizedString = (str,varArray) => {
+  if(str==undefined) str = `MissingStr`;
   let outputStr = str;
   for (let key in varArray) {
     if (varArray.hasOwnProperty(key)) {
@@ -194,7 +195,7 @@ const sendMessageUsingUrl = async (url,newMessage) => {
 }
 
 const postChat = async (url,type,requestBody) => {
-  if(isUseResponseUrl)
+  if(isUseResponseUrl && url!=undefined && url!="")
   {
     delete requestBody['token'];
     delete requestBody['channel'];
@@ -1459,6 +1460,7 @@ async function createModal(context, client, trigger_id,response_url) {
         },
         {
           type: 'context',
+          block_id: 'ch_select_help',
           elements: [
             {
               type: 'mrkdwn',
@@ -1680,6 +1682,57 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   const privateMetadata = JSON.parse(body.view.private_metadata);
   privateMetadata.channel = action.selected_channel || action.selected_conversation;
 
+  //console.debug(action);
+  //console.debug("CH:"+privateMetadata.channel);
+  let isChFound = true;
+  let isChErr = false;
+  try {
+    const result = await client.conversations.info({
+      token: context.botToken,
+      hash: body.view.hash,
+      channel: privateMetadata.channel
+     });
+  }
+  catch (e) {
+    if(e.message.includes('channel_not_found'))
+    {
+      isChFound = false;
+    }
+    else
+    {
+      //ignote it!
+      console.debug("Error on client.conversations.info (maybe user click too fast) :"+e.message);
+      isChErr = true;
+    }
+
+  }
+
+  let blocks = body.view.blocks;
+  for (const i in blocks) {
+    let b = blocks[i];
+    if(b.hasOwnProperty('block_id')){
+      //test next element
+      let nextIndex = parseInt(i)+1;
+      if(blocks.length > nextIndex  ){
+        console.log("Block" +nextIndex +"IS:");
+        console.log(blocks[nextIndex]);
+        if(blocks[nextIndex].hasOwnProperty('elements') && blocks[nextIndex].type=="context"){
+          console.log("TEST of" +nextIndex +"IS:"+ blocks[nextIndex].elements[0].text)
+          if(isChErr) {
+            blocks[nextIndex].elements[0].text = stri18n(appLang,'err_poll_ch_exception');
+          }
+          else if (isChFound) {
+            blocks[nextIndex].elements[0].text = stri18n(appLang,'modal_bot_in_ch');
+          }
+          else {
+            blocks[nextIndex].elements[0].text = parameterizedString(langDict[appLang]['modal_bot_not_in_ch'],{slack_command:slackCommand,bot_name:botName})
+          }
+          break;
+        }
+      }
+    }
+  }
+  //console.debug(blocks);
   const view = {
     type: body.view.type,
     private_metadata: JSON.stringify(privateMetadata),

@@ -12,7 +12,21 @@ I have make some change to make it more customizable :
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+## Modal
+- if `response_url` is not enable or not in using, user will get feedback if user can create poll in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
 
+  ![Alt text](./assets/poll-ch-check-feedback.png?raw=true "poll-ch-check-feedback")
+- User language selectable
+
+  ![Alt text](./assets/poll-lang-select.png?raw=true "poll-lang-select")
+- User add choice
+
+  ![Alt text](./assets/poll-add-choice-modal-en.png?raw=true "User add choice")
+  ![Alt text](./assets/poll-add-choice-en.png?raw=true "User add choice")
+
+## Additional Permissions
+
+`channels:read`,`groups:read`,`mpim:read`,`im:read` : to check if bot in selected channel (if not using `response_url`)
 ## Command usages
 ### Allow choices add by others
 ```
