@@ -117,7 +117,7 @@ const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
   clientId: config.get('client_id'),
   clientSecret: config.get('client_secret'),
-  scopes: ['commands', 'chat:write.public', 'chat:write', 'groups:write'],
+  scopes: ['commands', 'chat:write.public', 'chat:write', 'groups:write','channels:read','groups:read','mpim:read','im:read'],
   stateSecret: config.get('state_secret'),
   endpoints: {
     events: '/slack/events',
