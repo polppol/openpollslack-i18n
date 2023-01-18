@@ -30,6 +30,8 @@ const isShowCommandInfo = config.get('show_command_info');
 const isShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const isShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 
+const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
+
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
 let votesCol = null;
@@ -687,6 +689,151 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
         fetchArgs = true;
         cmdBody = cmdBody.substring(10).trim();
         isAllowUserAddChoice = true;
+      } else if (cmdBody.startsWith('config')) {
+        fetchArgs = true;
+        cmdBody = cmdBody.substring(6).trim();
+
+        let validWritePara = `\n/${slackCommand} config write app_lang [`;
+        let isFirstLang = true;
+        for (let key in langList) {
+          if(isFirstLang) isFirstLang = false;
+          else validWritePara += "/";
+          validWritePara += key;
+        }
+        validWritePara += "]";
+        for (const eachOverrideable of validTeamOverrideConfigTF) {
+          validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [true/false]`;
+        }
+
+        const team = await orgCol.findOne({ 'team.id': body.team_id });
+        let validConfigUser = "";
+        if (team) {
+          if(team.hasOwnProperty("user"))
+            if(team.user.hasOwnProperty("id")) {
+              validConfigUser = team.user.id;
+            }
+        }
+        else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `Error while reading config`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+        if(body.user_id != validConfigUser) {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `Only user that install this app can use this command`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+        if(cmdBody.startsWith("read")){
+
+
+          let configTxt = "Config: not found";
+          if (team) {
+            if(team.hasOwnProperty("openPollConfig")) {
+              configTxt = "Override found:\n```"+JSON.stringify(team.openPollConfig)+"```";
+
+            }
+            else {
+              configTxt = "No override: using server setting";
+            }
+          }
+
+
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `${configTxt}`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        } else if (cmdBody.startsWith("write")){
+          cmdBody = cmdBody.substring(5).trim();
+
+          let inputPara = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+          let isWriteValid = false;
+
+          if(validTeamOverrideConfigTF.includes(inputPara)) {
+            cmdBody = cmdBody.substring(inputPara.length).trim();
+            isWriteValid = true;
+          }
+
+          if(inputPara=="app_lang") {
+            cmdBody = cmdBody.substring(8).trim();
+            isWriteValid = true;
+          }
+
+          if(isWriteValid) {
+            let inputVal = cmdBody.trim();
+            if(inputPara=="app_lang") {
+              //TODO: check lang
+            } else {
+              if (cmdBody.startsWith("true")) {
+                inputVal = true;
+              } else if (cmdBody.startsWith("false")) {
+                inputVal = false;
+              }
+              else {
+                let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Usage: ${inputPara} [true/false]`,
+                };
+                await postChat(body.response_url,'ephemeral',mRequestBody);
+                return;
+              }
+          }
+          //write config here
+
+
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `[${inputPara}] is set to [${inputVal}] for this Team`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+
+        }
+        else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `[${inputPara}] is not valid config parameter or value is missing\nUsage: ${validWritePara}`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+
+
+        } else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `Usage:\n/${slackCommand} config read`+
+                  `\n${validWritePara}`
+            ,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
       }
     }
 

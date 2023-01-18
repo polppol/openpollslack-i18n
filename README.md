@@ -2,7 +2,7 @@
 # About this fork 
 
 I have make some change to make it more customizable :
-## config/default.json
+## Server config (config/default.json)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
 - `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI (Most of the UI text, some error and exception message might still in default app language ) 
 - `bot_name` for refering bot name in some help text
@@ -12,7 +12,15 @@ I have make some change to make it more customizable :
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+
+## Override config by team
+WARNING: Poll that created using different config will stop working or not working correctly!
+
+If some of your team would like to using different config than what is on default.json you can use `/poll config write para_name value` (send in any chanel on team that you would like to override)
+please note that `/poll config` only work on user who install this app to Slack only.
+
 ## Modal
+
 - if `response_url` is not enable or not in using, user will get feedback if user can create poll in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
 
   ![Alt text](./assets/poll-ch-check-feedback.png?raw=true "poll-ch-check-feedback")
