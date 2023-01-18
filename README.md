@@ -13,15 +13,27 @@ I have make some change to make it more customizable :
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
 
-## Override config by team
-WARNING: Poll that created using different config will stop working or not working correctly!
+WARNING: Poll that created using different config (that effect output order such as `menu_at_the_end` `show_help_link` `show_command_info` ) will stop working or not working correctly!
+
+## Team config (Override Server config)
 
 If some of your team would like to using different config than what is on default.json you can use `/poll config write para_name value` (send in any chanel on team that you would like to override)
-please note that `/poll config` only work on user who install this app to Slack only.
+please note that `/poll config` only work on user who install app to Slack only.
+
+Usage:
+```
+/poll config write app_lang [en/th/lang_file_name]
+/poll config write app_lang_user_selectable [true/false]
+/poll config write menu_at_the_end [true/false]
+/poll config write show_help_link [true/false]
+/poll config write show_command_info [true/false]
+/poll config write add_number_emoji_to_choice [true/false]
+/poll config write add_number_emoji_to_choice_btn [true/false]
+```
 
 ## Modal
 
-- if `response_url` is not enable or not in using, user will get feedback if user can create poll in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
+- if `response_url` is not enable or not in use, user will get feedback if poll can create in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
 
   ![Alt text](./assets/poll-ch-check-feedback.png?raw=true "poll-ch-check-feedback")
 - User language selectable
@@ -123,7 +135,8 @@ For both question and choices, feel free to use slack's emoji, `*bold*` `~strike
 
 ## Self hosted installation
 
-Wiki pages are available to help you with the [app configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Self-hosted-installation-(v2)) and the [web page configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Web-page).
+Wiki pages are available to help you with the [app configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Self-hosted-installation-(v2)) and the [web page configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Web-page)
+or [self_host.md](self_host.md)
 
 ## Support me
 

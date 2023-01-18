@@ -20,7 +20,7 @@ const signing_secret = config.get('signing_secret');
 const slackCommand = config.get('command');
 const helpLink = config.get('help_link');
 const supportUrl = config.get('support_url');
-const appLang = config.get('app_lang');
+const gAppLang = config.get('app_lang');
 const isAppLangSelectable = config.get('app_lang_user_selectable');
 const isUseResponseUrl = config.get('use_response_url');
 const isMenuAtTheEnd = config.get('menu_at_the_end');
@@ -78,14 +78,14 @@ globLang.sync( './language/*.json' ).forEach( function( file ) {
   }
 });
 console.log("Lang Count: "+langCount);
-console.log("Selected Lang: "+appLang);
+console.log("Selected Lang: "+gAppLang);
 if(!langDict.hasOwnProperty('en')) {
   console.error("language/en.json NOT FOUND!");
   throw new Error("language/en.json NOT FOUND!");
 }
-if(!langDict.hasOwnProperty(appLang)) {
-  console.error(`language/${appLang}.json NOT FOUND!`);
-  throw new Error(`language/${appLang}.json NOT FOUND!`);
+if(!langDict.hasOwnProperty(gAppLang)) {
+  console.error(`language/${gAppLang}.json NOT FOUND!`);
+  throw new Error(`language/${gAppLang}.json NOT FOUND!`);
 }
 
 const parameterizedString = (str,varArray) => {
@@ -114,7 +114,19 @@ const stri18n = (lang,key) => {
   }
 }
 
+const getTeamOverride  = async (mTeamId) => {
+    let ret = {};
+    try {
+        const team = await orgCol.findOne({ 'team.id': mTeamId });
+        if (team) {
+            if(team.hasOwnProperty("openPollConfig")) ret = team.openPollConfig;
+        }
+    }
+    catch (e) {
 
+    }
+    return ret;
+}
 const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
   clientId: config.get('client_id'),
@@ -550,6 +562,10 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
 
   const userId = (command && command.user_id) ? command.user_id : null;
 
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+
   if (isHelp) {
     const blocks = [
       {
@@ -705,7 +721,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
           validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [true/false]`;
         }
 
-        const team = await orgCol.findOne({ 'team.id': body.team_id });
+        let team = await orgCol.findOne({ 'team.id': body.team_id });
         let validConfigUser = "";
         if (team) {
           if(team.hasOwnProperty("user"))
@@ -777,7 +793,16 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
           if(isWriteValid) {
             let inputVal = cmdBody.trim();
             if(inputPara=="app_lang") {
-              //TODO: check lang
+              if(!langList.hasOwnProperty(inputVal)){
+                let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Lang file [${inputVal}] not found`,
+                };
+                await postChat(body.response_url,'ephemeral',mRequestBody);
+                return;
+              }
             } else {
               if (cmdBody.startsWith("true")) {
                 inputVal = true;
@@ -795,8 +820,25 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
                 return;
               }
           }
-          //write config here
+          if(!team.hasOwnProperty("openPollConfig")) team.openPollConfig = {};
+          team.openPollConfig.isset = true;
+          team.openPollConfig[inputPara] = inputVal;
+          //console.log(team);
+          try {
+              await orgCol.replaceOne({'team.id': body.team_id}, team);
+          }
+          catch (e) {
+              console.error(e);
+              let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Error while update [${inputPara}] to [${inputVal}]`,
+              };
+              await postChat(body.response_url,'ephemeral',mRequestBody);
+              return;
 
+          }
 
           let mRequestBody = {
             token: context.botToken,
@@ -870,19 +912,21 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   }
 });
 
-const modalBlockInput = {
-  type: 'input',
-  element: {
-    type: 'plain_text_input',
-    placeholder: {
-      type: 'plain_text',
-      text: stri18n(appLang,'modal_input_choice'),
-    },
-  },
-  label: {
-    type: 'plain_text',
-    text: ' ',
-  },
+const createModalBlockInput = (userLang)  => {
+    return {
+      type: 'input',
+      element: {
+        type: 'plain_text_input',
+        placeholder: {
+          type: 'plain_text',
+          text: stri18n(userLang,'modal_input_choice'),
+        },
+      },
+      label: {
+        type: 'plain_text',
+        text: ' ',
+      },
+  }
 };
 
 (async () => {
@@ -913,14 +957,16 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(context.teamId);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang
   let blocks = body.view.blocks;
   const hash = body.view.hash;
 
   let beginBlocks = blocks.slice(0, blocks.length - 1);
   let endBlocks = blocks.slice(-1);
 
-  let tempModalBlockInput = JSON.parse(JSON.stringify(modalBlockInput));
+  let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
   tempModalBlockInput.block_id = 'choice_'+(blocks.length-8);
 
   beginBlocks.push(tempModalBlockInput);
@@ -967,6 +1013,9 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   for (const block of blocks) {
     if (
@@ -1047,6 +1096,9 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   if (body.user.id !== action.value) {
     console.log('invalid user');
@@ -1087,7 +1139,9 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   let value = JSON.parse(action.value);
 
   if (body.user.id !== value.user) {
@@ -1131,7 +1185,9 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const user_id = body.user.id;
   const message = body.message;
   let blocks = message.blocks;
@@ -1222,7 +1278,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
       const isHidden = await getInfos(
         'hidden',
-        blocks, 
+        blocks,
         {
           team: message.team,
           channel,
@@ -1400,7 +1456,9 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const user_id = body.user.id;
   const message = body.message;
   let blocks = message.blocks;
@@ -1539,9 +1597,11 @@ app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
 
 async function createModal(context, client, trigger_id,response_url) {
   try {
-    let tempModalBlockInput = JSON.parse(JSON.stringify(modalBlockInput));
+    const teamConfig = await getTeamOverride(context.teamId);
+    let appLang= gAppLang;
+    if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+    let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
     tempModalBlockInput.block_id = 'choice_0';
-
     const privateMetadata = {
       user_lang: appLang,
       anonymous: false,
@@ -1825,7 +1885,9 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(body.view.private_metadata);
   privateMetadata.channel = action.selected_channel || action.selected_conversation;
 
@@ -1970,7 +2032,9 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(view.private_metadata);
   const userId = body.user.id;
 
@@ -2453,7 +2517,9 @@ async function myVotes(body, client, context) {
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
@@ -2541,7 +2607,9 @@ async function usersVotes(body, client, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -2680,7 +2748,9 @@ async function revealOrHideVotes(body, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -2909,7 +2979,9 @@ async function deletePoll(body, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -2948,7 +3020,9 @@ async function closePoll(body, client, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -3227,7 +3301,7 @@ async function getInfos(infos, blocks, pollInfos) {
 }
 
 async function buildInfosBlocks(blocks, pollInfos,userLang) {
-  if(userLang == null) userLang = appLang;
+  if(userLang == null) userLang = gAppLang;
   const infosIndex =
     blocks.findIndex(el => el.type === 'context' && el.elements);
   const infosBlocks = [];
@@ -3264,7 +3338,7 @@ async function buildInfosBlocks(blocks, pollInfos,userLang) {
 async function buildMenu(blocks, pollInfos,userLang) {
   let menuAtIndex = 0;
   if(isMenuAtTheEnd) menuAtIndex = blocks.length-1;
-  if(userLang == null) userLang = appLang;
+  if(userLang == null) userLang = gAppLang;
   const infos = await getInfos(['closed', 'hidden'], blocks, pollInfos);
 
   if (blocks[menuAtIndex].accessory.option_groups) {
@@ -3302,7 +3376,7 @@ function buildVoteBlock(btn_value, option_text) {
   let emojiPrefix = "";
   let emojiBthPostfix = "";
   let voteId = parseInt(btn_value.id);
-  let userLang = appLang;
+  let userLang = gAppLang;
   if(btn_value.hasOwnProperty('user_lang'))
     if(btn_value['user_lang']!="" && btn_value['user_lang'] != null)
     userLang = btn_value['user_lang'];

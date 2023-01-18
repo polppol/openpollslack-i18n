@@ -101,4 +101,5 @@ Under "Scopes" section and "Bot Token Scopes" subsection, click on "Add an OAuth
 - `chat:write` : requested by next scope
 - `chat:write.public` : to write in the workspace channels
 - `channels:read`,`groups:read`,`mpim:read`,`im:read` : to check if bot in selected channel (if not using `response_url`)
+
 Also, but optional, in the "Restrict API Token Usage" section, you can add your server IP address to restrict api usage.
