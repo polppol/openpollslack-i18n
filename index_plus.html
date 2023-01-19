@@ -1,0 +1,242 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="slack-app-id" content="A0162QE8600" />
+    <link rel="icon" type="image/png" href="./assets/logo.png" />
+    <title>Open source poll for slack</title>
+    <!-- STYLES -->
+    <link rel="stylesheet" type="text/css" href="./assets/css/index.css" />
+    <link rel="stylesheet" type="text/css" href="./assets/css/bootstrap.min.css" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto&display=swap" rel="stylesheet" />
+    <!-- SCRIPTS -->
+    <script type="text/javascript" src="./assets/js/bootstrap.bundle.min.js"></script>
+  </head>
+  <body>
+    <div class="navigation">
+      <div class="up" onclick="goUp()">
+        🡅 
+      </div>
+      <div class="down" onclick="goDown()">
+        🡇
+      </div>
+    </div>
+    <div id="main">
+      <h1>
+        Open source poll for <img alt="slack" height="180" src="./assets/slack_logo_white.svg" />
+      </h1>
+      <div id="oauth-success">
+        <div class="alert alert-success" role="alert">
+          <strong>Success !</strong>
+          <span>The app has been added to your workspace.</span>
+        </div>
+      </div>
+      <div id="oauth-error">
+        <div class="alert alert-danger" role="alert">
+          <strong>Error !</strong>
+          <span>Cannot add the app to your workspace. Try again.</span>
+        </div>
+      </div>
+      <div id="buttons">
+        <a target="_blank" href="https://slack.com/oauth/v2/authorize?client_id=399001638530.4500979337046&scope=chat:write,chat:write.public,commands,users.profile:read,channels:read,groups:read,im:read,mpim:read&user_scope=&stage=xxx">
+          <img alt="Add to Slack" src="https://platform.slack-edge.com/img/add_to_slack@2x.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 2x, https://platform.slack-edge.com/img/add_to_slack@4x.png 4x" height="80" />
+        </a>
+        <!-- <a href="https://www.buymeacoffee.com/kazualex" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 77px !important;width: 278px !important;" ></a> -->
+        <span style="font-size: large;">For more information please visit <a style="color: #00a300; font-weight: bold; text-decoration: underline;" target="_blank" href="https://github.com/polppol/openpollslack-i18n">GitHub page</a></span>
+        <span >This app was forked from <a style="color: #00a300;  text-decoration: underline;" target="_blank" href="https://github.com/KazuAlex/openpollslack">KazuAlex/openpollslack</a></span>
+      </div>
+    </div>
+    <div id="usage">
+      <div class="usage">
+        <h1>How to use it ?</h1>
+      </div>
+      <div id="simple-poll" class="light-grey">
+        <div>
+          <div class="title">
+            <h2>Simple poll</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/poll "What's you favourite color ?" "Red" "Green" "Blue" "Yellow"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-simple.png" alt="Simple poll" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="anonymous-poll">
+        <div>
+          <div class="title">
+            <h2>Anonymous poll</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/poll anonymous "What's you favourite color ?" "Red" "Green" "Blue" "Yellow"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-anonymous.png" alt="Anonymous poll" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="limited-poll" class="light-grey">
+        <div>
+          <div class="title">
+            <h2>Limited choice poll</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/poll limit 2 "What's you favourite color ?" "Red" "Green" "Blue" "Yellow"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-limited.png" alt="Limited poll" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="hidden-poll">
+        <div>
+          <div class="title">
+            <h2>Hidden poll votes</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/poll hidden "What's you favourite color ?" "Red" "Green" "Blue" "Yellow"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-hidden.png" alt="Hidden poll votes" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="both-poll" class="light-grey">
+        <div>
+          <div class="title">
+            <h2>Anonymous limited choice poll</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/poll anonymous limit 2 "What's you favourite color ?" "Red" "Green" "Blue" "Yellow"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-both.png" alt="Anonymous limited poll" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="add-choice-poll" class="light-grey">
+        <div>
+          <div class="title">
+            <h2>Allow choices add by others</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              <div class="command">
+                <code>/polly limit 1 add-choice "What do you want?" ":watermelon: Watermelon" ":apple: Apple" ":tangerine: Orange"</code>
+              </div>
+              <div class="image">
+                <img src="./assets/poll-add-choice-en.png" lt="Anonymous limited poll" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="help">
+        <div>
+          <div class="title">
+            <h2>Need help ?</h2>
+          </div>
+          <div class="card">
+            <div class="card-body">
+              Please use <a target="_blank" href="https://github.com/polppol/openpollslack-i18n/issues">Github issues</a> if you have any question or issue with the app.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="bottom">
+      <div class="row">
+        <div class="cell col-12 col-sm-4">
+          <a href="https://github.com/polppol/openpollslack-i18n">GitHub | Source code</a>
+        </div>
+        <div class="cell col-12 col-sm-4">
+          <a href="./privacy/">Privacy Policy</a>
+        </div>
+        <div class="cell col-12 col-sm-4">
+          <div>
+            Contact
+          </div>
+          <div>
+            <a target="_blank" href="https://github.com/polppol/openpollslack-i18n/issues">Github issues</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="text/javascript">
+      const urlParams = new URLSearchParams(window.location.search);
+      const oauth = urlParams.get('oauth');
+      if ('error' === oauth) {
+        const oauthDiv = document.getElementById('oauth-error');
+        oauthDiv.className = 'show';
+      } else if ('success' === oauth) {
+        const oauthDiv = document.getElementById('oauth-success');
+        oauthDiv.className = 'show';
+      }
+
+      function goUp() {
+        const screenHeight = window.innerHeight;
+
+        let currentY = window.scrollY - (window.scrollY % screenHeight);
+        let nextY = currentY;
+        if (0 === (window.scrollY % screenHeight)) {
+          nextY = currentY - screenHeight;
+        }
+        window.scrollTo(window.scrollX, nextY);
+      }
+
+      function goDown() {
+        const screenHeight = window.innerHeight;
+
+        let currentY = window.scrollY - (window.scrollY % screenHeight);
+        let nextY = currentY + screenHeight;
+        window.scrollTo(window.scrollX, nextY);
+      }
+
+      const ARROW_LEFT = 37;
+      const ARROW_UP = 38;
+      const ARROW_RIGHT = 39;
+      const ARROW_DOWN = 40;
+      document.addEventListener('keyup', function(event) {
+        if (
+          ARROW_UP === event.which
+          || ARROW_LEFT === event.which
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          goUp();
+        } else if (
+          ARROW_DOWN === event.which
+          || ARROW_RIGHT === event.which
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          goDown();
+        }
+      });
+    </script>
+  </body>
+</html>

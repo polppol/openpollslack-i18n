@@ -4,7 +4,7 @@
   "bot_name": "Open Poll(i18n)",
   "app_lang": "en",
   "app_lang_user_selectable": true,
-  "use_response_url": false,
+  "use_response_url": true,
   "menu_at_the_end": false,
   "add_number_emoji_to_choice": false,
   "add_number_emoji_to_choice_btn": false,

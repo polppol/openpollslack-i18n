@@ -1,8 +1,17 @@
 
 # About this fork 
 
-I have make some change to make it more customizable :
-## config/default.json
+I have make some change to make it more customizable such as Allow choices add by others, Change UI Language, UI Order, Please see detail below.
+
+### If I just want to use it without self-host?
+You can use "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html)
+
+PLEASE NOTE: Link above will run lastest code on my devlopment server, you can use it for free, but it may contain bugs or may down for mantanance or database may be wiped at any time. 
+
+After add to slack please use `/poll config` to config what options you want to enable/disable on your Slack team.
+
+
+## Server config (config/default.json)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
 - `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI (Most of the UI text, some error and exception message might still in default app language ) 
 - `bot_name` for refering bot name in some help text
@@ -12,8 +21,29 @@ I have make some change to make it more customizable :
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+
+~~WARNING: Poll that created using different config (that effect output order such as `menu_at_the_end` `show_help_link` `show_command_info` ) will stop working or not working correctly!~~ (Should working now)
+
+## Team config (Override Server config)
+
+If some of your team would like to using different config than what is on default.json you can use `/poll config write para_name value` (send in any chanel on team that you would like to override)
+please note that `/poll config` only work on user who install app to Slack only.
+
+Usage:
+```
+/poll config read
+/poll config write app_lang [en/th/lang_file_name]
+/poll config write app_lang_user_selectable [true/false]
+/poll config write menu_at_the_end [true/false]
+/poll config write show_help_link [true/false]
+/poll config write show_command_info [true/false]
+/poll config write add_number_emoji_to_choice [true/false]
+/poll config write add_number_emoji_to_choice_btn [true/false]
+```
+
 ## Modal
-- if `response_url` is not enable or not in using, user will get feedback if user can create poll in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
+
+- if `response_url` is not enable or not in use, user will get feedback if poll can create in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
 
   ![Alt text](./assets/poll-ch-check-feedback.png?raw=true "poll-ch-check-feedback")
 - User language selectable
@@ -46,7 +76,7 @@ But feel free to open new issues on both.
 
 ## Important update
 
-If you have an error when submitting poll, please use the "Add to slack" button [on site](https://openpoll.slack.alcor.space/) to re-authorize the bot on your workspace
+If you have an error when submitting poll, please use the "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html) to re-authorize the bot on your workspace
 
 ### Migrate to v3
 
@@ -115,7 +145,7 @@ For both question and choices, feel free to use slack's emoji, `*bold*` `~strike
 
 ## Self hosted installation
 
-Wiki pages are available to help you with the [app configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Self-hosted-installation-(v2)) and the [web page configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Web-page).
+[self_host.md](self_host.md)
 
 ## Support me
 

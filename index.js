@@ -20,15 +20,17 @@ const signing_secret = config.get('signing_secret');
 const slackCommand = config.get('command');
 const helpLink = config.get('help_link');
 const supportUrl = config.get('support_url');
-const appLang = config.get('app_lang');
-const isAppLangSelectable = config.get('app_lang_user_selectable');
+const gAppLang = config.get('app_lang');
+const gIsAppLangSelectable = config.get('app_lang_user_selectable');
 const isUseResponseUrl = config.get('use_response_url');
-const isMenuAtTheEnd = config.get('menu_at_the_end');
+const gIsMenuAtTheEnd = config.get('menu_at_the_end');
 const botName = config.get('bot_name');
-const isShowHelpLink = config.get('show_help_link');
-const isShowCommandInfo = config.get('show_command_info');
-const isShowNumberInChoice = config.get('add_number_emoji_to_choice');
-const isShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
+const gIsShowHelpLink = config.get('show_help_link');
+const gIsShowCommandInfo = config.get('show_command_info');
+const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
+const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
+
+const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -76,14 +78,14 @@ globLang.sync( './language/*.json' ).forEach( function( file ) {
   }
 });
 console.log("Lang Count: "+langCount);
-console.log("Selected Lang: "+appLang);
+console.log("Selected Lang: "+gAppLang);
 if(!langDict.hasOwnProperty('en')) {
   console.error("language/en.json NOT FOUND!");
   throw new Error("language/en.json NOT FOUND!");
 }
-if(!langDict.hasOwnProperty(appLang)) {
-  console.error(`language/${appLang}.json NOT FOUND!`);
-  throw new Error(`language/${appLang}.json NOT FOUND!`);
+if(!langDict.hasOwnProperty(gAppLang)) {
+  console.error(`language/${gAppLang}.json NOT FOUND!`);
+  throw new Error(`language/${gAppLang}.json NOT FOUND!`);
 }
 
 const parameterizedString = (str,varArray) => {
@@ -112,7 +114,19 @@ const stri18n = (lang,key) => {
   }
 }
 
+const getTeamOverride  = async (mTeamId) => {
+    let ret = {};
+    try {
+        const team = await orgCol.findOne({ 'team.id': mTeamId });
+        if (team) {
+            if(team.hasOwnProperty("openPollConfig")) ret = team.openPollConfig;
+        }
+    }
+    catch (e) {
 
+    }
+    return ret;
+}
 const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
   clientId: config.get('client_id'),
@@ -127,6 +141,7 @@ const receiver = new ExpressReceiver({
   installerOptions: {
     installPath: '/slack/install',
     redirectUriPath: '/slack/oauth_redirect',
+    stateVerification: false,
     callbackOptions: {
       success: (installation, installOptions, req, res) => {
         res.redirect(config.get('oauth_success'));
@@ -537,7 +552,7 @@ app.event('app_home_opened', async ({ event, client, context }) => {
   }
 });
 
-app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, say }) => {
+app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, say, respond }) => {
   await ack();
 
   let cmdBody = (command && command.text) ? command.text.trim() : null;
@@ -547,6 +562,22 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   const channel = (command && command.channel_id) ? command.channel_id : null;
 
   const userId = (command && command.user_id) ? command.user_id : null;
+
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  let isShowHelpLink = gIsShowHelpLink;
+  let isShowCommandInfo = gIsShowCommandInfo;
+  let isShowNumberInChoice = gIsShowNumberInChoice;
+  let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
+
+  if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
+  if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
+  if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
   if (isHelp) {
     const blocks = [
@@ -687,6 +718,178 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
         fetchArgs = true;
         cmdBody = cmdBody.substring(10).trim();
         isAllowUserAddChoice = true;
+      } else if (cmdBody.startsWith('config')) {
+        await respond(`/${slackCommand} ${command.text}`);
+        fetchArgs = true;
+        cmdBody = cmdBody.substring(6).trim();
+
+        let validWritePara = `\n/${slackCommand} config write app_lang [`;
+        let isFirstLang = true;
+        for (let key in langList) {
+          if(isFirstLang) isFirstLang = false;
+          else validWritePara += "/";
+          validWritePara += key;
+        }
+        validWritePara += "]";
+        for (const eachOverrideable of validTeamOverrideConfigTF) {
+          validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [true/false]`;
+        }
+
+        let team = await orgCol.findOne({ 'team.id': body.team_id });
+        let validConfigUser = "";
+        if (team) {
+          if(team.hasOwnProperty("user"))
+            if(team.user.hasOwnProperty("id")) {
+              validConfigUser = team.user.id;
+            }
+        }
+        else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `Error while reading config`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+        if(body.user_id != validConfigUser) {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: stri18n(userLang,'err_only_installer'),
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+        if(cmdBody.startsWith("read")){
+
+
+          let configTxt = "Config: not found";
+          if (team) {
+            if(team.hasOwnProperty("openPollConfig")) {
+              configTxt = "Override found:\n```"+JSON.stringify(team.openPollConfig)+"```";
+
+            }
+            else {
+              configTxt = "No override: using server setting";
+            }
+          }
+
+
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `${configTxt}`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        } else if (cmdBody.startsWith("write")){
+          cmdBody = cmdBody.substring(5).trim();
+
+          let inputPara = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+          let isWriteValid = false;
+
+          if(validTeamOverrideConfigTF.includes(inputPara)) {
+            cmdBody = cmdBody.substring(inputPara.length).trim();
+            isWriteValid = true;
+          }
+
+          if(inputPara=="app_lang") {
+            cmdBody = cmdBody.substring(8).trim();
+            isWriteValid = true;
+          }
+
+          if(isWriteValid) {
+            let inputVal = cmdBody.trim();
+            if(inputPara=="app_lang") {
+              if(!langList.hasOwnProperty(inputVal)){
+                let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Lang file [${inputVal}] not found`,
+                };
+                await postChat(body.response_url,'ephemeral',mRequestBody);
+                return;
+              }
+            } else {
+              if (cmdBody.startsWith("true")) {
+                inputVal = true;
+              } else if (cmdBody.startsWith("false")) {
+                inputVal = false;
+              }
+              else {
+                let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Usage: ${inputPara} [true/false]`,
+                };
+                await postChat(body.response_url,'ephemeral',mRequestBody);
+                return;
+              }
+          }
+          if(!team.hasOwnProperty("openPollConfig")) team.openPollConfig = {};
+          team.openPollConfig.isset = true;
+          team.openPollConfig[inputPara] = inputVal;
+          //console.log(team);
+          try {
+              await orgCol.replaceOne({'team.id': body.team_id}, team);
+          }
+          catch (e) {
+              console.error(e);
+              let mRequestBody = {
+                  token: context.botToken,
+                  channel: channel,
+                  //blocks: blocks,
+                  text: `Error while update [${inputPara}] to [${inputVal}]`,
+              };
+              await postChat(body.response_url,'ephemeral',mRequestBody);
+              return;
+
+          }
+
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `[${inputPara}] is set to [${inputVal}] for this Team`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+
+        }
+        else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `[${inputPara}] is not valid config parameter or value is missing\nUsage: ${validWritePara}`,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
+
+
+        } else {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            //blocks: blocks,
+            text: `Usage:\n/${slackCommand} config read`+
+                  `\n${validWritePara}`
+            ,
+          };
+          await postChat(body.response_url,'ephemeral',mRequestBody);
+          return;
+        }
+
       }
     }
 
@@ -697,17 +900,32 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
       limit = 1;
     }
 
-    const regexp = new RegExp(firstSep+'[^'+firstSep+'\\\\]*(?:\\\\[\S\s][^'+lastSep+'\\\\]*)*'+lastSep, 'g');
-    for (let option of cmdBody.match(regexp)) {
-      let opt = option.substring(1, option.length - 1);
-      if (question === null) {
-        question = opt;
-      } else {
-        options.push(opt);
+    try {
+      const regexp = new RegExp(firstSep+'[^'+firstSep+'\\\\]*(?:\\\\[\S\s][^'+lastSep+'\\\\]*)*'+lastSep, 'g');
+      for (let option of cmdBody.match(regexp)) {
+        let opt = option.substring(1, option.length - 1);
+        if (question === null) {
+          question = opt;
+        } else {
+          options.push(opt);
+        }
       }
     }
+    catch (e) {
+      let mRequestBody = {
+        token: context.botToken,
+        channel: channel,
+        //blocks: blocks,
+        text: stri18n(userLang,'err_process_command')
+        ,
+      };
+      await postChat(body.response_url,'ephemeral',mRequestBody);
+      return;
+    }
 
-    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd);
+
+
+    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
     if (null === blocks) {
       return;
@@ -723,19 +941,21 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   }
 });
 
-const modalBlockInput = {
-  type: 'input',
-  element: {
-    type: 'plain_text_input',
-    placeholder: {
-      type: 'plain_text',
-      text: stri18n(appLang,'modal_input_choice'),
-    },
-  },
-  label: {
-    type: 'plain_text',
-    text: ' ',
-  },
+const createModalBlockInput = (userLang)  => {
+    return {
+      type: 'input',
+      element: {
+        type: 'plain_text_input',
+        placeholder: {
+          type: 'plain_text',
+          text: stri18n(userLang,'modal_input_choice'),
+        },
+      },
+      label: {
+        type: 'plain_text',
+        text: ' ',
+      },
+  }
 };
 
 (async () => {
@@ -766,14 +986,16 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(context.teamId);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang
   let blocks = body.view.blocks;
   const hash = body.view.hash;
 
   let beginBlocks = blocks.slice(0, blocks.length - 1);
   let endBlocks = blocks.slice(-1);
 
-  let tempModalBlockInput = JSON.parse(JSON.stringify(modalBlockInput));
+  let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
   tempModalBlockInput.block_id = 'choice_'+(blocks.length-8);
 
   beginBlocks.push(tempModalBlockInput);
@@ -820,6 +1042,9 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   for (const block of blocks) {
     if (
@@ -900,6 +1125,9 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   if (body.user.id !== action.value) {
     console.log('invalid user');
@@ -940,7 +1168,9 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   let value = JSON.parse(action.value);
 
   if (body.user.id !== value.user) {
@@ -969,7 +1199,8 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
 app.action('btn_vote', async ({ action, ack, body, context }) => {
   await ack();
   let menuAtIndex = 0;
-  if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
+  const teamConfig = await getTeamOverride(body.team_id);
+
   if (
     !body
     || !action
@@ -984,7 +1215,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-
   const user_id = body.user.id;
   const message = body.message;
   let blocks = message.blocks;
@@ -993,10 +1223,22 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
   let value = JSON.parse(action.value);
 
-  let userLang = appLang;
+  let userLang = null;
   if(value.hasOwnProperty('user_lang'))
     if(value.user_lang!="" && value.user_lang != null)
       userLang = value.user_lang;
+
+  if(userLang==null)
+  {
+    userLang= gAppLang;
+    if(teamConfig.hasOwnProperty("app_lang")) userLang = teamConfig.app_lang;
+  }
+
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
+  else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+
+  if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
 
   if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
     mutexes[`${message.team}/${channel}/${message.ts}`] = new Mutex();
@@ -1075,7 +1317,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 
       const isHidden = await getInfos(
         'hidden',
-        blocks, 
+        blocks,
         {
           team: message.team,
           channel,
@@ -1189,7 +1431,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           team: message.team,
           channel,
           ts: message.ts,
-        },userLang);
+        },userLang,isMenuAtTheEnd);
 
       await votesCol.updateOne({
         channel,
@@ -1236,9 +1478,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
 });
 app.action('add_choice_after_post', async ({ ack, body, action, context,client }) => {
   await ack();
-  let newChoiceIndex = body.message.blocks.length-1;
-  if(isShowHelpLink||isShowCommandInfo) newChoiceIndex--;
-  if(isMenuAtTheEnd) newChoiceIndex--;
+
   if (
     !body
     || !action
@@ -1253,7 +1493,9 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const user_id = body.user.id;
   const message = body.message;
   let blocks = message.blocks;
@@ -1261,6 +1503,17 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
   const channel = body.channel.id;
 
   const value = action.value.trim();
+
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  let isShowHelpLink = gIsShowHelpLink;
+  if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
+  let isShowCommandInfo = gIsShowCommandInfo;
+  if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  let isShowNumberInChoice = gIsShowNumberInChoice;
+  if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
+  let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
+  if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
   let userLang = appLang;
 
@@ -1298,6 +1551,13 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                   if(voteBtnVal.hasOwnProperty('user_lang'))
                     if(voteBtnVal['user_lang']!="" && voteBtnVal['user_lang'] != null)
                       userLang = voteBtnVal['user_lang'];
+
+                  if(voteBtnVal.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = voteBtnVal.menu_at_the_end;
+                  if(voteBtnVal.hasOwnProperty("show_help_link")) isShowHelpLink = voteBtnVal.show_help_link;
+                  if(voteBtnVal.hasOwnProperty("show_command_info")) isShowCommandInfo = voteBtnVal.show_command_info;
+                  if(voteBtnVal.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = voteBtnVal.add_number_emoji_to_choice;
+                  if(voteBtnVal.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = voteBtnVal.add_number_emoji_to_choice_btn;
+
                 }
 
                 let thisChoice = body.message.blocks[idx]['text']['text'].trim();
@@ -1324,11 +1584,15 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
         }
       }
       //update post
+      let newChoiceIndex = body.message.blocks.length-1;
+      if(isShowHelpLink||isShowCommandInfo) newChoiceIndex--;
+      if(isMenuAtTheEnd) newChoiceIndex--;
+
       const tempAddBlock = blocks[newChoiceIndex];
 
       lastestVoteBtnVal['id'] = (lastestOptionId + 1);
       lastestVoteBtnVal['voters'] = [];
-      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value));
+      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value, isShowNumberInChoice, isShowNumberInChoiceBtn));
 
       let block = {
         type: 'context',
@@ -1392,15 +1656,32 @@ app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
 
 async function createModal(context, client, trigger_id,response_url) {
   try {
-    let tempModalBlockInput = JSON.parse(JSON.stringify(modalBlockInput));
+    const teamConfig = await getTeamOverride(context.teamId);
+    let appLang= gAppLang;
+    if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+    let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
     tempModalBlockInput.block_id = 'choice_0';
-
+    let isMenuAtTheEnd = gIsMenuAtTheEnd;
+    if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+    let isShowHelpLink = gIsShowHelpLink;
+    if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
+    let isShowCommandInfo = gIsShowCommandInfo;
+    if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+    let isShowNumberInChoice = gIsShowNumberInChoice;
+    if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
+    let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
+    if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
     const privateMetadata = {
       user_lang: appLang,
       anonymous: false,
       limited: false,
       hidden: false,
       user_add_choice: false,
+      menu_at_the_end: isMenuAtTheEnd,
+      show_help_link: isShowHelpLink,
+      show_command_info: isShowCommandInfo,
+      add_number_emoji_to_choice: isShowNumberInChoice,
+      add_number_emoji_to_choice_btn: isShowNumberInChoiceBtn,
       response_url: response_url,
       channel: null,
     };
@@ -1471,6 +1752,9 @@ async function createModal(context, client, trigger_id,response_url) {
       ]);
     }
 
+    let isAppLangSelectable = gIsAppLangSelectable;
+    if(teamConfig.hasOwnProperty("app_lang_user_selectable"))
+      isAppLangSelectable = teamConfig.app_lang_user_selectable;
     if(isAppLangSelectable)
     {
       let allOptions = [];
@@ -1678,7 +1962,9 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(body.view.private_metadata);
   privateMetadata.channel = action.selected_channel || action.selected_conversation;
 
@@ -1823,7 +2109,9 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(view.private_metadata);
   const userId = body.user.id;
 
@@ -1884,7 +2172,23 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
 
   const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang);
 
-  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd);
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  let isShowHelpLink = gIsShowHelpLink;
+  let isShowCommandInfo = gIsShowCommandInfo;
+  let isShowNumberInChoice = gIsShowNumberInChoice;
+  let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
+  if(privateMetadata.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = privateMetadata.menu_at_the_end;
+  else if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  if(privateMetadata.hasOwnProperty("show_help_link")) isShowHelpLink = privateMetadata.show_help_link;
+  else if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
+  if(privateMetadata.hasOwnProperty("show_command_info")) isShowCommandInfo = privateMetadata.show_command_info;
+  else if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  if(privateMetadata.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = privateMetadata.add_number_emoji_to_choice;
+  else if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
+  if(privateMetadata.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = privateMetadata.add_number_emoji_to_choice_btn;
+  else if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
+
+  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
   let mRequestBody = {
     token: context.botToken,
@@ -1927,7 +2231,7 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   return cmd;
 }
 
-function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, userId, cmd) {
+function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd) {
   if (
     !question
     || !options
@@ -1951,25 +2255,25 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         text: isHidden ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote'),
       },
       value:
-        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId}),
+        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
     }, {
       text: {
         type: 'plain_text',
         text: stri18n(userLang,'menu_all_user_vote'),
       },
-      value: JSON.stringify({action: 'btn_users_votes', user: userId}),
+      value: JSON.stringify({action: 'btn_users_votes', user: userId, user_lang: userLang}),
     }, {
       text: {
         type: 'plain_text',
         text: stri18n(userLang,'menu_delete_poll'),
       },
-      value: JSON.stringify({action: 'btn_delete', user: userId}),
+      value: JSON.stringify({action: 'btn_delete', user: userId, user_lang: userLang}),
     }, {
       text: {
         type: 'plain_text',
         text: stri18n(userLang,'menu_close_poll'),
       },
-      value: JSON.stringify({action: 'btn_close', user: userId}),
+      value: JSON.stringify({action: 'btn_close', user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
     }],
   }, {
     label: {
@@ -1981,7 +2285,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         type: 'plain_text',
         text: stri18n(userLang,'menu_user_self_vote'),
       },
-      value: JSON.stringify({action: 'btn_my_votes', user: userId}),
+      value: JSON.stringify({action: 'btn_my_votes', user: userId, user_lang: userLang }),
     }],
   }];
 
@@ -2078,6 +2382,11 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     limit: limit,
     hidden: isHidden,
     user_add_choice: isAllowUserAddChoice,
+    menu_at_the_end: isMenuAtTheEnd,
+    show_help_link: isShowHelpLink,
+    show_command_info: isShowCommandInfo,
+    add_number_emoji_to_choice: isShowNumberInChoice,
+    add_number_emoji_to_choice_btn: isShowNumberInChoiceBtn,
     voters: [],
     id: null,
   };
@@ -2087,7 +2396,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
 
-    blocks.push(buildVoteBlock(btn_value, option));
+    blocks.push(buildVoteBlock(btn_value, option, isShowNumberInChoice, isShowNumberInChoiceBtn));
 
     let block = {
       type: 'context',
@@ -2306,7 +2615,9 @@ async function myVotes(body, client, context) {
   ) {
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
@@ -2394,7 +2705,9 @@ async function usersVotes(body, client, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -2512,6 +2825,12 @@ async function usersVotes(body, client, context, value) {
 async function revealOrHideVotes(body, context, value) {
 
   let menuAtIndex = 0;
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
+  else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
   if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
   if (
     !body
@@ -2695,13 +3014,13 @@ async function revealOrHideVotes(body, context, value) {
           team: message.team,
           channel,
           ts: message.ts,
-        },userLang);
+        },userLang,isMenuAtTheEnd);
       } else if (blocks[menuAtIndex].accessory.option_groups) {
         blocks[menuAtIndex].accessory.option_groups[0].options = await buildMenu(blocks, {
           team: message.team,
           channel,
           ts: message.ts,
-        },userLang);
+        },userLang,isMenuAtTheEnd);
       }
 
       const infosIndex = blocks.findIndex(el => el.type === 'context' && el.elements)
@@ -2762,7 +3081,9 @@ async function deletePoll(body, context, value) {
     console.log('error');
     return;
   }
-
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     console.log('invalid user');
     let mRequestBody = {
@@ -2786,6 +3107,14 @@ async function deletePoll(body, context, value) {
 
 async function closePoll(body, client, context, value) {
   let menuAtIndex = 0;
+  const teamConfig = await getTeamOverride(body.team_id);
+  let appLang= gAppLang;
+  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
+
+  let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
+  else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+
   if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
   if (
     !body
@@ -2906,7 +3235,7 @@ async function closePoll(body, client, context, value) {
             team: message.team,
             channel,
             ts: message.ts,
-          }),userLang;
+          },userLang,isMenuAtTheEnd);
       }
 
       const infosIndex =
@@ -3080,7 +3409,7 @@ async function getInfos(infos, blocks, pollInfos) {
 }
 
 async function buildInfosBlocks(blocks, pollInfos,userLang) {
-  if(userLang == null) userLang = appLang;
+  if(userLang == null) userLang = gAppLang;
   const infosIndex =
     blocks.findIndex(el => el.type === 'context' && el.elements);
   const infosBlocks = [];
@@ -3114,10 +3443,10 @@ async function buildInfosBlocks(blocks, pollInfos,userLang) {
   return infosBlocks;
 }
 
-async function buildMenu(blocks, pollInfos,userLang) {
+async function buildMenu(blocks, pollInfos,userLang,isMenuAtTheEnd) {
   let menuAtIndex = 0;
   if(isMenuAtTheEnd) menuAtIndex = blocks.length-1;
-  if(userLang == null) userLang = appLang;
+  if(userLang == null) userLang = gAppLang;
   const infos = await getInfos(['closed', 'hidden'], blocks, pollInfos);
 
   if (blocks[menuAtIndex].accessory.option_groups) {
@@ -3151,11 +3480,11 @@ async function buildMenu(blocks, pollInfos,userLang) {
   return null;
 }
 
-function buildVoteBlock(btn_value, option_text) {
+function buildVoteBlock(btn_value, option_text, isShowNumberInChoice, isShowNumberInChoiceBtn) {
   let emojiPrefix = "";
   let emojiBthPostfix = "";
   let voteId = parseInt(btn_value.id);
-  let userLang = appLang;
+  let userLang = gAppLang;
   if(btn_value.hasOwnProperty('user_lang'))
     if(btn_value['user_lang']!="" && btn_value['user_lang'] != null)
     userLang = btn_value['user_lang'];
