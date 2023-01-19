@@ -1,7 +1,16 @@
 
 # About this fork 
 
-I have make some change to make it more customizable :
+I have make some change to make it more customizable such as Allow choices add by others, Change UI Language, UI Order, Please see detail below.
+
+### If I just want to use it without self-host?
+You can use "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html)
+
+PLEASE NOTE: Link above will run lastest code on my devlopment server, you can use it for free, but it may contain bugs or may down for mantanance or database may be wiped at any time. 
+
+After add to slack please use `/poll config` to config what options you want to enable/disable on your Slack team.
+
+
 ## Server config (config/default.json)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
 - `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI (Most of the UI text, some error and exception message might still in default app language ) 
@@ -22,6 +31,7 @@ please note that `/poll config` only work on user who install app to Slack only.
 
 Usage:
 ```
+/poll config read
 /poll config write app_lang [en/th/lang_file_name]
 /poll config write app_lang_user_selectable [true/false]
 /poll config write menu_at_the_end [true/false]
@@ -66,7 +76,7 @@ But feel free to open new issues on both.
 
 ## Important update
 
-If you have an error when submitting poll, please use the "Add to slack" button [on site](https://openpoll.slack.alcor.space/) to re-authorize the bot on your workspace
+If you have an error when submitting poll, please use the "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html) to re-authorize the bot on your workspace
 
 ### Migrate to v3
 
@@ -135,8 +145,7 @@ For both question and choices, feel free to use slack's emoji, `*bold*` `~strike
 
 ## Self hosted installation
 
-Wiki pages are available to help you with the [app configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Self-hosted-installation-(v2)) and the [web page configuration](https://gitlab.com/KazuAlex/openpollslack/-/wikis/Web-page)
-or [self_host.md](self_host.md)
+[self_host.md](self_host.md)
 
 ## Support me
 

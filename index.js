@@ -141,6 +141,7 @@ const receiver = new ExpressReceiver({
   installerOptions: {
     installPath: '/slack/install',
     redirectUriPath: '/slack/oauth_redirect',
+    stateVerification: false,
     callbackOptions: {
       success: (installation, installOptions, req, res) => {
         res.redirect(config.get('oauth_success'));
