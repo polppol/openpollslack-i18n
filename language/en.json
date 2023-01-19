@@ -78,6 +78,8 @@
   "err_poll_unconsistent_exception": "Unconsistent poll data",
   "err_poll_ch_exception": ":warning::warning:\nCan not chect if you are able to create poll in this channel or not.\nYou may try to re-select again in few seconds.",
   "err_duplicate_add_choice": "[{{text}}] already exists in choice",
+  "err_process_command": "Error while processing command please check and try again...",
+  "err_only_installer": "Only user that install this app can use this command",
   "err_mutex_lock": "[Try #{{{count_try}}] Error while attempt to acquire mutex lock.",
   "emoji_1": ":one:",
   "emoji_2": ":two:",

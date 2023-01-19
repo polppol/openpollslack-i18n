@@ -13,7 +13,7 @@ I have make some change to make it more customizable :
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
 
-WARNING: Poll that created using different config (that effect output order such as `menu_at_the_end` `show_help_link` `show_command_info` ) will stop working or not working correctly!
+~~WARNING: Poll that created using different config (that effect output order such as `menu_at_the_end` `show_help_link` `show_command_info` ) will stop working or not working correctly!~~ (Should working now)
 
 ## Team config (Override Server config)
 
