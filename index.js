@@ -59,6 +59,13 @@ try {
   process.exit();
 }
 
+const createDBIndex = async () => {
+  orgCol.createIndex({"team.id": 1});
+  votesCol.createIndex({ channel: 1, ts: 1 });
+  closedCol.createIndex({ channel: 1, ts: 1 });
+  hiddenCol.createIndex({ channel: 1, ts: 1 });
+}
+
 let langCount = 0;
 globLang.sync( './language/*.json' ).forEach( function( file ) {
   let dash = file.split("/");
@@ -1005,6 +1012,9 @@ const createModalBlockInput = (userLang)  => {
   await migrations.init();
   await migrations.migrate();
   console.log('End database migration.')
+
+  console.log('Check create DB index if not exist...');
+  await createDBIndex();
 
   await app.start(process.env.PORT || port);
 
