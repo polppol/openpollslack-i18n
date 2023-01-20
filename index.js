@@ -661,6 +661,48 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
           text: "```\n/"+slackCommand+" anonymous limit 2 \"What's your favourite color ?\" \"Red\" \"Green\" \"Blue\" \"Yellow\"\n```",
         },
       },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Allow choices add by others*',
+        },
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: "```\n/"+slackCommand+" add-choice \"What's your favourite color ?\" \"Red\" \"Green\" \"Blue\" \"Yellow\"\n```",
+        },
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Change poll language for current poll only*',
+        },
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: "```\n/"+slackCommand+" lang th \"What's your favourite color ?\" \"Red\" \"Green\" \"Blue\" \"Yellow\"\n```",
+        },
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Config Open Poll for this Workspace*',
+        },
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: "```\n/"+slackCommand+" config```",
+        },
+      },
     ];
 
     let mRequestBody = {
@@ -2559,7 +2601,7 @@ async function supportAction(body, client, context) {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: ':heart: You love the app ?',
+      text: stri18n(gAppLang,'menu_support_love_app'),
     },
   },
   { type: 'divider' },
@@ -2567,16 +2609,16 @@ async function supportAction(body, client, context) {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: ':technologist: Contribute on it',
+      text: stri18n(gAppLang,'menu_support_contribute'),
     },
     accessory: {
       type: 'button',
       text: {
         type: 'plain_text',
-        text: 'Open GitLab',
+        text: stri18n(gAppLang,'menu_support_source'),
       },
       style: 'primary',
-      url: 'https://gitlab.com/KazuAlex/openpollslack',
+      url: helpLink,
       action_id: 'ignore_me',
     }
   },
@@ -2584,15 +2626,15 @@ async function supportAction(body, client, context) {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: ':coffee: Buy me a coffee to help me to maintain servers or just thanks me',
+      text: stri18n(gAppLang,'menu_support_me'),
     },
     accessory: {
       type: 'button',
       text: {
         type: 'plain_text',
-        text: 'Buy a coffee',
+        text: stri18n(gAppLang,'menu_support_me_buy_coffee'),
       },
-      url: 'https://www.buymeacoffee.com/kazualex',
+      url: supportUrl,
       action_id: 'ignore_me',
     }
   }];
@@ -2602,7 +2644,7 @@ async function supportAction(body, client, context) {
     channel: body.channel.id,
     user: body.user.id,
     blocks,
-    text: 'Support Open Poll',
+    text: stri18n(gAppLang,'menu_support_open_poll'),
   };
   await postChat(body.response_url,'ephemeral',mRequestBody);
 
