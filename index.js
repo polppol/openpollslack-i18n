@@ -2444,7 +2444,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
       type: 'context',
       elements: [
         {
-          type: 'mrkdwn',
+          type: 'plain_text',
           text: btn_value['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
         }
       ],
