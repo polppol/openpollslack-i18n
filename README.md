@@ -1,7 +1,12 @@
 
 # About this fork 
 
-I have make some change to make it more customizable such as Allow choices add by others, Change UI Language, UI Order, Please see detail below.
+I have make some change to make it more customizable such as 
+- Allow choices add by others
+- UI Language
+- UI Order (Show/Hide Element you don't want to make it cleaner
+
+(Please see deatil below)
 
 ### If I just want to use it without self-host?
 You can use "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html)
@@ -11,30 +16,30 @@ PLEASE NOTE: Link above will run lastest code on my devlopment server, you can u
 After add to slack please use `/poll config` to config what options you want to enable/disable on your Slack team.
 
 
-## Server config (config/default.json)
+## Additional server config (config/default.json)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
-- `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI (Most of the UI text, some error and exception message might still in default app language ) 
-- `bot_name` for refering bot name in some help text
+- `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI 
 - `use_response_url` if set to `true`; app will respond to request using `response_url` instead of using `app.client.chat.post`
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
 - `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
+- `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
 
-~~WARNING: Poll that created using different config (that effect output order such as `menu_at_the_end` `show_help_link` `show_command_info` ) will stop working or not working correctly!~~ (Should working now)
-
 ## Team config (Override Server config)
 
-If some of your team would like to using different config than what is on default.json you can use `/poll config write para_name value` (send in any chanel on team that you would like to override)
-please note that `/poll config` only work on user who install app to Slack only.
+If some of your team would like to using different config than what is on default.json you can use `/poll config` 
+- this command only work on user who install app to Slack only.
+- If app was re-add to workspace all Override config will be removed
 
 Usage:
 ```
 /poll config read
-/poll config write app_lang [en/th/lang_file_name]
+/poll config write app_lang [en/th/(or language file)]
 /poll config write app_lang_user_selectable [true/false]
 /poll config write menu_at_the_end [true/false]
+/poll config write show_divider [true/false]
 /poll config write show_help_link [true/false]
 /poll config write show_command_info [true/false]
 /poll config write add_number_emoji_to_choice [true/false]
@@ -53,6 +58,9 @@ Usage:
 
   ![Alt text](./assets/poll-add-choice-modal-en.png?raw=true "User add choice")
   ![Alt text](./assets/poll-add-choice-en.png?raw=true "User add choice")
+- Show or hide divider between choice
+  ![Alt text](./assets/poll-div-on-en.png?raw=true "Divider ON")
+  ![Alt text](./assets/poll-div-off-en.png?raw=true "Divider OFF")
 
 ## Additional Permissions
 
