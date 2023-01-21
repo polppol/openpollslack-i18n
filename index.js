@@ -755,7 +755,6 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
       } else if (cmdBody.startsWith('lang')) {
         fetchArgs = true;
         cmdBody = cmdBody.substring(4).trim();
-        isLimited = true;
         let inputLang = (cmdBody.substring(0, cmdBody.indexOf(' ')));
         if(langList.hasOwnProperty(inputLang)){
           userLang = inputLang;
@@ -1293,6 +1292,11 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
   if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
   else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
 
+  let isShowDivider = gIsShowDivider;
+  if(value.hasOwnProperty("show_divider")) isShowDivider = value.show_divider;
+  else if (teamConfig.hasOwnProperty("show_divider")) isShowDivider = teamConfig.show_divider;
+
+
   if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
 
   if (!mutexes.hasOwnProperty(`${message.team}/${channel}/${message.ts}`)) {
@@ -1464,9 +1468,17 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           }
 
           blocks[i].accessory.value = JSON.stringify(val);
-          const nextI = ''+(parseInt(i)+1);
-          if (blocks[nextI].hasOwnProperty('elements')) {
-            blocks[nextI].elements[0].text = newVoters;
+          if(isShowDivider) {
+            const nextI = ''+(parseInt(i)+1);
+            if (blocks[nextI].hasOwnProperty('elements')) {
+              blocks[nextI].elements[0].text = newVoters;
+            }
+          }
+          else {
+            let choiceNL = blocks[i].text.text.indexOf('\n');
+            if(choiceNL==-1) choiceNL = blocks[i].text.text.length;
+            const choiceText = blocks[i].text.text.substring(0,choiceNL);
+            blocks[i].text.text = `${choiceText}\n${newVoters}`;
           }
         }
       }
@@ -1561,6 +1573,8 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
 
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
   if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  let isShowDivider = gIsShowDivider;
+  if(teamConfig.hasOwnProperty("show_divider")) isShowDivider = teamConfig.show_divider;
   let isShowHelpLink = gIsShowHelpLink;
   if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   let isShowCommandInfo = gIsShowCommandInfo;
@@ -1608,6 +1622,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                       userLang = voteBtnVal['user_lang'];
 
                   if(voteBtnVal.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = voteBtnVal.menu_at_the_end;
+                  if(voteBtnVal.hasOwnProperty("show_divider")) isShowDivider = voteBtnVal.show_divider;
                   if(voteBtnVal.hasOwnProperty("show_help_link")) isShowHelpLink = voteBtnVal.show_help_link;
                   if(voteBtnVal.hasOwnProperty("show_command_info")) isShowCommandInfo = voteBtnVal.show_command_info;
                   if(voteBtnVal.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = voteBtnVal.add_number_emoji_to_choice;
@@ -1647,22 +1662,27 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
 
       lastestVoteBtnVal['id'] = (lastestOptionId + 1);
       lastestVoteBtnVal['voters'] = [];
-      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value, isShowNumberInChoice, isShowNumberInChoiceBtn));
+      blocks.splice(newChoiceIndex, 1,buildVoteBlock(lastestVoteBtnVal, value, isShowDivider, isShowNumberInChoice, isShowNumberInChoiceBtn));
 
-      let block = {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: lastestVoteBtnVal['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
-          }
-        ],
-      };
-      blocks.splice(newChoiceIndex+1,0,block);
+      let divSpace = 0;
+      if(isShowDivider) {
+        divSpace++;
+        let block = {
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: lastestVoteBtnVal['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
+            }
+          ],
+        };
+        blocks.splice(newChoiceIndex+1,0,block);
 
-      blocks.splice(newChoiceIndex+2,0,{
-        type: 'divider',
-      });
+        divSpace++;
+        blocks.splice(newChoiceIndex + 2, 0, {
+          type: 'divider',
+        });
+      }
 
       let mRequestBody2 = {
         token: context.botToken,
@@ -1674,7 +1694,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
       await postChat(body.response_url, 'update', mRequestBody2);
 
       //re-add add-choice section
-      blocks.splice(newChoiceIndex+3, 0,tempAddBlock);
+      blocks.splice(newChoiceIndex+1+divSpace, 0,tempAddBlock);
 
       mRequestBody2 = {
         token: context.botToken,
@@ -2301,7 +2321,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
   //const userLang = appLang;
 
   const blocks = [];
-
+  //WARN: there is a limit on how long value can be!
   const staticSelectElements = [{
     label: {
       type: 'plain_text',
@@ -2313,7 +2333,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         text: isHidden ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote'),
       },
       value:
-        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_divider: isShowDivider, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
+        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId, user_lang: userLang, z_mat: isMenuAtTheEnd, z_div:isShowDivider,  z_help: isShowHelpLink, z_cmd: isShowCommandInfo}),
     }, {
       text: {
         type: 'plain_text',
@@ -2331,7 +2351,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         type: 'plain_text',
         text: stri18n(userLang,'menu_close_poll'),
       },
-      value: JSON.stringify({action: 'btn_close', user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_divider: isShowDivider, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
+      value: JSON.stringify({action: 'btn_close', user: userId, user_lang: userLang, z_mat: isMenuAtTheEnd, z_div:isShowDivider, z_help: isShowHelpLink, z_cmd: isShowCommandInfo}),
     }],
   }, {
     label: {
@@ -2455,24 +2475,24 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     let btn_value = JSON.parse(JSON.stringify(button_value));
     btn_value.id = i;
 
-    blocks.push(buildVoteBlock(btn_value, option, isShowNumberInChoice, isShowNumberInChoiceBtn));
+    blocks.push(buildVoteBlock(btn_value, option, isShowDivider, isShowNumberInChoice, isShowNumberInChoiceBtn));
 
-    let block = {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: btn_value['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
-        }
-      ],
-    };
-    blocks.push(block);
+    if(isShowDivider) {
+      let block = {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: btn_value['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote'),
+          }
+        ],
+      };
+      blocks.push(block);
 
-    //if(isShowDivider) {
       blocks.push({
         type: 'divider',
       });
-    //}
+    }
 
   }
 
@@ -2888,8 +2908,11 @@ async function revealOrHideVotes(body, context, value) {
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
-  if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
+  if(value.hasOwnProperty("z_mat")) isMenuAtTheEnd = value.z_mat;
   else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  let isShowDivider = gIsShowDivider;
+  if(value.hasOwnProperty("z_div")) isShowDivider = value.z_div;
+  else if (teamConfig.hasOwnProperty("show_divider")) isMenuAtTheEnd = teamConfig.show_divider;
   if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
   if (
     !body
@@ -3061,9 +3084,17 @@ async function revealOrHideVotes(body, context, value) {
           }
 
           blocks[i].accessory.value = JSON.stringify(val);
-          const nextI = ''+(parseInt(i)+1);
-          if (blocks[nextI].hasOwnProperty('elements')) {
-            blocks[nextI].elements[0].text = newVoters;
+          if(isShowDivider) {
+            const nextI = ''+(parseInt(i)+1);
+            if (blocks[nextI].hasOwnProperty('elements')) {
+              blocks[nextI].elements[0].text = newVoters;
+            }
+          }
+          else {
+            let choiceNL = blocks[i].text.text.indexOf('\n');
+            if(choiceNL==-1) choiceNL = blocks[i].text.text.length;
+            const choiceText = blocks[i].text.text.substring(0,choiceNL);
+            blocks[i].text.text = `${choiceText}\n${newVoters}`;
           }
         }
       }
@@ -3171,7 +3202,7 @@ async function closePoll(body, client, context, value) {
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
-  if(value.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = value.menu_at_the_end;
+  if(value.hasOwnProperty("z_mat")) isMenuAtTheEnd = value.z_mat;
   else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
 
   if(isMenuAtTheEnd) menuAtIndex = body.message.blocks.length-1;
@@ -3539,7 +3570,7 @@ async function buildMenu(blocks, pollInfos,userLang,isMenuAtTheEnd) {
   return null;
 }
 
-function buildVoteBlock(btn_value, option_text, isShowNumberInChoice, isShowNumberInChoiceBtn) {
+function buildVoteBlock(btn_value, option_text, isShowDivider, isShowNumberInChoice, isShowNumberInChoiceBtn) {
   let emojiPrefix = "";
   let emojiBthPostfix = "";
   let voteId = parseInt(btn_value.id);
@@ -3549,11 +3580,13 @@ function buildVoteBlock(btn_value, option_text, isShowNumberInChoice, isShowNumb
     userLang = btn_value['user_lang'];
   if(isShowNumberInChoice) emojiPrefix = slackNumToEmoji(voteId+1,userLang)+" ";
   if(isShowNumberInChoiceBtn) emojiBthPostfix = " "+slackNumToEmoji(voteId+1,userLang);
+  let compactVoteTxt = "";
+  if(!isShowDivider) compactVoteTxt = "\n" + (btn_value['hidden'] ? stri18n(userLang,'info_wait_reveal') : stri18n(userLang,'info_no_vote')) ;
   let block = {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: emojiPrefix+""+option_text,
+      text: emojiPrefix+""+option_text+""+compactVoteTxt,
     },
     accessory: {
       type: 'button',
