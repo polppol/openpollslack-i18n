@@ -1094,7 +1094,7 @@ app.action('btn_my_votes', async ({ ack, body, client, context }) => {
   const blocks = body.message.blocks;
   let votes = [];
   const userId = body.user.id;
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride(body.team.id);
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
@@ -1177,7 +1177,7 @@ app.action('btn_delete', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
@@ -1220,7 +1220,7 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
     console.log('error');
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   let value = JSON.parse(action.value);
@@ -1251,7 +1251,7 @@ app.action('btn_reveal', async ({ action, ack, body, context }) => {
 app.action('btn_vote', async ({ action, ack, body, context }) => {
   await ack();
   let menuAtIndex = 0;
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
 
   if (
     !body
@@ -1545,7 +1545,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
     console.log('error');
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const user_id = body.user.id;
@@ -2014,7 +2014,7 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   ) {
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(body.view.private_metadata);
@@ -2161,7 +2161,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   ) {
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const privateMetadata = JSON.parse(view.private_metadata);
@@ -2667,7 +2667,7 @@ async function myVotes(body, client, context) {
   ) {
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride( (body.team_id?body.team_id:body.team.id) );
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   const blocks = body.message.blocks;
@@ -2757,7 +2757,7 @@ async function usersVotes(body, client, context, value) {
     console.log('error');
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
@@ -2877,7 +2877,7 @@ async function usersVotes(body, client, context, value) {
 async function revealOrHideVotes(body, context, value) {
 
   let menuAtIndex = 0;
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
@@ -3133,7 +3133,7 @@ async function deletePoll(body, context, value) {
     console.log('error');
     return;
   }
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
@@ -3159,7 +3159,7 @@ async function deletePoll(body, context, value) {
 
 async function closePoll(body, client, context, value) {
   let menuAtIndex = 0;
-  const teamConfig = await getTeamOverride(body.team_id);
+  const teamConfig = await getTeamOverride((body.team_id?body.team_id:body.team.id));
   let appLang= gAppLang;
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
