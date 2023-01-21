@@ -25,12 +25,13 @@ const gIsAppLangSelectable = config.get('app_lang_user_selectable');
 const isUseResponseUrl = config.get('use_response_url');
 const gIsMenuAtTheEnd = config.get('menu_at_the_end');
 const botName = config.get('bot_name');
+const gIsShowDivider = config.get('show_divider');
 const gIsShowHelpLink = config.get('show_help_link');
 const gIsShowCommandInfo = config.get('show_command_info');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 
-const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
+const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","show_divider","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -575,12 +576,14 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
 
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  let isShowDivider = gIsShowDivider;
   let isShowHelpLink = gIsShowHelpLink;
   let isShowCommandInfo = gIsShowCommandInfo;
   let isShowNumberInChoice = gIsShowNumberInChoice;
   let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
 
   if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  if(teamConfig.hasOwnProperty("show_divider")) isShowDivider = teamConfig.show_divider;
   if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
   if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
@@ -974,7 +977,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
 
 
 
-    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
+    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
     if (null === blocks) {
       return;
@@ -2225,12 +2228,15 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   const cmd = createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang);
 
   let isMenuAtTheEnd = gIsMenuAtTheEnd;
+  let isShowDivider = gIsShowDivider;
   let isShowHelpLink = gIsShowHelpLink;
   let isShowCommandInfo = gIsShowCommandInfo;
   let isShowNumberInChoice = gIsShowNumberInChoice;
   let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
   if(privateMetadata.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = privateMetadata.menu_at_the_end;
   else if(teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
+  if(privateMetadata.hasOwnProperty("show_divider")) isShowDivider = privateMetadata.show_divider;
+  else if(teamConfig.hasOwnProperty("show_divider")) isShowDivider = teamConfig.show_divider;
   if(privateMetadata.hasOwnProperty("show_help_link")) isShowHelpLink = privateMetadata.show_help_link;
   else if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   if(privateMetadata.hasOwnProperty("show_command_info")) isShowCommandInfo = privateMetadata.show_command_info;
@@ -2240,7 +2246,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   if(privateMetadata.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = privateMetadata.add_number_emoji_to_choice_btn;
   else if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
-  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
+  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
   let mRequestBody = {
     token: context.botToken,
@@ -2283,7 +2289,7 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   return cmd;
 }
 
-function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd) {
+function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd) {
   if (
     !question
     || !options
@@ -2307,7 +2313,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         text: isHidden ? stri18n(userLang,'menu_reveal_vote') : stri18n(userLang,'menu_hide_vote'),
       },
       value:
-        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
+        JSON.stringify({action: 'btn_reveal', revealed: !isHidden, user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_divider: isShowDivider, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
     }, {
       text: {
         type: 'plain_text',
@@ -2325,7 +2331,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         type: 'plain_text',
         text: stri18n(userLang,'menu_close_poll'),
       },
-      value: JSON.stringify({action: 'btn_close', user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
+      value: JSON.stringify({action: 'btn_close', user: userId, user_lang: userLang, menu_at_the_end: isMenuAtTheEnd, show_divider: isShowDivider, show_help_link: isShowHelpLink, show_command_info: isShowCommandInfo}),
     }],
   }, {
     label: {
@@ -2435,6 +2441,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     hidden: isHidden,
     user_add_choice: isAllowUserAddChoice,
     menu_at_the_end: isMenuAtTheEnd,
+    show_divider: isShowDivider,
     show_help_link: isShowHelpLink,
     show_command_info: isShowCommandInfo,
     add_number_emoji_to_choice: isShowNumberInChoice,
@@ -2461,11 +2468,11 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     };
     blocks.push(block);
 
-
-    blocks.push({
-      type: 'divider',
-    });
-
+    //if(isShowDivider) {
+      blocks.push({
+        type: 'divider',
+      });
+    //}
 
   }
 
