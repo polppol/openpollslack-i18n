@@ -4,9 +4,9 @@
 I have make some change to make it more customizable such as 
 - Allow choices add by others
 - UI Language
-- UI Order (Show/Hide Element you don't want to make it cleaner
+- UI Order (Show/Hide Element you don't want to make it cleaner)
 
-(Please see deatil below)
+(Please see detail below)
 
 ### If I just want to use it without self-host?
 You can use "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html)
@@ -23,6 +23,7 @@ After add to slack please use `/poll config` to config what options you want to 
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
 - `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
+- `compact_ui` if set to `true`; Choice text will compact to voter name
 - `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
@@ -39,6 +40,7 @@ Usage:
 /poll config write app_lang [en/th/(or language file)]
 /poll config write app_lang_user_selectable [true/false]
 /poll config write menu_at_the_end [true/false]
+/poll config write compact_ui [true/false]
 /poll config write show_divider [true/false]
 /poll config write show_help_link [true/false]
 /poll config write show_command_info [true/false]
@@ -46,7 +48,7 @@ Usage:
 /poll config write add_number_emoji_to_choice_btn [true/false]
 ```
 
-## Modal
+## Example
 
 - if `response_url` is not enable or not in use, user will get feedback if poll can create in that channel or not (required `channels:read`,`groups:read`,`mpim:read`,`im:read` Permissions)
 
@@ -56,11 +58,14 @@ Usage:
   ![Alt text](./assets/poll-lang-select.png?raw=true "poll-lang-select")
 - User add choice
 
-  ![Alt text](./assets/poll-add-choice-modal-en.png?raw=true "User add choice")
   ![Alt text](./assets/poll-add-choice-en.png?raw=true "User add choice")
-- Show or hide divider between choice
-  ![Alt text](./assets/poll-div-on-en.png?raw=true "Divider ON")
-  ![Alt text](./assets/poll-div-off-en.png?raw=true "Divider OFF")
+- UI Config
+
+  ![Alt text](./assets/UI-compare.png?raw=true "UI-compare")
+- Emoji On/Off
+
+ ![Alt text](./assets/UI-emoji.png?raw=true "UI-Emoji")
+
 
 ## Additional Permissions
 

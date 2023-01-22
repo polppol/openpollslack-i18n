@@ -45,6 +45,8 @@ Inside the `config` folder, you have a `default.json.dist`. Copy it into `config
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
 - `menu_at_the_end` : if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn` : if set to `true`; Number emoji (customizeable) will show in the vote option text / button
+- `compact_ui` if set to `true`; Choice text will compact to voter name
+- `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` : if set to `false`; help link will be removed from poll
 - `show_command_info` : if set to `false`; command that use to create poll will be removed
 

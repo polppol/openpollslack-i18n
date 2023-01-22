@@ -9,6 +9,7 @@
   "add_number_emoji_to_choice": false,
   "add_number_emoji_to_choice_btn": false,
   "help_link": "https://gitlab.com/kazualex/openpollslack.git",
+  "compact_ui": true,
   "show_divider": true,
   "show_help_link": true,
   "show_command_info": true,
