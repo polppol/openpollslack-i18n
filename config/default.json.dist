@@ -21,5 +21,6 @@
   "oauth_failure": "https://openpoll.slack.alcor.space/?oauth=error",
   "support_url": "https://www.buymeacoffee.com/kazualex",
   "mongo_url": "mongodb://localhost:27017",
-  "mongo_db_name": "open_poll"
+  "mongo_db_name": "open_poll",
+  "log_level": "debug"
 }

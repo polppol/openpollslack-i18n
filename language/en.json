@@ -3,6 +3,7 @@
   "info_lang_select_hint": "Select Language",
   "info_lang_select_label": "Poll Language:",
   "info_anonymous": ":shushing_face: Anonymous poll",
+  "info_anonymous_notice": "NOTE: Poll creator still can see who voted which options",
   "info_limited": ":warning: Limited to `{{limit}}` vote",
   "info_s": "s",
   "info_hidden": ":ninja: Votes are hidden",
@@ -96,5 +97,7 @@
   "emoji_7": ":seven:",
   "emoji_8": ":eight:",
   "emoji_9": ":nine:",
-  "emoji_10": ":keycap_ten:"
+  "emoji_10": ":keycap_ten:",
+  "emoji_11": ":one::one:",
+  "emoji_12": ":one::two:"
 }

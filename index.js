@@ -31,6 +31,7 @@ const gIsShowHelpLink = config.get('show_help_link');
 const gIsShowCommandInfo = config.get('show_command_info');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
+const gLogLevel = config.get('log_level');
 
 const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
 
@@ -199,7 +200,8 @@ const receiver = new ExpressReceiver({
       }
     },
   },
-  logLevel: LogLevel.DEBUG,
+  logLevel: gLogLevel,
+  //logLevel: LogLevel.DEBUG,
 });
 
 receiver.router.get('/ping', (req, res) => {
@@ -2453,13 +2455,18 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     type: 'context',
     elements: elements,
   });
-  if(stri18n(userLang,'info_addon')!=="")
+  let addInfo = stri18n(userLang,'info_addon');
+  if(isAnonymous) {
+    if(addInfo!=="") addInfo += "\n";
+    addInfo+=stri18n(userLang,'info_anonymous_notice')
+  }
+  if(addInfo!=="")
   {
     blocks.push({
       type: 'context',
       elements: [{
         type: 'mrkdwn',
-        text: stri18n(userLang,'info_addon'),
+        text: addInfo,
       }],
     });
   }

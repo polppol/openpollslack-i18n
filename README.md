@@ -27,6 +27,7 @@ After add to slack please use `/poll config` to config what options you want to 
 - `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+- `log_level` valid options are: `debug` `info` `warn` `error`
 
 ## Team config (Override Server config)
 
@@ -62,11 +63,15 @@ Usage:
 - UI Config
 
   ![Alt text](./assets/UI-compare.png?raw=true "UI-compare")
+  ![Alt text](./assets/UI-compare-mobile.png?raw=true "UI-compare-mobile")
+  ![Alt text](./assets/UI-menu-location.png?raw=true "UI-menu-location")
 - Emoji On/Off
 
  ![Alt text](./assets/UI-emoji.png?raw=true "UI-Emoji")
 
+- You also can add notice to user when anonymous was used (since creator still can see their votes) by add text you want in `info_anonymous_notice` of language file 
 
+ ![Alt text](./assets/poll-anonymous-note.png?raw=true "poll-anonymous-note")
 ## Additional Permissions
 
 `channels:read`,`groups:read`,`mpim:read`,`im:read` : to check if bot in selected channel (if not using `response_url`)
