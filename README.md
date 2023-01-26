@@ -3,15 +3,17 @@
 
 I have make some change to make it more customizable such as 
 - Allow choices add by others
-- UI Language
-- UI Order (Show/Hide Element you don't want to make it cleaner)
+- Customizeable UI (Order, Show/Hide Element you don't want to make it cleaner)
+- UI Language, Multiple language support
+- Separate configuation for each Slack team.
+
 
 (Please see detail below)
 
 ### If I just want to use it without self-host?
-You can use "Add to slack" button [on site](https://siamhos.com/openpollplus/index_plus.html)
+You can use "Add to slack" button [on this ite](https://siamhos.com/openpollplus/index_plus.html)
 
-PLEASE NOTE: Link above will run lastest code on my devlopment server, you can use it for free, but it may contain bugs or may down for mantanance or database may be wiped at any time. 
+PLEASE NOTE: Link above will run lastest code on my devlopment server, you can use it for free, but it may contain bugs or may down for mantanance without any notice, If you found any bugs please feel free to report. 
 
 After add to slack please use `/poll config` to config what options you want to enable/disable on your Slack team.
 
@@ -21,7 +23,7 @@ After add to slack please use `/poll config` to config what options you want to 
 - `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI 
 - `use_response_url` if set to `true`; app will respond to request using `response_url` instead of using `app.client.chat.post`
   so user will be able to create poll in private channel without adding bot to that channel (using /command or Modal that called by /command, but not via shortcut), But it might get timeout if user not response after Modal was created (click create poll) within slack time limit(30 minutes).
-- `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu btn between question and answer when using smartphone
+- `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu button between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
 - `compact_ui` if set to `true`; Choice text will compact to voter name
 - `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
@@ -31,8 +33,8 @@ After add to slack please use `/poll config` to config what options you want to 
 
 ## Team config (Override Server config)
 
-If some of your team would like to using different config than what is on default.json you can use `/poll config` 
-- this command only work on user who install app to Slack only.
+If some of your team would like to using different config than what is on default.json you can use `/poll config` .
+- this command only work on user who install app to Slack only
 - If app was re-add to workspace all Override config will be removed
 
 Usage:
@@ -163,8 +165,9 @@ For both question and choices, feel free to use slack's emoji, `*bold*` `~strike
 
 ## Self hosted installation
 
-[self_host.md](self_host.md)
-
+- [self_host.md](self_host.md)
+- [webpage.md](webpage.md)
+- [apache-ssl.md](apache-ssl.md)
 ## Support me
 
 To support or thank me, you can contact me. I would be happy to provide you my PayPal address.

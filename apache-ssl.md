@@ -1,4 +1,4 @@
-apache ssl proxy example
+# Apache SSL Proxy example
 # httpd.conf
 ```
 	LoadModule proxy_module modules/mod_proxy.so
