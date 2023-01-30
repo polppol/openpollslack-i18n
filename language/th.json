@@ -86,6 +86,7 @@
   "err_poll_ch_exception": ":warning::warning:\nไม่สามารถตรวจสอบได้ว่าจะสามารถสร้างคำถามในห้องที่เลือกได้หรือไม่.",
   "err_duplicate_add_choice": "มีตัวเลือก [{{text}}] อยู่แล้ว",
   "err_process_command": "เกิดข้อผิดพลาดขณะประมวลผลคำสั่ง กรุณาตรวจสอบว่าคำสั่งถูกต้อง",
+  "err_invalid_command": "คำสั่งไม่ถูกต้อง, ชุดคำสั่ง (ยกเว้นคำถามและตัวเลือก) อาจจะมี *bold* ~strike~ _italics_ หรือ `code` ติดอยู่กรุณาตรวจสอบอีกครั้ง",
   "err_only_installer": "Only user that install this app can use this command",
   "err_mutex_lock": "[Try #{{{count_try}}] Error while attempt to acquire mutex lock. (กรุณารอสักครู่และลองใหม่)",
   "emoji_1": ":one:",

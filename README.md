@@ -6,6 +6,7 @@ I have make some change to make it more customizable such as
 - Customizeable UI (Order, Show/Hide Element you don't want to make it cleaner)
 - UI Language, Multiple language support
 - Separate configuation for each Slack team.
+- Better error handling that may crash the server
 
 
 (Please see detail below)

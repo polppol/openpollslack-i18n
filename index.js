@@ -972,7 +972,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
         token: context.botToken,
         channel: channel,
         //blocks: blocks,
-        text: stri18n(userLang,'err_process_command')
+        text: stri18n(userLang,'err_invalid_command')
         ,
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
