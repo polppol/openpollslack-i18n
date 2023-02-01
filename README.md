@@ -3,9 +3,10 @@
 
 I have make some change to make it more customizable such as 
 - Allow choices add by others
+- True Anonymous Vote (Poller can't see users votes if this mode is ON) : Default ON
 - Customizeable UI (Order, Show/Hide Element you don't want to make it cleaner)
 - UI Language, Multiple language support
-- Separate configuation for each Slack team.
+- Separate configuation for each Slack team
 - Better error handling that may crash the server
 
 
@@ -30,6 +31,7 @@ After add to slack please use `/poll config` to config what options you want to 
 - `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed
+- `true_anonymous` if set to `true`; Poller will no longer see who voted which options if poll is anonymous, If this mode is disabled; `info_anonymous_notice` will show to let users know that poller can still see there votes
 - `log_level` valid options are: `debug` `info` `warn` `error`
 
 ## Team config (Override Server config)
@@ -48,6 +50,7 @@ Usage:
 /poll config write show_divider [true/false]
 /poll config write show_help_link [true/false]
 /poll config write show_command_info [true/false]
+/poll config write true_anonymous [true/false]
 /poll config write add_number_emoji_to_choice [true/false]
 /poll config write add_number_emoji_to_choice_btn [true/false]
 ```
@@ -162,7 +165,7 @@ Remember the four freedoms of the GPL :
 /poll lang th "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
 ```
   
-For both question and choices, feel free to use slack's emoji, `*bold*` `~strike~` `_italics_` and `` `code` ``  
+For both question and choices, feel free to use Slack's emoji, `*bold*` `~strike~` `_italics_` and `` `code` ``  
 
 ## Self hosted installation
 

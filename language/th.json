@@ -75,6 +75,7 @@
   "err_delete_other": "คุณไม่สามารถ[ลบ]คำถามที่สร้างโดยผู้อื่นได้",
   "err_reveal_other": "คุณไม่สามารถ[เปิดเผย]คำถามที่สร้างโดยผู้อื่นได้",
   "err_see_all_vote_other": "คุณไม่สามารถ[ดูผลโหวตผู้อื่น]ของคำถามที่สร้างโดยผู้อื่นได้",
+  "err_see_all_vote_true_anonymous": "ไม่สามารถ[ดูผลโหวตผู้อื่น]ได้. เนื่องจากเป็นคำถามแบบ `Anonymous(ไม่ระบุตัวตน)` และตัวเลือก `True Anonymous` ถูกเปิดอยู่",
   "err_poll_too_old": "คำถามของคุณเก่าเกินไป กรุณาสร้างใหม่",
   "err_vote_over_limit": "คุณเลือกครบ `{{limit}}` ตัวเลือกแล้วหากต้องการเปลี่ยนให้กดตัวเลือกที่เลือกไปแล้วออกก่อน",
   "err_vote_exception": "เกิดข้อผิดพลาดกรุณาลองใหม่อีกครั้ง/An error occurred during vote processing. Please try again in few seconds.",

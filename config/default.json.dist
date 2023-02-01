@@ -13,6 +13,7 @@
   "show_divider": true,
   "show_help_link": true,
   "show_command_info": true,
+  "true_anonymous": true,
   "client_id": "",
   "client_secret": "",
   "signing_secret": "",

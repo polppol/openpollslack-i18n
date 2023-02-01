@@ -75,6 +75,7 @@
   "err_delete_other": "You can't delete poll from another user.",
   "err_reveal_other": "You can't reveal poll from another user.",
   "err_see_all_vote_other": "You can't see all users votes.",
+  "err_see_all_vote_true_anonymous": "You can't see all users votes. Because poll is `Anonymous` and `True Anonymous` mode is ENABLE",
   "err_poll_too_old": "Your poll is too old. Please create new one.",
   "err_vote_over_limit": "You can't vote anymore. Remove a vote to choose another option. (limit =`{{limit}}`)",
   "err_vote_exception": "An error occurred during vote processing. Please try again in few seconds.",

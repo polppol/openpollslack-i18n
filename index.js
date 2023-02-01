@@ -29,11 +29,12 @@ const gIsCompactUI = config.get('compact_ui');
 const gIsShowDivider = config.get('show_divider');
 const gIsShowHelpLink = config.get('show_help_link');
 const gIsShowCommandInfo = config.get('show_command_info');
+const gTrueAnonymous = config.get('true_anonymous');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 const gLogLevel = config.get('log_level');
 
-const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
+const validTeamOverrideConfigTF = ["app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn"];
 
 const client = new MongoClient(config.get('mongo_url'));
 let orgCol = null;
@@ -583,6 +584,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   let isShowDivider = gIsShowDivider;
   let isShowHelpLink = gIsShowHelpLink;
   let isShowCommandInfo = gIsShowCommandInfo;
+  let isTrueAnonymous = gTrueAnonymous;
   let isShowNumberInChoice = gIsShowNumberInChoice;
   let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
 
@@ -591,6 +593,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
   if(teamConfig.hasOwnProperty("show_divider")) isShowDivider = teamConfig.show_divider;
   if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  if(teamConfig.hasOwnProperty("true_anonymous")) isTrueAnonymous = teamConfig.true_anonymous;
   if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
   if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
@@ -981,7 +984,7 @@ app.command(`/${slackCommand}`, async ({ ack, body, client, command, context, sa
 
 
 
-    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
+    const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isTrueAnonymous, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
     if (null === blocks) {
       return;
@@ -1590,6 +1593,8 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
   if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   let isShowCommandInfo = gIsShowCommandInfo;
   if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  let isTrueAnonymous = gTrueAnonymous;
+  if(teamConfig.hasOwnProperty("true_anonymous")) isTrueAnonymous = teamConfig.true_anonymous;
   let isShowNumberInChoice = gIsShowNumberInChoice;
   if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
   let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
@@ -1637,6 +1642,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                   if(voteBtnVal.hasOwnProperty("show_divider")) isShowDivider = voteBtnVal.show_divider;
                   if(voteBtnVal.hasOwnProperty("show_help_link")) isShowHelpLink = voteBtnVal.show_help_link;
                   if(voteBtnVal.hasOwnProperty("show_command_info")) isShowCommandInfo = voteBtnVal.show_command_info;
+                  if(voteBtnVal.hasOwnProperty("true_anonymous")) isTrueAnonymous = voteBtnVal.true_anonymous;;
                   if(voteBtnVal.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = voteBtnVal.add_number_emoji_to_choice;
                   if(voteBtnVal.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = voteBtnVal.add_number_emoji_to_choice_btn;
 
@@ -1755,6 +1761,8 @@ async function createModal(context, client, trigger_id,response_url) {
     if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
     let isShowCommandInfo = gIsShowCommandInfo;
     if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+    let isTrueAnonymous = gTrueAnonymous;
+    if(teamConfig.hasOwnProperty("true_anonymous")) isTrueAnonymous = teamConfig.true_anonymous;
     let isShowNumberInChoice = gIsShowNumberInChoice;
     if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
     let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
@@ -1768,6 +1776,7 @@ async function createModal(context, client, trigger_id,response_url) {
       menu_at_the_end: isMenuAtTheEnd,
       show_help_link: isShowHelpLink,
       show_command_info: isShowCommandInfo,
+      true_anonymous: isTrueAnonymous,
       add_number_emoji_to_choice: isShowNumberInChoice,
       add_number_emoji_to_choice_btn: isShowNumberInChoiceBtn,
       response_url: response_url,
@@ -2265,6 +2274,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   let isShowDivider = gIsShowDivider;
   let isShowHelpLink = gIsShowHelpLink;
   let isShowCommandInfo = gIsShowCommandInfo;
+  let isTrueAnonymous = gTrueAnonymous;
   let isShowNumberInChoice = gIsShowNumberInChoice;
   let isShowNumberInChoiceBtn = gIsShowNumberInChoiceBtn;
   if(privateMetadata.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = privateMetadata.menu_at_the_end;
@@ -2277,12 +2287,14 @@ app.view('modal_poll_submit', async ({ ack, body, view, context }) => {
   else if(teamConfig.hasOwnProperty("show_help_link")) isShowHelpLink = teamConfig.show_help_link;
   if(privateMetadata.hasOwnProperty("show_command_info")) isShowCommandInfo = privateMetadata.show_command_info;
   else if(teamConfig.hasOwnProperty("show_command_info")) isShowCommandInfo = teamConfig.show_command_info;
+  if(privateMetadata.hasOwnProperty("true_anonymous")) isTrueAnonymous = privateMetadata.true_anonymous;
+  else if(teamConfig.hasOwnProperty("true_anonymous")) isTrueAnonymous = teamConfig.true_anonymous;
   if(privateMetadata.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = privateMetadata.add_number_emoji_to_choice;
   else if(teamConfig.hasOwnProperty("add_number_emoji_to_choice")) isShowNumberInChoice = teamConfig.add_number_emoji_to_choice;
   if(privateMetadata.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = privateMetadata.add_number_emoji_to_choice_btn;
   else if(teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
-  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
+  const blocks = createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isTrueAnonymous, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd);
 
   let mRequestBody = {
     token: context.botToken,
@@ -2325,7 +2337,7 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
   return cmd;
 }
 
-function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd) {
+function createPollView(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isTrueAnonymous, isShowNumberInChoice, isShowNumberInChoiceBtn, userLang, userId, cmd) {
   if (
     !question
     || !options
@@ -2355,7 +2367,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
         type: 'plain_text',
         text: stri18n(userLang,'menu_all_user_vote'),
       },
-      value: JSON.stringify({action: 'btn_users_votes', user: userId, user_lang: userLang}),
+      value: JSON.stringify({action: 'btn_users_votes', user: userId, user_lang: userLang, anonymous: isAnonymous, true_anonymous: isTrueAnonymous}),
     }, {
       text: {
         type: 'plain_text',
@@ -2456,7 +2468,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     elements: elements,
   });
   let addInfo = stri18n(userLang,'info_addon');
-  if(isAnonymous) {
+  if(isAnonymous&&!isTrueAnonymous) {
     if(addInfo!=="") addInfo += "\n";
     addInfo+=stri18n(userLang,'info_anonymous_notice')
   }
@@ -2486,6 +2498,7 @@ function createPollView(question, options, isAnonymous, isLimited, limit, isHidd
     show_divider: isShowDivider,
     show_help_link: isShowHelpLink,
     show_command_info: isShowCommandInfo,
+    true_anonymous: isTrueAnonymous,
     add_number_emoji_to_choice: isShowNumberInChoice,
     add_number_emoji_to_choice_btn: isShowNumberInChoiceBtn,
     voters: [],
@@ -2822,6 +2835,22 @@ async function usersVotes(body, client, context, value) {
     await postChat(body.response_url,'ephemeral',mRequestBody);
 
     return;
+  }
+
+  if(value.hasOwnProperty('anonymous') && value.hasOwnProperty('true_anonymous'))
+  {
+    if(value.anonymous==true&&value.true_anonymous==true) {
+      let mRequestBody = {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        attachments: [],
+        text: stri18n(appLang,'err_see_all_vote_true_anonymous'),
+      };
+      await postChat(body.response_url,'ephemeral',mRequestBody);
+
+      return;
+    }
   }
 
   const message = body.message;
