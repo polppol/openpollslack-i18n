@@ -1,7 +1,7 @@
 
 # About this fork 
 
-I have make some change to make it more customizable such as 
+I have make some change to make it more customizable such as:
 - Allow choices add by others
 - True Anonymous Vote (Poller can't see users votes if this mode is ON) : Default ON
 - Customizeable UI (Order, Show/Hide Element you don't want to make it cleaner)
@@ -13,12 +13,13 @@ I have make some change to make it more customizable such as
 (Please see detail below)
 
 ### If I just want to use it without self-host?
-You can use "Add to slack" button [on this ite](https://siamhos.com/openpollplus/index_plus.html)
+You can use "Add to slack" button [on this site](https://siamhos.com/openpollplus/index_plus.html)
 
 PLEASE NOTE: Link above will run lastest code on my devlopment server, you can use it for free, but it may contain bugs or may down for mantanance without any notice, If you found any bugs please feel free to report. 
 
 After add to slack please use `/poll config` to config what options you want to enable/disable on your Slack team.
 
+If you didn't use any of these Feature you might want to use original App here [GitLab](https://gitlab.com/openpollslack/openpollslack).
 
 ## Additional server config (config/default.json)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
