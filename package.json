@@ -29,7 +29,7 @@
     "cli-progress": "^3.12.0",
     "compression": "^1.7.5",
     "config": "^3.3.12",
-    "cron-parser": "^4.9.0",
+    "cron-parser": "^5.2.0",
     "cronstrue": "^2.52.0",
     "express": "^5.0.1",
     "glob": "^11.0.0",
