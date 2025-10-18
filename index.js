@@ -13,7 +13,7 @@ const fileLang = require('node:fs');
 const {globSync} = require("glob");
 
 const cron = require('node-cron');
-const cronParser = require('cron-parser');
+const { CronExpressionParser } = require('cron-parser');
 const cronstrue = require('cronstrue');
 const cronstrueOp = { use24HourTimeFormat: true };
 
@@ -290,11 +290,11 @@ function calculateNextScheduleTime(cronString,timeZoneString) {
     const options = {
       tz: timeZoneString
     };
-    const interval = cronParser.parseExpression(cronString,options);
+    const interval = CronExpressionParser.parse(cronString,options);
     return interval.next().toDate();
   } catch (e) {
     //console.log(e);
-    //logger.debug(e.toString()+"\n"+e.stack);
+    logger.debug(e.toString()+"\n"+e.stack);
     return null;
   }
 }
