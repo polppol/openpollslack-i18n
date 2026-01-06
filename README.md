@@ -251,6 +251,7 @@ Usage:
 /poll config write add_number_emoji_to_choice [true/false]
 /poll config write add_number_emoji_to_choice_btn [true/false]
 /poll config write delete_data_on_poll_delete [true/false]
+/poll config write display_poller_name [tag/none]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -282,6 +283,7 @@ Usage:
 - `schedule_limit_hrs` schedule will deny to re-run if schedule jobs is shorter than this number (hours)
 - `schedule_max_run` Maximum/Default run count for single schedule that can be set.
 - `schedule_auto_delete_invalid_day` Schedules that already finished, done, no longer valid, disabled will be automatically delete after this value(days)
+- `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
 
 ## Example
 

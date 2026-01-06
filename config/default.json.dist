@@ -38,5 +38,6 @@
   "log_dir": "logs",
   "schedule_limit_hrs": 11,
   "schedule_max_run": 365,
-  "schedule_auto_delete_invalid_day": 30
+  "schedule_auto_delete_invalid_day": 30,
+  "display_poller_name": "tag"
 }
