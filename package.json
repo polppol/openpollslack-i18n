@@ -1,6 +1,6 @@
 {
   "name": "openpollplus",
-  "version": "4.0.0.5",
+  "version": "4.0.0.6",
   "description": "Open source poll slack app",
   "main": "index.js",
   "scripts": {
@@ -23,22 +23,22 @@
   },
   "homepage": "https://github.com/polppol/openpollslack-i18n#readme",
   "dependencies": {
-    "@slack/bolt": "^4.5.0",
+    "@slack/bolt": "^4.6.0",
     "async-mutex": "^0.5.0",
-    "body-parser": "^2.2.0",
+    "body-parser": "^2.2.2",
     "cli-progress": "^3.12.0",
     "compression": "^1.8.1",
     "config": "^4.1.1",
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.3.0",
-    "@types/express": "^5.0.3",
+    "@types/express": "^5.0.6",
     "glob": "^11.0.3",
     "helmet": "^8.1.0",
     "moment-timezone": "^0.6.0",
-    "mongodb": "^6.20.0",
+    "mongodb": "^6.21.0",
     "node-cron": "^4.2.1",
     "uuid": "^13.0.0",
-    "winston": "^3.18.3"
+    "winston": "^3.19.0"
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
