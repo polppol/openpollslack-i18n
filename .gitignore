@@ -7,3 +7,4 @@ config/open_poll.json
 config/polls.json
 log
 logs
+.claude
