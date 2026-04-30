@@ -2724,6 +2724,10 @@ const createModalBlockInputDelete = (userLang)  => {
 })();
 
 app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
+  // Ack first — Slack's 3-second clock starts the moment the event arrives.
+  // Any I/O below runs after the ack so a slow Mongo or Slack call can't
+  // trigger an ack timeout.
+  await ack();
 
   if (
     !body
@@ -2737,12 +2741,18 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     || !body.view.id
     || !body.view.private_metadata
   ) {
-    logger.info('error');
+    logger.warn('btn_add_choice: missing required body fields');
     return;
   }
-  const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
-  let appLang= gAppLang;
-  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang
+
+  // Read user_lang from the modal's private_metadata — set when the modal
+  // was opened, preserved across updates. Avoids a Mongo round-trip per click.
+  let appLang = gAppLang;
+  try {
+    const pm = JSON.parse(body.view.private_metadata);
+    if (pm.user_lang) appLang = pm.user_lang;
+  } catch (e) { /* fall through to gAppLang */ }
+
   let blocks = body.view.blocks;
   const hash = body.view.hash;
 
@@ -2775,22 +2785,21 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
   };
 
   try {
-    const result = await client.views.update({
+    await client.views.update({
       token: context.botToken,
       hash: hash,
       view: view,
       view_id: body.view.id,
     });
-
-    await ack();
+  } catch (e) {
+    // We already acked. The view simply doesn't update — most commonly a
+    // hash_mismatch from rapid successive clicks racing the previous update.
+    logger.debug('btn_add_choice views.update failed (user may click too fast):', e?.data?.error || e?.message || e);
   }
-  catch (e) {
-    //do not ack so user can see some error
-    logger.debug("Error on btn_add_choice (maybe user click too fast");
-  }
-
 });
 app.action('btn_del_choice', async ({ action, ack, body, client, context }) => {
+  // Ack first — see btn_add_choice above for the rationale.
+  await ack();
 
   if (
     !body
@@ -2804,12 +2813,12 @@ app.action('btn_del_choice', async ({ action, ack, body, client, context }) => {
     || !body.view.id
     || !body.view.private_metadata
   ) {
-    logger.info('error');
+    logger.warn('btn_del_choice: missing required body fields');
     return;
   }
-  const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
-  let appLang= gAppLang;
-  if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang
+
+  // appLang isn't used here — we only filter blocks — but kept for symmetry
+  // with btn_add_choice in case a future logger.* line wants the user lang.
   let blocks = body.view.blocks;
   const hash = body.view.hash;
 
@@ -2835,20 +2844,16 @@ app.action('btn_del_choice', async ({ action, ack, body, client, context }) => {
   };
 
   try {
-    const result = await client.views.update({
+    await client.views.update({
       token: context.botToken,
       hash: hash,
       view: view,
       view_id: body.view.id,
     });
-
-    await ack();
+  } catch (e) {
+    // We already acked. Most likely cause is hash_mismatch from rapid clicks.
+    logger.debug('btn_del_choice views.update failed (user may click too fast):', e?.data?.error || e?.message || e);
   }
-  catch (e) {
-    //do not ack so user can see some error
-    logger.debug("Error on btn_del_choice (maybe user click too fast");
-  }
-
 });
 
 app.action('btn_vote', async ({ action, ack, body, context }) => {
