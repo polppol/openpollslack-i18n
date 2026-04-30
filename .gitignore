@@ -1,10 +1,36 @@
+# Dependencies
 node_modules
 package-lock.json
 yarn.lock
 yarn-error.log
+
+# Per-deployment config (CONTAINS SECRETS — never commit)
 config/default.json
 config/open_poll.json
 config/polls.json
+
+# Logs
 log
 logs
+*.log
+
+# Migration script scratch files (created by scripts/migrate-v3.js
+# and utils/migrations.js — contain user/vote data)
+tmp_token.json
+tmp_votes.json
+tmp_closed.json
+closed_reports.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
 .claude
