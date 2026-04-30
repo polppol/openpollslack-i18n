@@ -154,41 +154,27 @@ if (gLogToFile) {
   const filenameLogApp = path.join(gLogDir, logTS+'_app.log');
   const filenameLogBolt = path.join(gLogDir, logTS+'_bolt.log');
 
-  let logFileWritable = true;
-  fs.access(filenameLogApp, fs.constants.W_OK, (err) => {
-
-    if (err) {
-      if (err.code === 'ENOENT') {
-        //logger.info('The file does not exist, it can be created');
-        logger.info(`Log file '${filenameLogApp}' is writable`);
-      } else {
-        logger.error(`Log file '${filenameLogApp}' is not writable, SKIP LOG TO FILE!`);
-        logFileWritable = false;
-      }
-    } else {
-      logger.info(`Log file '${filenameLogApp}' is writable`);
+  // Sync access check — must be sync because the result has to be known
+  // BEFORE we construct the winston loggers below (transports.File is
+  // pushed into the arrays winston reads at construction time).
+  // ENOENT is treated as writable: winston will create the file on first
+  // write, assuming the directory is writable (we created it above).
+  const _isLogFileWritable = (filename) => {
+    try {
+      fs.accessSync(filename, fs.constants.W_OK);
+      return true;
+    } catch (err) {
+      if (err.code === 'ENOENT') return true;
+      console.error(`Log file '${filename}' is not writable, SKIP LOG TO FILE!`, err.message);
+      return false;
     }
-  });
-  if(logFileWritable) {
-    appTransportsArray.push(new transports.File({ filename:filenameLogApp }));
+  };
+
+  if (_isLogFileWritable(filenameLogApp)) {
+    appTransportsArray.push(new transports.File({ filename: filenameLogApp }));
   }
-
-  logFileWritable = true;
-  fs.access(filenameLogBolt, fs.constants.W_OK, (err) => {
-    if (err) {
-      if (err.code === 'ENOENT') {
-        //logger.info('The file does not exist, it can be created');
-        logger.info(`Log file '${filenameLogBolt}' is writable`);
-      } else {
-        logger.error(`Log file '${filenameLogBolt}' is not writable, SKIP LOG TO FILE!`);
-        logFileWritable = false;
-      }
-    } else {
-      logger.info(`Log file '${filenameLogBolt}' is writable`);
-    }
-  });
-  if(logFileWritable) {
-    boltTransportsArray.push(new transports.File({ filename:filenameLogBolt }));
+  if (_isLogFileWritable(filenameLogBolt)) {
+    boltTransportsArray.push(new transports.File({ filename: filenameLogBolt }));
   }
 }
 
@@ -217,9 +203,10 @@ const loggerBolt = createLogger({
 logger.info('Server starting...');
 
 try {
-  logger.info('Connecting to database server...');
-  mClient.connect();
-  logger.info('Connected successfully to server')
+  // mClient.connect() is awaited inside the startup IIFE below so a failed
+  // connection surfaces at startup instead of on the first user request.
+  // The driver auto-connects on first op anyway, so the synchronous handle
+  // assignments here don't actually do I/O.
   const db = mClient.db(config.get('mongo_db_name'));
   orgCol = db.collection('token');
   userCol = db.collection('user_config');
@@ -1326,34 +1313,60 @@ app.event('app_home_opened', async ({ event, client, context }) => {
 
     //if (event.tab === 'messages') {
 
-      let uConfig = await getUserConfig(teamOrEntId,event.user);
-      if(uConfig!==null && uConfig.flag?.hasOwnProperty("welcome_send") && uConfig.flag?.welcome_send === true) {
+      // Atomic compare-and-set: flip welcome_send to true ONLY if it isn't
+      // already true. Two simultaneous app_home_opened events used to both
+      // pass a stale read-then-write check and DM the user twice. updateOne
+      // with $set also preserves any existing `config.*` fields (the previous
+      // replaceOne would wipe them).
+      const setFlagRes = await userCol.updateOne(
+        {
+          team_id: teamOrEntId,
+          user_id: event.user,
+          $or: [
+            { flag: { $exists: false } },
+            { 'flag.welcome_send': { $ne: true } },
+          ],
+        },
+        {
+          $set: {
+            'flag.welcome_send': true,
+            'flag.welcome_send_ts': new Date(),
+          },
+        }
+      );
 
-      } else {
-        // Post a welcome message to the user
+      let shouldPostWelcome = setFlagRes.matchedCount > 0;
+
+      if (!shouldPostWelcome) {
+        // Either welcome_send is already true (skip below), or the document
+        // doesn't exist at all — insert it now.
+        const existing = await userCol.findOne({
+          team_id: teamOrEntId,
+          user_id: event.user,
+        });
+        if (existing === null) {
+          try {
+            await userCol.insertOne({
+              team_id: teamOrEntId,
+              user_id: event.user,
+              flag: {
+                welcome_send: true,
+                welcome_send_ts: new Date(),
+              },
+            });
+            shouldPostWelcome = true;
+          } catch (e) {
+            // Race: a concurrent event just inserted. They post; we skip.
+            logger.debug('welcome flag insert race lost', e);
+          }
+        }
+      }
+
+      if (shouldPostWelcome) {
         await client.chat.postMessage({
           channel: event.channel,
           text: parameterizedString(stri18n(appLang, 'info_welcome_message'), {slack_command: slackCommand, link: helpLink}),
         });
-      if(uConfig===null) {
-        uConfig = {
-          team_id: teamOrEntId,
-          user_id: event.user,
-        }
-      }
-      if(!uConfig.hasOwnProperty('flag')) uConfig.flag = { }
-      uConfig.flag.welcome_send = true;
-      uConfig.flag.welcome_send_ts = new Date();
-        await userCol.replaceOne({
-          team_id: teamOrEntId,
-          user_id: event.user,
-          },
-          uConfig
-          , {
-            upsert: true,
-          }
-        );
-
       }
 
     //}
@@ -2801,6 +2814,16 @@ const createModalBlockInputDelete = (userLang)  => {
 };
 
 (async () => {
+  try {
+    logger.info('Connecting to database server...');
+    await mClient.connect();
+    logger.info('Connected successfully to server');
+  } catch (e) {
+    logger.error('Failed to connect to MongoDB');
+    logger.error(e.toString() + "\n" + e.stack);
+    process.exit(1);
+  }
+
   logger.info('Start database migration.');
   await migrations.init();
   await migrations.migrate();
@@ -5188,18 +5211,18 @@ async function commandInfo(body, client, context, value) {
   let pollCmd = "NOTFOUND";
   let poll_id = value.p_id.toString();
   if(poll_id.length === 0) poll_id = "N/A";
+  let createdVia = "NOTFOUND";
   if (pollData) {
     if(pollData.hasOwnProperty("cmd")) {
       if(pollData.cmd.trim().length > 0) {
         pollCmd = pollData.cmd;
       }
     }
+    createdVia = pollData.cmd_via ?? "N/A";
+    if(pollData.cmd_via_ref!=null) createdVia += `\nSource ID: ${pollData.cmd_via_ref}`
+    if(pollData.cmd_via_note!=null) createdVia += `\nNote: ${pollData.cmd_via_note}`
+    if(pollData.cmd_via_ref!=null) createdVia += "\n"+parameterizedString(stri18n(appLang,'task_usage_stop_poll'),{slack_command:slackCommand, poll_id: pollData.cmd_via_ref } );
   }
-
-  let createdVia = pollData.cmd_via;
-  if(pollData.cmd_via_ref!=null) createdVia += `\nSource ID: ${pollData.cmd_via_ref}`
-  if(pollData.cmd_via_note!=null) createdVia += `\nNote: ${pollData.cmd_via_note}`
-  if(pollData.cmd_via_ref!=null) createdVia += "\n"+parameterizedString(stri18n(appLang,'task_usage_stop_poll'),{slack_command:slackCommand, poll_id: pollData.cmd_via_ref } );
   let blocks = [
     {
       type: 'section',
@@ -5914,7 +5937,7 @@ async function closePollById(poll_id) {
         pollData.hasOwnProperty('user_id') &&
         pollData.hasOwnProperty('ts')
     ) {
-      if (!pollData.team || !pollData.channel || !pollData.user_id | !pollData.ts) {
+      if (!pollData.team || !pollData.channel || !pollData.user_id || !pollData.ts) {
         logger.warn(`Cannot close poll_id ${poll_id} on closePollById due to incomplete data `);
         await pollCol.updateOne(
             {_id: pollData._id},
@@ -6154,6 +6177,7 @@ async function closePoll(body, client, context, value) {
           await closedCol.insertOne({
             //poll_id: value.p_id,
             team: message.team,
+            channel,
             ts: message.ts,
             closed: false,
           });
