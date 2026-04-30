@@ -7,10 +7,11 @@ const { Migrations } = require('./utils/migrations');
 
 const { Mutex } = require('async-mutex');
 
-const fileLang = require('node:fs');
-
-//const globLang = require('glob');
-const {globSync} = require("glob");
+const { isValidISO8601 } = require('./src/util/iso');
+const { getTeamOrEnterpriseId } = require('./src/util/teamId');
+const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
+const { convertHoursToString, toBoolean } = require('./src/util/format');
+const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
 const cron = require('node-cron');
 const { CronExpressionParser } = require('cron-parser');
@@ -24,10 +25,6 @@ const path = require('path');
 const moment = require('moment-timezone');
 
 const { v4: uuidv4 } = require('uuid');
-
-let langDict = {};
-
-let langList = {};
 
 const port = config.get('port');
 const signing_secret = config.get('signing_secret');
@@ -79,25 +76,6 @@ let scheduleCol = null;
 let migrations = null;
 
 const mutexes = {};
-
-// Define the accepted quotes and the standard quote
-const acceptedQuotes = [
-  `"`,    // Standard Double Quote (U+0022)
-  `“`,    // Left Double Quotation Mark (U+201C)
-  `”`,    // Right Double Quotation Mark (U+201D)
-  `„`,    // Double Low-9 Quotation Mark (U+201E)
-  `‟`,    // Double High-Reversed-9 Quotation Mark (U+201F)
-  // `«`,    // Left-Pointing Double Angle Quotation Mark (U+00AB)
-  // `»`,    // Right-Pointing Double Angle Quotation Mark (U+00BB)
-  `〝`,   // Reversed Double Prime Quotation Mark (U+301D)
-  `〞`,   // Double Prime Quotation Mark (U+301E)
-  `〟`,   // Low Double Prime Quotation Mark (U+301F)
-  // `「`,   // Left Corner Bracket (U+300C, used in CJK languages)
-  // `」`,   // Right Corner Bracket (U+300D, used in CJK languages)
-  // `『`,   // Left White Corner Bracket (U+300E, used in CJK languages)
-  // `』`    // Right White Corner Bracket (U+300F, used in CJK languages)
-];
-const standardQuote = `"`;
 
 console.log('Init Logger..');
 
@@ -239,36 +217,7 @@ const createDBIndex = async () => {
   scheduleCol.createIndex({ next_ts: 1, is_enable: 1 , is_done: 1  });
 }
 
-let langCount = 0;
-
-//globLang.sync( './language/*.json' ).forEach( function( file ) {
-globSync( './language/*.json' ).forEach( function( file ) {
-  let dash = file.split(/[\\/]+/);
-    let dot = dash[dash.length-1].split(".");
-    if(dot.length === 2) {
-      let lang = dot[0];
-      logger.info("Lang file ["+lang+"]: "+file);
-      let fileData = fileLang.readFileSync(file);
-      langDict[lang] = JSON.parse(fileData.toString());
-      if(langDict[lang].hasOwnProperty('info_lang_name'))
-        langList[lang] = langDict[lang]['info_lang_name'];
-      else
-        langList[lang] = lang;
-      langCount++;
-    }
-});
-
-
-logger.info("Lang Count: "+langCount);
-logger.info("Selected Lang: "+gAppLang);
-if(!langDict.hasOwnProperty('en')) {
-  logger.error("language/en.json NOT FOUND!");
-  throw new Error("language/en.json NOT FOUND!");
-}
-if(!langDict.hasOwnProperty(gAppLang)) {
-  logger.error(`language/${gAppLang}.json NOT FOUND!`);
-  throw new Error(`language/${gAppLang}.json NOT FOUND!`);
-}
+loadLanguages(logger, gAppLang);
 
 logger.info('Init cron jobs...');
 
@@ -625,71 +574,6 @@ const autoCleanupTask = async () => {
   }
 };
 
-const parameterizedString = (str,varArray) => {
-  if(str===undefined) str = `MissingStr ${str}`;
-  let outputStr = str;
-  for (let key in varArray) {
-    if (varArray.hasOwnProperty(key)) {
-      outputStr = outputStr.replaceAll("{{"+key+"}}",varArray[key])
-    }
-  }
-  return outputStr;
-}
-
-const stri18n = (lang,key) => {
-  if(langDict.hasOwnProperty(lang)) {
-    if(langDict[lang].hasOwnProperty(key)) {
-      return langDict[lang][key];
-    }
-  }
-  //fallback to en if not exist
-  if(langDict['en'].hasOwnProperty(key)) {
-    return langDict['en'][key];
-  }
-  else {
-    return `MissingStr ${key}`;
-  }
-}
-
-function getTeamOrEnterpriseId (body) {
-  body = JSON.parse(JSON.stringify(body));
-  //logger.debug(body);
-  if(body.hasOwnProperty('isEnterpriseInstall')) {
-    if(body.isEnterpriseInstall==='true' || body.isEnterpriseInstall === true) {
-      if(body.hasOwnProperty('enterprise_id')) return body.enterprise_id;
-      else if(body.hasOwnProperty('enterpriseId')) return body.enterpriseId;
-      else if(body?.enterprise?.id !== undefined) return body.enterprise.id;
-    }
-    else {
-      if(body.hasOwnProperty('team_id')) return body.team_id;
-      else if(body.hasOwnProperty('teamId')) return body.teamId;
-      else if(body?.team?.id !== undefined) return body.team.id;
-    }
-  }
-  else if(body.hasOwnProperty('is_enterprise_install')) {
-    if(body.is_enterprise_install==='true' || body.is_enterprise_install === true ) {
-      if(body.hasOwnProperty('enterprise_id')) return body.enterprise_id;
-      else if(body.hasOwnProperty('enterpriseId')) return body.enterpriseId;
-      else if(body?.enterprise?.id !== undefined) return body.enterprise.id;
-    }
-    else {
-      if(body.hasOwnProperty('team_id')) return body.team_id;
-      else if(body.hasOwnProperty('teamId')) return body.teamId;
-      else if(body?.team?.id !== undefined) return body.team.id;
-    }
-  }
-  else
-  {
-    if(body.hasOwnProperty('enterprise_id')) return body.enterprise_id;
-    else if(body.hasOwnProperty('enterpriseId')) return body.enterpriseId;
-    else if(body?.enterprise?.id !== undefined) return body.enterprise.id;
-    else if(body.hasOwnProperty('team_id')) return body.team_id;
-    else if(body.hasOwnProperty('teamId')) return body.teamId;
-    else if(body?.team?.id !== undefined) return body.team.id;
-  }
-  return null;
-}
-
 const getTeamInfo = async (mTeamId) => {
   let ret = {};
   try {
@@ -972,15 +856,6 @@ const postChat = async (url,type,requestBody) => {
   }
   ret.status = true;
   return ret;
-}
-
-const slackNumToEmoji = (seq,userLang) => {
-  let outText = "["+seq+"]";
-  if(langDict.hasOwnProperty(userLang))
-    if(langDict[userLang].hasOwnProperty('emoji_'+seq))
-      outText = langDict[userLang]['emoji_'+seq];
-
-  return outText;
 }
 
 function createHelpBlock(appLang) {
@@ -6601,19 +6476,6 @@ async function updateVoteBlock(team,channel,ts,blocks,poll,userLang,isHidden,isC
   return blocks;
 }
 
-function isValidISO8601(inputTS) {
-  // Regular expression to check ISO 8601 format
-  const regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(.\d+)?([+-]\d{2}:\d{2}|Z)?$/;
-
-  if (regex.test(inputTS)) {
-    // Check if the date is valid
-    const date = new Date(inputTS);
-    return !isNaN(date.getTime());
-  } else {
-    return false;
-  }
-}
-
 async function getAndlocalizeTimeStamp(botToken, userId, mongoDateObject) {
   //const timeFormat = 'ddd MMM DD YYYY HH:mm:ss [GMT]ZZ';
   //const iso8601Format = 'YYYY-MM-DDTHH:mm:ssZ'; // ISO 8601 format
@@ -6660,32 +6522,6 @@ function getIANATimezoneFromISO8601(isoString) {
   });
 
   return matchingTimezone || offset; // returns IANA timezone name or the offset
-}
-
-function convertHoursToString(hourNumber) {
-  // Extract whole hours
-  let hours = Math.floor(hourNumber);
-
-  // Convert fractional hours to minutes
-  let minutes = Math.round((hourNumber - hours) * 60);
-
-  // Adjust for when minutes round to 60
-  if (minutes === 60) {
-    hours += 1;
-    minutes = 0;
-  }
-
-  // Format the string
-  return `${hours}:${minutes.toString().padStart(2, '0')}`;
-}
-
-
-function toBoolean(value) {
-  return (value === 1 || value === true);
-}
-
-function getSupportDoubleQuoteToStr() {
-  return acceptedQuotes.map(item => `\`${item}\``).join(' ');
 }
 
 //hasNestedProperty(objData, 'key1.key2.key3')
