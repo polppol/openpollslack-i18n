@@ -154,7 +154,7 @@
   "poll_edit_not_posted": "Ce sondage n'a pas encore été publié, il ne peut donc pas être modifié.",
   "poll_edit_no_question": "Vous devez fournir une nouvelle question et au moins une option, par ex. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Sondage `{{poll_id}}` mis à jour.",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) ont été renommées ou supprimées ; les votes pour ces options ont été abandonnés.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) ont perdu leurs votes (option supprimée, ou renommée lorsque `enable_poll_edit_keep_votes` vaut `false`).",
   "poll_edit_disabled": "L'édition de sondage est désactivée pour cet espace de travail. Demandez à l'installateur de l'activer via `/poll config write enable_poll_edit true`.",
   "poll_edit_too_old": "Ce sondage ne peut être modifié que dans les `{{minutes}}` minutes suivant sa publication. Définissez `enable_poll_edit_max_mins` sur `0` pour supprimer la limite de temps.",
   "poll_edit_too_many_options": "Ce sondage a `{{count}}` options, plus que les `{{max}}` qu'une modale d'édition peut contenir. Utilisez `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` depuis la ligne de commande.",

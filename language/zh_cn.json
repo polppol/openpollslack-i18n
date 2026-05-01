@@ -124,7 +124,7 @@
   "poll_edit_not_posted": "此投票尚未发布，因此无法编辑。",
   "poll_edit_no_question": "必须提供新问题和至少一个选项，例如 `\"What's your favourite color?\" \"Red\" \"Green\"`。",
   "poll_edit_success": "投票 `{{poll_id}}` 已更新。",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 个选项已重命名或删除；这些选项的投票已被丢弃。",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 个选项失去了投票（选项被移除，或在 `enable_poll_edit_keep_votes` 为 `false` 时被重命名）。",
   "poll_edit_disabled": "此工作区已禁用投票编辑。请要求安装者通过 `/poll config write enable_poll_edit true` 启用它。",
   "poll_edit_too_old": "此投票仅可在发布后 `{{minutes}}` 分钟内编辑。将 `enable_poll_edit_max_mins` 设置为 `0` 以移除时间限制。",
   "poll_edit_too_many_options": "此投票有 `{{count}}` 个选项，超过编辑模态框可容纳的 `{{max}}` 个。请从命令行使用 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`。",

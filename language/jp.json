@@ -126,7 +126,7 @@
   "poll_edit_not_posted": "この投票はまだ投稿されていないため、編集できません。",
   "poll_edit_no_question": "新しい質問と少なくとも1つの選択肢が必要です。例: `\"What's your favourite color?\" \"Red\" \"Green\"`。",
   "poll_edit_success": "投票 `{{poll_id}}` を更新しました。",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個の選択肢が名前変更または削除されました。それらの選択肢への投票は破棄されました。",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個の選択肢が投票を失いました（選択肢が削除されたか、`enable_poll_edit_keep_votes` が `false` の場合は名前変更されました）。",
   "poll_edit_disabled": "このワークスペースでは投票の編集が無効になっています。インストール者に `/poll config write enable_poll_edit true` で有効にするよう依頼してください。",
   "poll_edit_too_old": "この投票は投稿から `{{minutes}}` 分以内のみ編集できます。時間制限を解除するには `enable_poll_edit_max_mins` を `0` に設定してください。",
   "poll_edit_too_many_options": "この投票には `{{count}}` 個の選択肢があり、編集モーダルが保持できる `{{max}}` 個を超えています。コマンドラインから `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` を使用してください。",

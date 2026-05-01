@@ -118,8 +118,9 @@ const gScheduleAutoDeleteDay = config.get('schedule_auto_delete_invalid_day');
 const gDisplayPollerName = config.get('display_poller_name');
 const gEnablePollEdit = config.has('enable_poll_edit') ? config.get('enable_poll_edit') : true;
 const gEnablePollEditMaxMins = config.has('enable_poll_edit_max_mins') ? parseInt(config.get('enable_poll_edit_max_mins'), 10) : 60;
+const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? config.get('enable_poll_edit_keep_votes') : true;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes"];
 
 // Integer-valued team overrides. Separate from the true/false list so the
 // /poll config write dispatcher knows to parse the value as a non-negative
@@ -150,6 +151,78 @@ function getPollEditMaxMins(teamConfig) {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return Number.isFinite(gEnablePollEditMaxMins) && gEnablePollEditMaxMins >= 0 ? gEnablePollEditMaxMins : 60;
   return n;
+}
+
+// Vote-preservation policy. When true (default), an option whose text is
+// reworded at the same position keeps its existing votes — voters don't
+// lose their tally over a typo fix. When false, any text change at a
+// position resets the votes for that position. Either way, options whose
+// text matches across the edit (even at a different position) keep their
+// votes via text-matching in rebuildVoteMap.
+function isEditKeepVotes(teamConfig) {
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit_keep_votes')) {
+    return toBoolean(teamConfig.enable_poll_edit_keep_votes);
+  }
+  return toBoolean(gEnablePollEditKeepVotes);
+}
+
+// Re-key a vote map across an option-list edit. Returns:
+//   { newPoll, droppedCount }
+//
+// Algorithm:
+//   Pass 1 (always): exact-text match. For each new option, find an
+//   unmatched old option with the same text and inherit its votes. This
+//   handles add / remove / reorder correctly: an option keeps its votes
+//   wherever it ends up in the new list, and a removed option's votes
+//   are dropped.
+//
+//   Pass 2 (only if keepVotesOnRename=true): positional fallback for new
+//   positions still without votes. If old[i] and new[i] are both unmatched
+//   after pass 1, the new[i] inherits old[i]'s votes — preserving votes
+//   through pure renames at the same position.
+//
+//   When keepVotesOnRename=false, pass 2 is skipped: a position whose text
+//   changed gets a fresh empty vote list.
+//
+// droppedCount counts old positions that had voters but didn't match
+// anywhere in the new options (effectively lost from the user POV).
+function rebuildVoteMap(oldOptions, newOptions, oldPoll, keepVotesOnRename) {
+  oldOptions = oldOptions || [];
+  newOptions = newOptions || [];
+  oldPoll = oldPoll || {};
+  const newPoll = {};
+  const matchedOldIdx = new Set();
+
+  // Pass 1: exact text match.
+  for (let i = 0; i < newOptions.length; i++) {
+    for (let j = 0; j < oldOptions.length; j++) {
+      if (matchedOldIdx.has(j)) continue;
+      if (oldOptions[j] === newOptions[i]) {
+        newPoll[String(i)] = (oldPoll[String(j)] || []).slice();
+        matchedOldIdx.add(j);
+        break;
+      }
+    }
+  }
+
+  // Pass 2: positional fallback for renames.
+  for (let i = 0; i < newOptions.length; i++) {
+    if (newPoll.hasOwnProperty(String(i))) continue;
+    if (keepVotesOnRename && i < oldOptions.length && !matchedOldIdx.has(i)) {
+      newPoll[String(i)] = (oldPoll[String(i)] || []).slice();
+      matchedOldIdx.add(i);
+    } else {
+      newPoll[String(i)] = [];
+    }
+  }
+
+  let droppedCount = 0;
+  for (let j = 0; j < oldOptions.length; j++) {
+    const oldVotes = oldPoll[String(j)] || [];
+    if (!matchedOldIdx.has(j) && oldVotes.length > 0) droppedCount++;
+  }
+
+  return { newPoll, droppedCount };
 }
 
 // Time-window guard, paired with isPollEditEnabled. Returns:
@@ -3001,11 +3074,9 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     return { ok: false, droppedCount: 0, error: 'no_question_or_options' };
   }
 
-  // Detect option drift so callers can warn about lost votes.
-  const oldOptionSet = new Set((pollData.options || []));
-  const newOptionSet = new Set(newOptions);
+  // droppedCount is computed inside the mutex once we read votesCol —
+  // that's the only place we can tell which positions actually had votes.
   let droppedCount = 0;
-  for (const o of oldOptionSet) if (!newOptionSet.has(o)) droppedCount++;
 
   const mutexKey = `${pollData.team}/${pollData.channel}/${pollData.ts}`;
   if (!mutexes.hasOwnProperty(mutexKey)) {
@@ -3078,12 +3149,30 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
         'hidden', blocks,
         { team: pollData.team, channel: pollData.channel, ts: pollData.ts },
     );
+
+    // Re-key the vote map across the edit. Text-matching first means
+    // votes follow an option no matter where it lands in the new order
+    // (and a removed option's votes are dropped, not silently inherited
+    // by whatever ends up at that index). The optional positional pass
+    // preserves votes through pure renames per the team's policy.
     const voteData = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
-    const poll = voteData?.votes ?? {};
+    const oldPoll = voteData?.votes ?? {};
+    const keepVotesOnRename = isEditKeepVotes(editTeamConfig);
+    const remap = rebuildVoteMap(pollData.options, newOptions, oldPoll, keepVotesOnRename);
+    droppedCount = remap.droppedCount;
+
+    if (voteData) {
+      // Persist the rebuilt map so future vote clicks (which use position
+      // index) read the correct per-option voters.
+      await votesCol.updateOne(
+          { channel: pollData.channel, ts: pollData.ts },
+          { $set: { votes: remap.newPoll } }
+      );
+    }
 
     blocks = await updateVoteBlock(
         pollData.team, pollData.channel, pollData.ts,
-        blocks, poll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
+        blocks, remap.newPoll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
     );
 
     const updateBody = {

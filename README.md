@@ -227,8 +227,9 @@ Example:
 ```
 
 Notes:
-- The Slack message is updated in place; existing votes for **unchanged** options are preserved.
-- Votes for options that are renamed or removed are dropped — you'll get a warning telling you how many.
+- The Slack message is updated in place; votes follow each option's **text** across the edit (including reorders), so a poll that has options shuffled keeps its tally on the right options.
+- For an option whose **wording** changes at the same position, the default (`enable_poll_edit_keep_votes: true`) keeps the votes — useful for typo fixes. Set the flag to `false` if you'd rather treat a reword as a fresh option.
+- Votes for options that are removed (or renamed when `enable_poll_edit_keep_votes` is `false`) are dropped; you'll get a warning telling you how many.
 - Polls that haven't been posted yet (e.g. an unsent scheduled poll) cannot be edited.
 - Editing is only allowed within `enable_poll_edit_max_mins` minutes of the poll being posted (default `60`). Set the value to `0` (server or `/poll config write enable_poll_edit_max_mins 0`) for no time limit.
 - Anonymity, hidden mode, vote limit, and other flags are preserved from the original poll. To change those, delete and recreate the poll.
@@ -278,6 +279,7 @@ Usage:
 /poll config write display_poller_name [tag/none]
 /poll config write enable_poll_edit [true/false]
 /poll config write enable_poll_edit_max_mins [number]
+/poll config write enable_poll_edit_keep_votes [true/false]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -312,6 +314,7 @@ Usage:
 - `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
 - `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
 - `enable_poll_edit_max_mins` (default `60`); how many minutes after a poll is **posted** the owner is still allowed to edit it. Set to `0` to allow editing forever. After this window the menu entry still appears but the modal/CLI rejects with a message telling the user the limit. Can also be overridden per team via `/poll config write enable_poll_edit_max_mins [number]`.
+- `enable_poll_edit_keep_votes` (default `true`); how the edit feature handles votes when an option's wording changes at the same position. With `true`, votes are kept (a typo fix doesn't reset the tally). With `false`, votes for any position whose text changed are cleared. Either way, options whose text matches across the edit (even if reordered or shifted by an inserted/removed neighbour) keep their votes via text-matching. Can also be overridden per team via `/poll config write enable_poll_edit_keep_votes [true/false]`.
 
 ### Self-heal of missing keys
 
