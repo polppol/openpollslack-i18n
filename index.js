@@ -1,4 +1,63 @@
 const { App, ExpressReceiver, LogLevel } = require('@slack/bolt');
+
+// --- Config self-heal ---------------------------------------------------
+// node-config loads config/default.json eagerly when required, and any
+// config.get('x') for a missing key throws and crashes startup. That makes
+// every new config key a hard upgrade for self-hosters: they have to merge
+// the new key into their default.json before the app will boot.
+//
+// To avoid that, we run a one-time heal pass BEFORE requiring 'config':
+// for every key present in config/default.json.dist (which always ships
+// with the source) but absent in the user's config/default.json, we copy
+// the .dist default into default.json and log a warning. The healed file
+// is what node-config then reads, so config.get(...) works everywhere.
+//
+// .dist is the SSOT for "what keys are expected"; default.json is the
+// per-deployment override file. We never touch values that are already set.
+(function selfHealConfig() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cfgDir = path.join(__dirname, 'config');
+  const cfgPath = path.join(cfgDir, 'default.json');
+  const distPath = path.join(cfgDir, 'default.json.dist');
+
+  if (!fs.existsSync(cfgPath) || !fs.existsSync(distPath)) {
+    // Either the operator hasn't run initial setup yet, or .dist is missing
+    // (shouldn't happen in a clean checkout). Either way, don't synthesise
+    // a config from thin air — let the normal startup error surface.
+    return;
+  }
+  let current, distDefaults;
+  try {
+    current = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    distDefaults = JSON.parse(fs.readFileSync(distPath, 'utf8'));
+  } catch (e) {
+    console.error('[ConfigHeal] Failed to read/parse config files:', e.message);
+    return;
+  }
+
+  const added = [];
+  for (const key of Object.keys(distDefaults)) {
+    if (!Object.prototype.hasOwnProperty.call(current, key)) {
+      current[key] = distDefaults[key];
+      added.push(key);
+    }
+  }
+  if (added.length === 0) return;
+
+  try {
+    // Preserve 2-space indent + trailing newline to match the .dist style
+    // and keep diffs minimal for operators.
+    fs.writeFileSync(cfgPath, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    console.warn(
+      `[ConfigHeal] Added ${added.length} missing config key(s) to config/default.json with .dist defaults: ${added.join(', ')}. ` +
+      `Review and customise as needed.`
+    );
+  } catch (e) {
+    console.error('[ConfigHeal] Failed to write back to config/default.json:', e.message);
+  }
+})();
+
 const config = require('config');
 
 const { MongoClient, ObjectId } = require('mongodb');
@@ -11,12 +70,10 @@ const { isValidISO8601 } = require('./src/util/iso');
 const { getTeamOrEnterpriseId } = require('./src/util/teamId');
 const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
 const { convertHoursToString, toBoolean } = require('./src/util/format');
+const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
 const cron = require('node-cron');
-const { CronExpressionParser } = require('cron-parser');
-const cronstrue = require('cronstrue');
-const cronstrueOp = { use24HourTimeFormat: true };
 
 const { createLogger, format, transports } = require('winston');
 const fs = require('fs');
@@ -59,8 +116,131 @@ const gScheduleLimitHr = config.get('schedule_limit_hrs');
 const gScheduleMaxRun = parseInt(config.get('schedule_max_run'));
 const gScheduleAutoDeleteDay = config.get('schedule_auto_delete_invalid_day');
 const gDisplayPollerName = config.get('display_poller_name');
+const gEnablePollEdit = config.has('enable_poll_edit') ? config.get('enable_poll_edit') : true;
+const gEnablePollEditMaxMins = config.has('enable_poll_edit_max_mins') ? parseInt(config.get('enable_poll_edit_max_mins'), 10) : 60;
+const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? config.get('enable_poll_edit_keep_votes') : true;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes"];
+
+// Integer-valued team overrides. Separate from the true/false list so the
+// /poll config write dispatcher knows to parse the value as a non-negative
+// integer rather than a boolean.
+const validTeamOverrideConfigInt = ["enable_poll_edit_max_mins"];
+
+// SSOT for "is /poll edit allowed?" — server flag is the default, team override
+// (if set) wins. Used by the menu builder, CLI subcommand, modal opener, and
+// view-submission handler so a single setting governs every entry point.
+function isPollEditEnabled(teamConfig) {
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit')) {
+    return toBoolean(teamConfig.enable_poll_edit);
+  }
+  return toBoolean(gEnablePollEdit);
+}
+
+// Resolve the effective "edit allowed for N minutes since posting" value:
+// team override wins over the server default. 0 means "no time limit".
+// Negatives or NaN fall back to the server default to avoid accidental
+// hard-locks from a malformed override.
+function getPollEditMaxMins(teamConfig) {
+  let raw;
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit_max_mins')) {
+    raw = teamConfig.enable_poll_edit_max_mins;
+  } else {
+    raw = gEnablePollEditMaxMins;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return Number.isFinite(gEnablePollEditMaxMins) && gEnablePollEditMaxMins >= 0 ? gEnablePollEditMaxMins : 60;
+  return n;
+}
+
+// Vote-preservation policy. When true (default), an option whose text is
+// reworded at the same position keeps its existing votes — voters don't
+// lose their tally over a typo fix. When false, any text change at a
+// position resets the votes for that position. Either way, options whose
+// text matches across the edit (even at a different position) keep their
+// votes via text-matching in rebuildVoteMap.
+function isEditKeepVotes(teamConfig) {
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit_keep_votes')) {
+    return toBoolean(teamConfig.enable_poll_edit_keep_votes);
+  }
+  return toBoolean(gEnablePollEditKeepVotes);
+}
+
+// Re-key a vote map across an option-list edit. Returns:
+//   { newPoll, droppedCount }
+//
+// Algorithm:
+//   Pass 1 (always): exact-text match. For each new option, find an
+//   unmatched old option with the same text and inherit its votes. This
+//   handles add / remove / reorder correctly: an option keeps its votes
+//   wherever it ends up in the new list, and a removed option's votes
+//   are dropped.
+//
+//   Pass 2 (only if keepVotesOnRename=true): positional fallback for new
+//   positions still without votes. If old[i] and new[i] are both unmatched
+//   after pass 1, the new[i] inherits old[i]'s votes — preserving votes
+//   through pure renames at the same position.
+//
+//   When keepVotesOnRename=false, pass 2 is skipped: a position whose text
+//   changed gets a fresh empty vote list.
+//
+// droppedCount counts old positions that had voters but didn't match
+// anywhere in the new options (effectively lost from the user POV).
+function rebuildVoteMap(oldOptions, newOptions, oldPoll, keepVotesOnRename) {
+  oldOptions = oldOptions || [];
+  newOptions = newOptions || [];
+  oldPoll = oldPoll || {};
+  const newPoll = {};
+  const matchedOldIdx = new Set();
+
+  // Pass 1: exact text match.
+  for (let i = 0; i < newOptions.length; i++) {
+    for (let j = 0; j < oldOptions.length; j++) {
+      if (matchedOldIdx.has(j)) continue;
+      if (oldOptions[j] === newOptions[i]) {
+        newPoll[String(i)] = (oldPoll[String(j)] || []).slice();
+        matchedOldIdx.add(j);
+        break;
+      }
+    }
+  }
+
+  // Pass 2: positional fallback for renames.
+  for (let i = 0; i < newOptions.length; i++) {
+    if (newPoll.hasOwnProperty(String(i))) continue;
+    if (keepVotesOnRename && i < oldOptions.length && !matchedOldIdx.has(i)) {
+      newPoll[String(i)] = (oldPoll[String(i)] || []).slice();
+      matchedOldIdx.add(i);
+    } else {
+      newPoll[String(i)] = [];
+    }
+  }
+
+  let droppedCount = 0;
+  for (let j = 0; j < oldOptions.length; j++) {
+    const oldVotes = oldPoll[String(j)] || [];
+    if (!matchedOldIdx.has(j) && oldVotes.length > 0) droppedCount++;
+  }
+
+  return { newPoll, droppedCount };
+}
+
+// Time-window guard, paired with isPollEditEnabled. Returns:
+//   { ok: true }                — within window (or window disabled)
+//   { ok: false, maxMins }      — past the window; caller surfaces maxMins
+//                                 in the rejection message.
+// Measures from pollData.ts (Slack message ts), which is when the poll
+// became visible in the channel. Scheduled polls only set ts after they
+// post, so the window correctly starts from posting time, not creation.
+function isWithinEditWindow(pollData, teamConfig) {
+  const maxMins = getPollEditMaxMins(teamConfig);
+  if (maxMins === 0) return { ok: true };
+  const tsNum = parseFloat(pollData?.ts);
+  if (!Number.isFinite(tsNum) || tsNum <= 0) return { ok: true }; // be permissive if ts is malformed
+  const ageMs = Date.now() - tsNum * 1000;
+  if (ageMs <= maxMins * 60 * 1000) return { ok: true };
+  return { ok: false, maxMins };
+}
 
 const validUserOverrideConfigTF = ["user_allow_dm"];
 
@@ -76,6 +256,46 @@ let scheduleCol = null;
 let migrations = null;
 
 const mutexes = {};
+
+// Periodic cleanup of mutexes whose lock has been fully released. The map is
+// keyed on `${team}/${channel}/${ts}` and would otherwise grow unbounded as
+// every poll the bot ever interacts with leaves an entry behind. This is
+// race-free in Node's single-threaded model: the synchronous isLocked() check
+// and the synchronous delete cannot be interrupted by another async caller,
+// and any new acquirer that arrives later simply gets a fresh Mutex via the
+// existing `if (!mutexes.hasOwnProperty(key))` guard at every call site.
+setInterval(() => {
+  try {
+    let removed = 0;
+    for (const key of Object.keys(mutexes)) {
+      if (typeof mutexes[key]?.isLocked === 'function' && !mutexes[key].isLocked()) {
+        delete mutexes[key];
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      // Use console here because logger may not be initialised yet at very
+      // early ticks; once the logger is up, we'd see this via the same
+      // colorize transport. Either way it's diagnostic.
+      console.log(`[MutexGC] Released ${removed} idle mutex(es); ${Object.keys(mutexes).length} active.`);
+    }
+  } catch (e) {
+    console.error('[MutexGC] cleanup failed:', e);
+  }
+}, 60 * 60 * 1000).unref(); // hourly; .unref() so it doesn't keep process alive
+
+// Resolve a stored render setting with a stable fallback chain:
+// pollData.para -> teamConfig -> server default. Used by paths that rebuild
+// a poll's blocks (applyPollEdit, closePollById) so the same value is passed
+// to both createPollView (which builds the layout) and updateVoteBlock
+// (which writes vote tallies into structurally-significant slots like the
+// menu block index and per-choice context blocks). A divergence here causes
+// silent corruption — see commit f0239e8.
+function resolveFromPara(pollData, teamConfig, key, serverDefault) {
+  if (pollData?.para?.hasOwnProperty(key)) return pollData.para[key];
+  if (teamConfig?.hasOwnProperty?.(key)) return teamConfig[key];
+  return serverDefault;
+}
 
 console.log('Init Logger..');
 
@@ -221,19 +441,10 @@ loadLanguages(logger, gAppLang);
 
 logger.info('Init cron jobs...');
 
-function calculateNextScheduleTime(cronString,timeZoneString) {
-  try {
-    if(timeZoneString===null) timeZoneString = 'UTC';
-    const options = {
-      tz: timeZoneString
-    };
-    const interval = CronExpressionParser.parse(cronString,options);
-    return interval.next().toDate();
-  } catch (e) {
-    //console.log(e);
-    logger.debug(e.toString()+"\n"+e.stack);
-    return null;
-  }
+// Thin wrapper kept for legacy call sites; delegates to the cron SSOT in
+// src/util/cron.js so parsing behaviour stays consistent across the app.
+function calculateNextScheduleTime(cronString, timeZoneString) {
+  return parseNextRun(cronString, timeZoneString);
 }
 const checkAndExecuteTasks = async () => {
   const currentDateTime = new Date();
@@ -1834,13 +2045,8 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              let cronHumanText = "";
-              if (item?.cron_string && item?.cron_string !== "") {
-                try {
-                  cronHumanText = cronstrue.toString(item?.cron_string, cronstrueOp) + ", ";
-                } catch (e) {
-                }
-              }
+              const cronHumanRaw = humanizeCron(item?.cron_string);
+              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
               resString += "```";
               resString += `Poll ID: ${item.poll_id}\n`;
               resString += `Next Run: ` + localizeTimeStamp(myTz, item.next_ts) + `\n`;
@@ -1905,13 +2111,8 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              let cronHumanText = "";
-              if (item?.cron_string && item?.cron_string !== "") {
-                try {
-                  cronHumanText = cronstrue.toString(item?.cron_string, cronstrueOp) + ", ";
-                } catch (e) {
-                }
-              }
+              const cronHumanRaw = humanizeCron(item?.cron_string);
+              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
               resString += "```";
               resString += `Poll ID: ${item.poll_id}\n`;
               resString += `Owner: ${item.created_user_id}\n`;
@@ -1955,6 +2156,192 @@ async function processCommand(ack, body, client, command, context, say, respond)
           }
           return;
 
+
+        } else if (cmdBody === 'edit' || cmdBody.startsWith('edit ')) {
+          // /poll edit POLL_ID "new question" "opt1" "opt2" ...
+          // Edits a posted poll's question/options in place. Owner-only.
+          // Votes are re-applied to options whose text is unchanged; votes
+          // for renamed or removed options are dropped (we warn the user).
+          cmdBody = cmdBody.substring(4).trim();
+
+          if (!isPollEditEnabled(teamConfig)) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_disabled'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (cmdBody === '') {
+            const usage = `\`/${slackCommand} edit POLL_ID "new question" "opt1" "opt2" ...\``;
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_usage') + "\n" + usage,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          // Pull POLL_ID off the front
+          let editPollIdRaw;
+          const firstSpace = cmdBody.indexOf(' ');
+          if (firstSpace === -1) {
+            editPollIdRaw = cmdBody;
+            cmdBody = '';
+          } else {
+            editPollIdRaw = cmdBody.substring(0, firstSpace);
+            cmdBody = cmdBody.substring(firstSpace).trim();
+          }
+
+          let editPollData = null;
+          let editPollObjId = null;
+          try {
+            editPollObjId = new ObjectId(editPollIdRaw);
+            editPollData = await pollCol.findOne({ _id: editPollObjId });
+          } catch (e) {
+            // fall through; editPollData stays null
+          }
+
+          if (!editPollData) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_not_found'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (editPollData.user_id !== userId) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_action_other'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (!editPollData.ts || !editPollData.channel || !editPollData.team) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_not_posted'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          {
+            const win = isWithinEditWindow(editPollData, teamConfig);
+            if (!win.ok) {
+              let mRequestBody = {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }),
+              };
+              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              return;
+            }
+          }
+
+          // Parse new question + options from the remainder using the same
+          // quoted-string grammar as poll create.
+          let newQuestion = null;
+          const newOptions = [];
+          try {
+            const quotePattern = `\\${standardQuote}`;
+            const regexp = new RegExp(`${quotePattern}(?:[^${quotePattern}\\\\]|\\\\.)*${quotePattern}`, 'g');
+            const matches = cmdBody.match(regexp);
+            if (matches) {
+              for (const option of matches) {
+                let opt = option.substring(1, option.length - 1);
+                let unescaped = opt.replace(new RegExp(escapedQuotesPattern, 'g'), (match) => match[1])
+                    .replace(/\\\\/g, "\\");
+                if (newQuestion === null) {
+                  newQuestion = unescaped;
+                } else {
+                  newOptions.push(unescaped);
+                }
+              }
+            }
+          } catch (e) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (newQuestion === null || newOptions.length === 0) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_no_question'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (newOptions.length > gSlackLimitChoices) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(appLang, 'err_slack_limit_choices_max'), {slack_limit_choices: gSlackLimitChoices}),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          const editResult = await applyPollEdit({
+            pollData: editPollData,
+            newQuestion: newQuestion,
+            newOptions: newOptions,
+            editorUserId: userId,
+          });
+
+          if (!editResult.ok) {
+            const errSuffix = editResult.error ? `: ${editResult.error}` : '';
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command') + errSuffix,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          let successText = "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_success'), {
+            poll_id: editPollData._id.toString(),
+          });
+          if (editResult.droppedCount > 0) {
+            successText += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), {
+              dropped_count: editResult.droppedCount,
+            });
+          }
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: successText,
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
 
         } else if (cmdBody.startsWith('test')) {
           //test functiom
@@ -2072,6 +2459,9 @@ async function processCommand(ack, body, client, command, context, say, respond)
           for (const eachOverrideable of validTeamOverrideConfigTF) {
             validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [true/false]`;
           }
+          for (const eachOverrideable of validTeamOverrideConfigInt) {
+            validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [number]`;
+          }
 
           validWritePara += '\n' + parameterizedString(stri18n(userLang, 'info_need_help'), {
             email: helpEmail,
@@ -2151,6 +2541,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
               isWriteValid = true;
             }
 
+            if (validTeamOverrideConfigInt.includes(inputPara)) {
+              cmdBody = cmdBody.substring(inputPara.length).trim();
+              isWriteValid = true;
+            }
+
             if (inputPara === "app_lang") {
               cmdBody = cmdBody.substring(8).trim();
               isWriteValid = true;
@@ -2188,6 +2583,20 @@ async function processCommand(ack, body, client, command, context, say, respond)
                     await postChat(body.response_url, 'ephemeral', mRequestBody);
                     return;
                 }
+              }
+              else if (validTeamOverrideConfigInt.includes(inputPara)) {
+                const parsed = parseInt(inputVal, 10);
+                if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== inputVal.trim()) {
+                  let mRequestBody = {
+                    token: context.botToken,
+                    channel: channel,
+                    user: userId,
+                    text: `Usage: ${inputPara} [non-negative integer, 0 = no limit]`,
+                  };
+                  await postChat(body.response_url, 'ephemeral', mRequestBody);
+                  return;
+                }
+                inputVal = parsed;
               }
               else {
                 if (cmdBody.startsWith("true")) {
@@ -2651,6 +3060,145 @@ async function processCommand(ack, body, client, command, context, say, respond)
   }
 }
 
+// Shared apply-edit pipeline used by both the CLI subcommand and the
+// modal/GUI view submission. Caller is responsible for pre-flight checks
+// (ownership, well-formed inputs, etc.) — this function only performs the
+// DB update + view rebuild + chat.update under the per-message mutex.
+//
+// Returns: { ok: boolean, droppedCount: number, error: string|null }
+async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }) {
+  if (!pollData || !pollData.ts || !pollData.channel || !pollData.team) {
+    return { ok: false, droppedCount: 0, error: 'not_posted' };
+  }
+  if (!newQuestion || !Array.isArray(newOptions) || newOptions.length === 0) {
+    return { ok: false, droppedCount: 0, error: 'no_question_or_options' };
+  }
+
+  // droppedCount is computed inside the mutex once we read votesCol —
+  // that's the only place we can tell which positions actually had votes.
+  let droppedCount = 0;
+
+  const mutexKey = `${pollData.team}/${pollData.channel}/${pollData.ts}`;
+  if (!mutexes.hasOwnProperty(mutexKey)) {
+    mutexes[mutexKey] = new Mutex();
+  }
+  let release = null;
+  let countTry = 0;
+  do {
+    ++countTry;
+    try {
+      release = await mutexes[mutexKey].acquire();
+    } catch (e) {
+      logger.info(`[Edit][Try #${countTry}] Error while attempt to acquire mutex lock.`, e);
+    }
+  } while (!release && countTry < 3);
+
+  if (!release) return { ok: false, droppedCount, error: 'mutex' };
+
+  try {
+    const teamInfo = await getTeamInfo(pollData.team);
+    const editBotToken = teamInfo?.bot?.token;
+    if (!editBotToken) return { ok: false, droppedCount, error: 'no_bot_token' };
+
+    await pollCol.updateOne(
+        { _id: pollData._id },
+        { $set: {
+          question: newQuestion,
+          options: newOptions,
+          edited_ts: new Date(),
+          edited_by: editorUserId,
+        } }
+    );
+
+    const editTeamConfig = await getTeamOverride(pollData.team);
+    const editUserLang = pollData.para?.user_lang || gAppLang;
+
+    // Same value MUST flow through createPollView (block builder) and
+    // updateVoteBlock (vote re-applier) for the structurally-significant
+    // settings — see resolveFromPara module-level comment.
+    const editIsMenuAtTheEnd = resolveFromPara(pollData, editTeamConfig, 'menu_at_the_end', gIsMenuAtTheEnd);
+    const editIsCompactUI = resolveFromPara(pollData, editTeamConfig, 'compact_ui', gIsCompactUI);
+
+    const pollView = (await createPollView(
+        pollData.team, pollData.channel, editTeamConfig,
+        newQuestion, newOptions,
+        pollData.para?.anonymous ?? false,
+        pollData.para?.limited,
+        pollData.para?.limit,
+        pollData.para?.hidden,
+        pollData.para?.user_add_choice,
+        editIsMenuAtTheEnd,
+        editIsCompactUI,
+        pollData.para?.show_divider,
+        pollData.para?.show_help_link,
+        pollData.para?.show_command_info,
+        pollData.para?.true_anonymous,
+        pollData.para?.add_number_emoji_to_choice,
+        pollData.para?.add_number_emoji_to_choice_btn,
+        pollData.schedule_end_ts,
+        editUserLang,
+        pollData.user_id,
+        pollData.cmd, "edit", null, null,
+        true, pollData._id
+    ));
+
+    let blocks = pollView?.blocks;
+    if (!pollView || !blocks) return { ok: false, droppedCount, error: 'view_build_failed' };
+
+    const isHidden = await getInfos(
+        'hidden', blocks,
+        { team: pollData.team, channel: pollData.channel, ts: pollData.ts },
+    );
+
+    // Re-key the vote map across the edit. Text-matching first means
+    // votes follow an option no matter where it lands in the new order
+    // (and a removed option's votes are dropped, not silently inherited
+    // by whatever ends up at that index). The optional positional pass
+    // preserves votes through pure renames per the team's policy.
+    const voteData = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
+    const oldPoll = voteData?.votes ?? {};
+    const keepVotesOnRename = isEditKeepVotes(editTeamConfig);
+    const remap = rebuildVoteMap(pollData.options, newOptions, oldPoll, keepVotesOnRename);
+    droppedCount = remap.droppedCount;
+
+    if (voteData) {
+      // Persist the rebuilt map so future vote clicks (which use position
+      // index) read the correct per-option voters.
+      await votesCol.updateOne(
+          { channel: pollData.channel, ts: pollData.ts },
+          { $set: { votes: remap.newPoll } }
+      );
+    }
+
+    blocks = await updateVoteBlock(
+        pollData.team, pollData.channel, pollData.ts,
+        blocks, remap.newPoll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
+    );
+
+    const updateBody = {
+      token: editBotToken,
+      channel: pollData.channel,
+      ts: pollData.ts,
+      blocks: blocks,
+      text: `Poll : ${newQuestion}`,
+    };
+    const postRes = await postChat("", 'update', updateBody);
+    if (postRes.status === false) {
+      logger.warn(`[Edit] Failed to update poll ID:${pollData._id} in CH:${pollData.channel}: ${postRes.message}`);
+      return { ok: false, droppedCount, error: postRes.message || 'chat_update_failed' };
+    }
+
+    logger.verbose(`[Edit] Poll ID:${pollData._id} edited by ${editorUserId}`);
+    return { ok: true, droppedCount, error: null };
+  } catch (e) {
+    logger.error(`[Edit] Unexpected error editing poll ID:${pollData?._id}`);
+    logger.error(e.toString() + "\n" + e.stack);
+    return { ok: false, droppedCount, error: 'exception' };
+  } finally {
+    release();
+  }
+}
+
 const createModalBlockInput = (userLang)  => {
     return {
       type: 'input',
@@ -2712,6 +3260,9 @@ const createModalBlockInputDelete = (userLang)  => {
   logger.info('Bolt app is running!');
 
   logger.info('Check and start cron jobs.');
+  // Verify every stored cron_string still parses under the current
+  // cron-parser version before the minute scheduler starts firing.
+  await auditSchedules({ scheduleCol, logger });
   // Schedule the task checker to run every minute
   cron.schedule('* * * * *', checkAndExecuteTasks);
   // Cleanup every day
@@ -4720,7 +5271,13 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
           text: stri18n(userLang, 'menu_delete_poll'),
         },
         value: JSON.stringify({action: 'btn_delete', p_id: pollID, user: userId, user_lang: userLang}),
-      }
+      }, ...(isPollEditEnabled(teamConfig) ? [{
+        text: {
+          type: 'plain_text',
+          text: stri18n(userLang, 'menu_edit_poll'),
+        },
+        value: JSON.stringify({action: 'btn_edit', p_id: pollID, user: userId, user_lang: userLang}),
+      }] : [])
       ],
     },
     {//GRP 1
@@ -5012,7 +5569,427 @@ async function btnActions(args) {
     deletePoll(body, client, context, value);
   else if ('btn_close' === value.action)
     closePoll(body, client, context, value);
+  else if ('btn_edit' === value.action)
+    editPollOpenModal(body, client, context, value);
 }
+
+// Build a single option-input row for the edit modal: a plain_text_input
+// pre-filled with `value`, paired with a 🗑 delete button accessory in a
+// section block. Each row has a unique block_id so views.update can append
+// or remove rows without colliding with the existing ones.
+function buildEditOptionRow(userLang, optionValue) {
+  const blockId = 'edit_choice_' + uuidv4();
+  const inputBlock = {
+    type: 'input',
+    block_id: blockId,
+    element: {
+      type: 'plain_text_input',
+      action_id: 'edit_choice_input',
+      initial_value: optionValue ?? '',
+      placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_choice') },
+    },
+    label: { type: 'plain_text', text: ' ' },
+    optional: true,
+  };
+  const deleteBlock = {
+    type: 'section',
+    block_id: blockId + '_del',
+    text: { type: 'mrkdwn', text: ' ' },
+    accessory: {
+      type: 'button',
+      action_id: 'edit_del_choice',
+      value: blockId,
+      text: { type: 'plain_text', text: '🗑', emoji: true },
+    },
+  };
+  return [inputBlock, deleteBlock];
+}
+
+async function editPollOpenModal(body, client, context, value) {
+  if (!body || !body.user || !body.user.id || !body.trigger_id) return;
+
+  // Re-check ownership against the DB rather than trusting the value blob.
+  // The static_select is rendered for every viewer, so a non-owner can click
+  // it; we must reject before opening the modal.
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(value.p_id) });
+  } catch (e) { /* falls through */ }
+
+  const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(body));
+  let appLang = gAppLang;
+  if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
+  const userLang = value.user_lang || appLang;
+
+  const ephemeralReject = async (msgKey) => {
+    if (!body.channel?.id) return;
+    await postChat('', 'ephemeral', {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      text: stri18n(userLang, msgKey),
+    });
+  };
+
+  if (!isPollEditEnabled(teamConfig)) { await ephemeralReject('poll_edit_disabled'); return; }
+  if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
+  if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
+  if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+
+  // Guard the initial-open path against the same Slack 100-block ceiling.
+  // Layout is 5 fixed blocks + 2 per option + 1 trailing actions block, so
+  // N options fit when 6 + 2N <= 100 -> N <= 47. Past that, views.open
+  // would 400 silently. Only reachable if a self-host operator raised
+  // gSlackLimitChoices above this ceiling AND the poll actually has that
+  // many options.
+  const fixedBlocks = 6; // intro section + divider + question input + divider + choices header + trailing actions
+  const maxOptionsInModal = Math.floor((SLACK_MODAL_MAX_BLOCKS - fixedBlocks) / 2);
+  const optionCount = (pollData.options || []).length;
+  if (optionCount > maxOptionsInModal) {
+    if (body.channel?.id) {
+      await postChat('', 'ephemeral', {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        text: parameterizedString(stri18n(userLang, 'poll_edit_too_many_options'), {
+          count: optionCount,
+          max: maxOptionsInModal,
+          slack_command: slackCommand,
+        }),
+      });
+    }
+    return;
+  }
+  {
+    const win = isWithinEditWindow(pollData, teamConfig);
+    if (!win.ok) {
+      if (body.channel?.id) {
+        await postChat('', 'ephemeral', {
+          token: context.botToken,
+          channel: body.channel.id,
+          user: body.user.id,
+          text: parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }),
+        });
+      }
+      return;
+    }
+  }
+
+  const blocks = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: stri18n(userLang, 'modal_edit_poll_intro') },
+    },
+    { type: 'divider' },
+    {
+      type: 'input',
+      block_id: 'edit_question',
+      label: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_text') },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'edit_question_input',
+        initial_value: pollData.question ?? '',
+        placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_hint') },
+      },
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: stri18n(userLang, 'modal_input_choice_text') },
+    },
+  ];
+
+  for (const opt of (pollData.options || [])) {
+    for (const b of buildEditOptionRow(userLang, opt)) blocks.push(b);
+  }
+
+  // Trailing "Add option" actions block — keep it last so the dynamic
+  // add handler can simply splice new rows in just before it.
+  blocks.push({
+    type: 'actions',
+    block_id: 'edit_add_choice_actions',
+    elements: [{
+      type: 'button',
+      action_id: 'edit_add_choice',
+      text: { type: 'plain_text', text: stri18n(userLang, 'modal_input_choice_add'), emoji: true },
+    }],
+  });
+
+  const privateMetadata = {
+    poll_id: pollData._id.toString(),
+    user_lang: userLang,
+  };
+
+  try {
+    await client.views.open({
+      token: context.botToken,
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal',
+        callback_id: 'edit_poll_submit',
+        private_metadata: JSON.stringify(privateMetadata),
+        title: { type: 'plain_text', text: stri18n(userLang, 'modal_edit_poll_title') },
+        submit: { type: 'plain_text', text: stri18n(userLang, 'modal_edit_poll_submit') },
+        close: { type: 'plain_text', text: stri18n(userLang, 'btn_cancel') },
+        blocks: blocks,
+      },
+    });
+  } catch (e) {
+    logger.warn('[Edit] views.open failed: ' + (e?.data?.error || e?.message || e));
+  }
+}
+
+// Dynamic add: append one fresh empty option row just before the trailing
+// "Add option" actions block. Mirrors the create-modal btn_add_choice flow.
+// Slack hard limit: a single view may contain at most 100 blocks. Each
+// option row is 2 blocks (input + 🗑 section), so without a guard a user
+// could click "Add option" enough times to silently overflow this limit
+// — views.update would 400 and the click would appear to do nothing.
+const SLACK_MODAL_MAX_BLOCKS = 100;
+
+app.action('edit_add_choice', async ({ ack, body, client, context }) => {
+  await ack();
+  if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
+
+  let userLang = gAppLang;
+  try {
+    const pm = JSON.parse(body.view.private_metadata || '{}');
+    if (pm.user_lang) userLang = pm.user_lang;
+  } catch (e) { /* fall through */ }
+
+  const currentBlocks = body.view.blocks.slice();
+
+  // If we're already at the limit, swap the trailing actions block in place
+  // (so we don't add 2 more). If we're at limit-1 (an odd block count would
+  // be unusual but defensively handled), inject a one-line warning context
+  // block in place of the new row. Either way we surface the cap visibly
+  // instead of letting views.update 400 silently.
+  // +2 because each row adds 2 blocks. +1 if there's no warning block yet
+  // and we'd want to add one.
+  const wouldExceed = currentBlocks.length + 2 > SLACK_MODAL_MAX_BLOCKS;
+  if (wouldExceed) {
+    // Insert a one-shot warning context just above the trailing actions
+    // block so the user understands why "Add option" stopped working. The
+    // block_id keeps it idempotent (we don't add more than one warning).
+    const hasWarning = currentBlocks.some(b => b.block_id === 'edit_add_choice_warn');
+    if (hasWarning) return; // already warned, nothing more to do
+    const insertAt = currentBlocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
+    const warningBlock = {
+      type: 'context',
+      block_id: 'edit_add_choice_warn',
+      elements: [{
+        type: 'mrkdwn',
+        text: parameterizedString(stri18n(userLang, 'modal_edit_poll_max_blocks'), { max: SLACK_MODAL_MAX_BLOCKS }),
+      }],
+    };
+    if (insertAt === -1) currentBlocks.push(warningBlock);
+    else currentBlocks.splice(insertAt, 0, warningBlock);
+    try {
+      await client.views.update({
+        token: context.botToken,
+        hash: body.view.hash,
+        view_id: body.view.id,
+        view: {
+          type: body.view.type,
+          callback_id: 'edit_poll_submit',
+          private_metadata: body.view.private_metadata,
+          title: body.view.title,
+          submit: body.view.submit,
+          close: body.view.close,
+          blocks: currentBlocks,
+          external_id: body.view.id,
+        },
+      });
+    } catch (e) {
+      logger.debug('edit_add_choice limit-warn views.update failed: ' + (e?.data?.error || e?.message || e));
+    }
+    return;
+  }
+
+  const blocks = currentBlocks;
+  const insertAt = blocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
+  const newRow = buildEditOptionRow(userLang, '');
+  if (insertAt === -1) {
+    for (const b of newRow) blocks.push(b);
+  } else {
+    blocks.splice(insertAt, 0, ...newRow);
+  }
+
+  try {
+    await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view_id: body.view.id,
+      view: {
+        type: body.view.type,
+        callback_id: 'edit_poll_submit',
+        private_metadata: body.view.private_metadata,
+        title: body.view.title,
+        submit: body.view.submit,
+        close: body.view.close,
+        blocks: blocks,
+        external_id: body.view.id,
+      },
+    });
+  } catch (e) {
+    logger.debug('edit_add_choice views.update failed: ' + (e?.data?.error || e?.message || e));
+  }
+});
+
+// Dynamic remove: drop the input block whose id matches action.value, plus
+// its paired _del section block.
+app.action('edit_del_choice', async ({ ack, action, body, client, context }) => {
+  await ack();
+  if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
+
+  const targetId = action?.value;
+  if (!targetId) return;
+
+  const blocks = body.view.blocks.filter(b => {
+    if (!b.block_id) return true;
+    return b.block_id !== targetId && b.block_id !== targetId + '_del';
+  });
+
+  try {
+    await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view_id: body.view.id,
+      view: {
+        type: body.view.type,
+        callback_id: 'edit_poll_submit',
+        private_metadata: body.view.private_metadata,
+        title: body.view.title,
+        submit: body.view.submit,
+        close: body.view.close,
+        blocks: blocks,
+        external_id: body.view.id,
+      },
+    });
+  } catch (e) {
+    logger.debug('edit_del_choice views.update failed: ' + (e?.data?.error || e?.message || e));
+  }
+});
+
+// Final modal submit: collect the question and any non-empty option
+// values (preserving block order so options stay in the user's chosen
+// sequence), validate, then delegate to applyPollEdit.
+app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
+  if (!view || !view.state || !view.private_metadata || !body?.user?.id) {
+    await ack();
+    return;
+  }
+
+  let pollIdRaw = null;
+  let userLang = gAppLang;
+  try {
+    const pm = JSON.parse(view.private_metadata);
+    pollIdRaw = pm.poll_id;
+    if (pm.user_lang) userLang = pm.user_lang;
+  } catch (e) { /* fall through */ }
+
+  let newQuestion = null;
+  const newOptions = [];
+  for (const blockId of Object.keys(view.state.values)) {
+    const inner = view.state.values[blockId];
+    const firstActionId = Object.keys(inner)[0];
+    const v = inner[firstActionId]?.value;
+    if (blockId === 'edit_question') {
+      newQuestion = (v || '').trim();
+    } else if (blockId.startsWith('edit_choice_') && !blockId.endsWith('_del')) {
+      const trimmed = (v || '').trim();
+      if (trimmed !== '') newOptions.push(trimmed);
+    }
+  }
+
+  if (!newQuestion) {
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: stri18n(userLang, 'poll_edit_no_question') },
+    });
+    return;
+  }
+  if (newOptions.length === 0) {
+    // No specific block to attach the error to once all option rows are
+    // empty/removed — fall back to the question field so the user sees it.
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: stri18n(userLang, 'poll_edit_no_question') },
+    });
+    return;
+  }
+  if (newOptions.length > gSlackLimitChoices) {
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: parameterizedString(stri18n(userLang, 'err_slack_limit_choices_max'), { slack_limit_choices: gSlackLimitChoices }) },
+    });
+    return;
+  }
+
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(pollIdRaw) });
+  } catch (e) { /* fall through */ }
+
+  if (!pollData) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'poll_edit_not_found') } });
+    return;
+  }
+  if (pollData.user_id !== body.user.id) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'err_action_other') } });
+    return;
+  }
+
+  // Re-check the kill-switch and time window at submit time too — the modal
+  // may have been opened minutes ago, the installer may have flipped the
+  // kill-switch, or the poll may have aged out of the edit window between
+  // open and submit.
+  const submitTeamConfig = await getTeamOverride(pollData.team);
+  if (!isPollEditEnabled(submitTeamConfig)) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'poll_edit_disabled') } });
+    return;
+  }
+  {
+    const win = isWithinEditWindow(pollData, submitTeamConfig);
+    if (!win.ok) {
+      await ack({
+        response_action: 'errors',
+        errors: { edit_question: parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }) },
+      });
+      return;
+    }
+  }
+
+  await ack();
+
+  const editResult = await applyPollEdit({
+    pollData: pollData,
+    newQuestion: newQuestion,
+    newOptions: newOptions,
+    editorUserId: body.user.id,
+  });
+
+  // Best-effort DM the editor with success/warning. We've already acked the
+  // view; if the DM fails the edit still went through.
+  try {
+    const teamInfo = await getTeamInfo(pollData.team);
+    const dmToken = teamInfo?.bot?.token;
+    if (dmToken) {
+      let text;
+      if (!editResult.ok) {
+        text = stri18n(userLang, 'err_invalid_command') + (editResult.error ? `: ${editResult.error}` : '');
+      } else {
+        text = parameterizedString(stri18n(userLang, 'poll_edit_success'), { poll_id: pollData._id.toString() });
+        if (editResult.droppedCount > 0) {
+          text += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), { dropped_count: editResult.droppedCount });
+        }
+      }
+      await postChat('', 'post', { token: dmToken, channel: body.user.id, text: text });
+    }
+  } catch (e) {
+    logger.debug('[Edit] DM after view submit failed: ' + (e?.message || e));
+  }
+});
 
 async function supportAction(body, client, context) {
   if (
@@ -5844,13 +6821,11 @@ async function closePollById(poll_id) {
         if (teamConfig.hasOwnProperty("app_lang")) userLang = teamConfig.app_lang;
       }
 
-      let isMenuAtTheEnd = gIsMenuAtTheEnd;
-      if (pollData.para?.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = pollData.para?.menu_at_the_end;
-      else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
-
-      let isCompactUI = gIsCompactUI;
-      if (pollData.para?.hasOwnProperty("compact_ui")) isCompactUI = pollData.para?.compact_ui;
-      else if (teamConfig.hasOwnProperty("compact_ui")) isCompactUI = teamConfig.compact_ui;
+      // Resolve once via the module-level helper; same value flows into both
+      // createPollView (below) and updateVoteBlock (later) so the two cannot
+      // disagree on layout. See resolveFromPara comment.
+      const isMenuAtTheEnd = resolveFromPara(pollData, teamConfig, 'menu_at_the_end', gIsMenuAtTheEnd);
+      const isCompactUI = resolveFromPara(pollData, teamConfig, 'compact_ui', gIsCompactUI);
 
 
       //this req conversations.history and *:history scope to read message Retrieve the original message
@@ -5887,7 +6862,7 @@ async function closePollById(poll_id) {
           }
 
           const pollView = (await createPollView(pollData.team, pollData.channel, teamConfig, pollData.question, pollData.options, pollData.para?.anonymous ?? false, pollData.para?.limited, pollData.para?.limit, pollData.para?.hidden, pollData.para?.user_add_choice,
-              pollData.para?.menu_at_the_end, pollData.para?.compact_ui, pollData.para?.show_divider, pollData.para?.show_help_link, pollData.para?.show_command_info, pollData.para?.true_anonymous, pollData.para?.add_number_emoji_to_choice, pollData.para?.add_number_emoji_to_choice_btn, pollData.schedule_end_ts, pollData.para?.user_lang, pollData.user_id, pollData.cmd, pollData.cmd_via, pollData.cmd_via_ref, pollData.cmd_via_note,
+              isMenuAtTheEnd, isCompactUI, pollData.para?.show_divider, pollData.para?.show_help_link, pollData.para?.show_command_info, pollData.para?.true_anonymous, pollData.para?.add_number_emoji_to_choice, pollData.para?.add_number_emoji_to_choice_btn, pollData.schedule_end_ts, pollData.para?.user_lang, pollData.user_id, pollData.cmd, pollData.cmd_via, pollData.cmd_via_ref, pollData.cmd_via_note,
               true,pollData._id));
           let blocks = pollView?.blocks;
           const pollID = pollView?.poll_id;

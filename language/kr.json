@@ -116,5 +116,19 @@
   "emoji_13": ":one::three:",
   "emoji_14": ":one::four:",
   "emoji_15": ":one::five:",
-  "emoji_16": ":one::six:"
+  "emoji_16": ":one::six:",
+  "menu_edit_poll": "투표 수정",
+  "modal_edit_poll_title": "투표 수정",
+  "modal_edit_poll_intro": "아래 질문 또는 선택지를 업데이트하세요. 변경되지 않은 선택지의 투표는 유지됩니다.",
+  "modal_edit_poll_submit": "저장",
+  "poll_edit_usage": "사용법:",
+  "poll_edit_not_found": "투표를 찾을 수 없습니다. 투표 메뉴의 `Command info`에서 Poll ID를 확인하세요.",
+  "poll_edit_not_posted": "이 투표는 아직 게시되지 않아 수정할 수 없습니다.",
+  "poll_edit_no_question": "새로운 질문과 최소 한 개의 선택지를 입력해야 합니다. 예: `\"What's your favourite color?\" \"Red\" \"Green\"`.",
+  "poll_edit_success": "투표 `{{poll_id}}`이(가) 업데이트되었습니다.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}`개의 선택지가 투표를 잃었습니다.",
+  "poll_edit_disabled": "이 워크스페이스에서는 투표 수정이 비활성화되어 있습니다. 워크스페이스 관리자에게 활성화를 요청하세요.",
+  "poll_edit_too_old": "이 투표는 게시 후 `{{minutes}}`분 이내에만 수정할 수 있습니다.",
+  "poll_edit_too_many_options": "이 투표에는 `{{count}}`개의 선택지가 있어 수정 모달이 담을 수 있는 `{{max}}`개를 초과합니다. 명령줄에서 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`를 사용하세요.",
+  "modal_edit_poll_max_blocks": ":warning: 양식의 최대 크기에 도달했습니다. 선택지를 제거하거나 저장 후 다시 편집하세요."
 }

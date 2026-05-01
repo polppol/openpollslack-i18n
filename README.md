@@ -209,6 +209,31 @@ Delete all schedules that already finished, done, no longer valid, disabled
 It is not required to run `/poll schedule delete_done` as server will clear out unused schedules for you.
 if you host this by your self you can make change this in `schedule_auto_delete_invalid_day`
 
+### Edit a poll
+Edit the question and/or options of a poll that has already been posted. Only the poll owner can do this.
+
+Two ways:
+
+**1. Via menu (GUI)** — Open the poll's overflow menu (`⋯`) → **Edit the poll**.
+A modal opens with the current question and one input per option. Use the trailing **+ Add a choice** button to add more option fields, or the 🗑 button next to any option to remove it. Click **Save**.
+
+**2. Via command (CLI)** — Useful when you want to copy/edit the original `Command info` text:
+```
+/poll edit [POLL_ID] "new question" "option 1" "option 2" ...
+```
+Example:
+```
+/poll edit 6751aadb2a37a95edbc90a58 "What's for lunch?" "Pizza" "Salad" "Sushi"
+```
+
+Notes:
+- The Slack message is updated in place; votes follow each option's **text** across the edit (including reorders), so a poll that has options shuffled keeps its tally on the right options.
+- For an option whose **wording** changes at the same position, the default (`enable_poll_edit_keep_votes: true`) keeps the votes — useful for typo fixes. Set the flag to `false` if you'd rather treat a reword as a fresh option.
+- Votes for options that are removed (or renamed when `enable_poll_edit_keep_votes` is `false`) are dropped; you'll get a warning telling you how many.
+- Polls that haven't been posted yet (e.g. an unsent scheduled poll) cannot be edited.
+- Editing is only allowed within `enable_poll_edit_max_mins` minutes of the poll being posted (default `60`). Set the value to `0` (server or `/poll config write enable_poll_edit_max_mins 0`) for no time limit.
+- Anonymity, hidden mode, vote limit, and other flags are preserved from the original poll. To change those, delete and recreate the poll.
+
 # Override configuration 
 
 There are three levels of configuration: Server, Team, and User. 
@@ -252,6 +277,9 @@ Usage:
 /poll config write add_number_emoji_to_choice_btn [true/false]
 /poll config write delete_data_on_poll_delete [true/false]
 /poll config write display_poller_name [tag/none]
+/poll config write enable_poll_edit [true/false]
+/poll config write enable_poll_edit_max_mins [number]
+/poll config write enable_poll_edit_keep_votes [true/false]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -284,6 +312,13 @@ Usage:
 - `schedule_max_run` Maximum/Default run count for single schedule that can be set.
 - `schedule_auto_delete_invalid_day` Schedules that already finished, done, no longer valid, disabled will be automatically delete after this value(days)
 - `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
+- `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
+- `enable_poll_edit_max_mins` (default `60`); how many minutes after a poll is **posted** the owner is still allowed to edit it. Set to `0` to allow editing forever. After this window the menu entry still appears but the modal/CLI rejects with a message telling the user the limit. Can also be overridden per team via `/poll config write enable_poll_edit_max_mins [number]`.
+- `enable_poll_edit_keep_votes` (default `true`); how the edit feature handles votes when an option's wording changes at the same position. With `true`, votes are kept (a typo fix doesn't reset the tally). With `false`, votes for any position whose text changed are cleared. Either way, options whose text matches across the edit (even if reordered or shifted by an inserted/removed neighbour) keep their votes via text-matching. Can also be overridden per team via `/poll config write enable_poll_edit_keep_votes [true/false]`.
+
+### Self-heal of missing keys
+
+When the app starts and `config/default.json` is missing keys that exist in `config/default.json.dist` (e.g. after pulling a new version that introduced a setting), the missing keys are auto-written into `config/default.json` with the `.dist` defaults and a warning is logged. Existing values are never touched. This means a self-host upgrade no longer crashes on a new config key — you only need to merge in changes you want to customise.
 
 ## Example
 
