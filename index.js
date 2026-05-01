@@ -956,11 +956,22 @@ const app = new App({
 });
 
 const sendMessageUsingUrl = async (url,newMessage) => {
-  return await fetch(url, {
+  const res = await fetch(url, {
     method: 'POST',
     body: JSON.stringify(newMessage),
     headers: {'Content-Type': 'application/json'}
   });
+  // Slack's response_url returns { ok, message_ts, ... } in the body for
+  // in_channel/ephemeral posts. Stash message_ts on the Response so postChat
+  // can persist it the same way as the chat.postMessage path. Tolerates
+  // non-JSON or empty bodies (some delete_original responses).
+  try {
+    const body = await res.clone().json();
+    if (body && typeof body === 'object') {
+      res.message_ts = body.message_ts || body.ts || null;
+    }
+  } catch (e) { /* non-JSON or empty body — leave message_ts undefined */ }
+  return res;
 }
 
 const postChat = async (url,type,requestBody) => {
@@ -1000,6 +1011,7 @@ const postChat = async (url,type,requestBody) => {
         ret.message = ret.slack_response?.statusText+` ${addChNotFoundErr}`;
         return ret;
       }
+      ret.slack_ts = ret.slack_response?.message_ts || null;
     }
     else
     {
@@ -4990,7 +5002,6 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
         return;
       } else {
         //update slack_ts
-        //slack_ts will be null if response_url is use!
         await pollCol.updateOne(
             { _id: new ObjectId(pollID)},
             { $set: { ts: postRes.slack_ts } }
