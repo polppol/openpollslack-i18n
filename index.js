@@ -3002,6 +3002,25 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     const editTeamConfig = await getTeamOverride(pollData.team);
     const editUserLang = pollData.para?.user_lang || gAppLang;
 
+    // Resolve the two render settings that affect block STRUCTURE (block
+    // ordering and per-choice block layout) up front, with a stable
+    // fallback chain: pollData.para -> teamConfig -> server default.
+    // The same resolved values are passed to both createPollView (which
+    // builds the blocks) and updateVoteBlock (which writes the vote tally
+    // back into them) so the two can never disagree on layout. A
+    // divergence here would either corrupt the choice text (compact_ui
+    // mismatch) or write to the wrong block index (menu_at_the_end
+    // mismatch). show_divider only affects block CONTENT — updateVoteBlock
+    // already gates on .hasOwnProperty('elements') — so it stays as the
+    // direct para read like the other UI flags.
+    const resolveFromPara = (key, serverDefault) => {
+      if (pollData.para?.hasOwnProperty(key)) return pollData.para[key];
+      if (editTeamConfig.hasOwnProperty(key)) return editTeamConfig[key];
+      return serverDefault;
+    };
+    const editIsMenuAtTheEnd = resolveFromPara('menu_at_the_end', gIsMenuAtTheEnd);
+    const editIsCompactUI = resolveFromPara('compact_ui', gIsCompactUI);
+
     const pollView = (await createPollView(
         pollData.team, pollData.channel, editTeamConfig,
         newQuestion, newOptions,
@@ -3010,8 +3029,8 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
         pollData.para?.limit,
         pollData.para?.hidden,
         pollData.para?.user_add_choice,
-        pollData.para?.menu_at_the_end,
-        pollData.para?.compact_ui,
+        editIsMenuAtTheEnd,
+        editIsCompactUI,
         pollData.para?.show_divider,
         pollData.para?.show_help_link,
         pollData.para?.show_command_info,
@@ -3034,13 +3053,6 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     );
     const voteData = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
     const poll = voteData?.votes ?? {};
-
-    let editIsMenuAtTheEnd = gIsMenuAtTheEnd;
-    if (pollData.para?.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = pollData.para?.menu_at_the_end;
-    else if (editTeamConfig.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editTeamConfig.menu_at_the_end;
-    let editIsCompactUI = gIsCompactUI;
-    if (pollData.para?.hasOwnProperty('compact_ui')) editIsCompactUI = pollData.para?.compact_ui;
-    else if (editTeamConfig.hasOwnProperty('compact_ui')) editIsCompactUI = editTeamConfig.compact_ui;
 
     blocks = await updateVoteBlock(
         pollData.team, pollData.channel, pollData.ts,
