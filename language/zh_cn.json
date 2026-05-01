@@ -128,5 +128,11 @@
   "poll_edit_disabled": "此工作区已禁用投票编辑。请联系工作区管理员启用此功能。",
   "poll_edit_too_old": "此投票仅可在发布后 `{{minutes}}` 分钟内编辑。",
   "poll_edit_too_many_options": "此投票有 `{{count}}` 个选项，超过编辑模态框可容纳的 `{{max}}` 个。请从命令行使用 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`。",
-  "modal_edit_poll_max_blocks": ":warning: 已达到表单最大尺寸。请移除一个选项，或保存后重新编辑。"
+  "modal_edit_poll_max_blocks": ":warning: 已达到表单最大尺寸。请移除一个选项，或保存后重新编辑。",
+  "menu_export_csv": "导出为 CSV",
+  "poll_export_usage": "用法：",
+  "poll_export_not_found": "未找到投票。请从投票菜单的 `Command info` 中检查 Poll ID。",
+  "poll_export_no_permission": "只有投票创建者才能导出结果。",
+  "poll_export_header": "投票 `{{poll_id}}` 的导出：",
+  "poll_export_truncated": ":warning: 输出超过 `{{max}}` 个字符，已被截断。"
 }

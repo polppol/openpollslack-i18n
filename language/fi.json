@@ -130,5 +130,11 @@
   "poll_edit_disabled": "Kyselyiden muokkaus on poistettu käytöstä tässä työtilassa. Pyydä työtilan järjestelmänvalvojaa ottamaan se käyttöön.",
   "poll_edit_too_old": "Tätä kyselyä voi muokata vain `{{minutes}}` minuutin kuluessa julkaisusta.",
   "poll_edit_too_many_options": "Tällä kyselyllä on `{{count}}` vaihtoehtoa, enemmän kuin `{{max}}` jotka muokkausmodaali voi sisältää. Käytä komentorivillä `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`.",
-  "modal_edit_poll_max_blocks": ":warning: Lomakkeen enimmäiskoko saavutettu. Poista vaihtoehto tai tallenna ja muokkaa uudelleen tarvittaessa."
+  "modal_edit_poll_max_blocks": ":warning: Lomakkeen enimmäiskoko saavutettu. Poista vaihtoehto tai tallenna ja muokkaa uudelleen tarvittaessa.",
+  "menu_export_csv": "Vie CSV-muodossa",
+  "poll_export_usage": "Käyttö:",
+  "poll_export_not_found": "Kyselyä ei löytynyt. Tarkista Poll ID kohdasta `Command info` kyselyn valikossa.",
+  "poll_export_no_permission": "Vain kyselyn luoja voi viedä tulokset.",
+  "poll_export_header": "Kyselyn `{{poll_id}}` vienti:",
+  "poll_export_truncated": ":warning: Tuloste ylitti `{{max}}` merkkiä ja se katkaistiin."
 }

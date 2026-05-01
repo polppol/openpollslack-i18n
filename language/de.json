@@ -130,5 +130,11 @@
   "poll_edit_disabled": "Das Bearbeiten von Umfragen ist für diesen Workspace deaktiviert. Bitte wenden Sie sich an Ihren Workspace-Administrator.",
   "poll_edit_too_old": "Diese Umfrage kann nur innerhalb von `{{minutes}}` Minuten nach dem Posten bearbeitet werden.",
   "poll_edit_too_many_options": "Diese Umfrage hat `{{count}}` Optionen, mehr als die `{{max}}`, die ein Bearbeitungs-Modal aufnehmen kann. Verwenden Sie `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` von der Befehlszeile.",
-  "modal_edit_poll_max_blocks": ":warning: Maximale Formulargröße erreicht. Entfernen Sie eine Option oder speichern Sie und bearbeiten Sie erneut, wenn Sie mehr benötigen."
+  "modal_edit_poll_max_blocks": ":warning: Maximale Formulargröße erreicht. Entfernen Sie eine Option oder speichern Sie und bearbeiten Sie erneut, wenn Sie mehr benötigen.",
+  "menu_export_csv": "Als CSV exportieren",
+  "poll_export_usage": "Verwendung:",
+  "poll_export_not_found": "Umfrage nicht gefunden. Prüfen Sie die Poll ID unter `Command info` im Umfragemenü.",
+  "poll_export_no_permission": "Nur der Ersteller der Umfrage kann Ergebnisse exportieren.",
+  "poll_export_header": "Export der Umfrage `{{poll_id}}`:",
+  "poll_export_truncated": ":warning: Ausgabe überschritt `{{max}}` Zeichen und wurde gekürzt."
 }

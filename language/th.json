@@ -128,5 +128,11 @@
   "poll_edit_disabled": "Poll editing is disabled for this workspace. Please contact your workspace admin to enable it.(การแก้ไขโหวตถูกปิดใช้งานในเวิร์กสเปซนี้ กรุณาติดต่อผู้ดูแลเวิร์กสเปซเพื่อเปิดใช้งาน)",
   "poll_edit_too_old": "This poll can only be edited within `{{minutes}}` minutes of being posted.(โหวตนี้แก้ไขได้ภายใน `{{minutes}}` นาทีหลังโพสต์เท่านั้น)",
   "poll_edit_too_many_options": "This poll has `{{count}}` options, more than the `{{max}}` an edit modal can hold. Use `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` from the command line to edit it.",
-  "modal_edit_poll_max_blocks": ":warning: Maximum form size reached. Remove an option, or save and re-edit if you need more.(:warning: ฟอร์มมีขนาดสูงสุดแล้ว ลบตัวเลือกออก หรือบันทึกและแก้ไขใหม่หากต้องการเพิ่ม)"
+  "modal_edit_poll_max_blocks": ":warning: Maximum form size reached. Remove an option, or save and re-edit if you need more.(:warning: ฟอร์มมีขนาดสูงสุดแล้ว ลบตัวเลือกออก หรือบันทึกและแก้ไขใหม่หากต้องการเพิ่ม)",
+  "menu_export_csv": "Export to CSV(ส่งออกผลโหวต CSV)",
+  "poll_export_usage": "Usage(วิธีใช้):",
+  "poll_export_not_found": "Poll not found(ไม่พบโหวต). Check the Poll ID from `Command info` on the poll menu.",
+  "poll_export_no_permission": "Only the poll creator can export results.(เฉพาะผู้สร้างโหวตเท่านั้นที่สามารถส่งออกผลได้)",
+  "poll_export_header": "Export of poll `{{poll_id}}`:(ผลของโหวต `{{poll_id}}`:)",
+  "poll_export_truncated": ":warning: Output exceeded `{{max}}` chars and was truncated.(:warning: ผลลัพธ์เกิน `{{max}}` ตัวอักษร ถูกตัดทอน)"
 }

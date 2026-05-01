@@ -130,5 +130,11 @@
   "poll_edit_disabled": "La edición de encuestas está deshabilitada para este workspace. Contacta al administrador del workspace para habilitarla.",
   "poll_edit_too_old": "Esta encuesta solo se puede editar dentro de `{{minutes}}` minutos después de su publicación.",
   "poll_edit_too_many_options": "Esta encuesta tiene `{{count}}` opciones, más de las `{{max}}` que un modal de edición puede contener. Usa `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` desde la línea de comandos.",
-  "modal_edit_poll_max_blocks": ":warning: Tamaño máximo del formulario alcanzado. Elimina una opción, o guarda y vuelve a editar si necesitas más."
+  "modal_edit_poll_max_blocks": ":warning: Tamaño máximo del formulario alcanzado. Elimina una opción, o guarda y vuelve a editar si necesitas más.",
+  "menu_export_csv": "Exportar a CSV",
+  "poll_export_usage": "Uso:",
+  "poll_export_not_found": "Encuesta no encontrada. Verifica el Poll ID desde `Command info` en el menú de la encuesta.",
+  "poll_export_no_permission": "Solo el creador de la encuesta puede exportar los resultados.",
+  "poll_export_header": "Exportación de la encuesta `{{poll_id}}`:",
+  "poll_export_truncated": ":warning: La salida superó `{{max}}` caracteres y fue truncada."
 }

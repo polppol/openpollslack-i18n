@@ -2343,6 +2343,54 @@ async function processCommand(ack, body, client, command, context, say, respond)
           await postChat(body.response_url, 'ephemeral', mRequestBody);
           return;
 
+        } else if (cmdBody === 'export' || cmdBody.startsWith('export ')) {
+          // /poll export POLL_ID — owner-only CSV export. Both the menu
+          // action and this CLI form go through buildPollCsv + sendCsvExport.
+          cmdBody = cmdBody.substring(6).trim();
+
+          if (cmdBody === '') {
+            const usage = `\`/${slackCommand} export POLL_ID\``;
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_export_usage') + "\n" + usage,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          let exportPollData = null;
+          try {
+            exportPollData = await pollCol.findOne({ _id: new ObjectId(cmdBody) });
+          } catch (e) { /* falls through */ }
+
+          if (!exportPollData) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_export_not_found'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (exportPollData.user_id !== userId) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_export_no_permission'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          const exportVoteData = await findVoteDataForPoll(exportPollData);
+          await sendCsvExport(channel, userId, context, client, exportPollData, exportVoteData, userLang, body.response_url);
+          return;
+
         } else if (cmdBody.startsWith('test')) {
           //test functiom
           try {
@@ -3217,6 +3265,217 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId, 
   } finally {
     release();
   }
+}
+
+// RFC 4180 CSV field quoting: wrap with double-quotes if the value contains
+// a comma, quote, or newline; double internal double-quotes.
+function csvField(s) {
+  s = String(s ?? '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+// Build a CSV string for a poll's metadata + summary + (if non-anonymous)
+// per-vote rows. Single source of truth for the export format used by both
+// the CLI subcommand and the menu action. nameMap (Map<userId, name>) is
+// optional — if provided, "Name" column / metadata name rows are filled in;
+// otherwise they show empty.
+function buildPollCsv(pollData, voteData, nameMap) {
+  const isAnonymous = !!(pollData?.para?.anonymous);
+  const opts = pollData?.options || [];
+  const votes = voteData?.votes || {};
+  const rows = [];
+  const realOf = (uid) => (uid && nameMap && nameMap.get(uid)?.realName) || '';
+  const displayOf = (uid) => (uid && nameMap && nameMap.get(uid)?.displayName) || '';
+
+  rows.push('Poll ID,' + csvField(pollData?._id?.toString() || ''));
+  rows.push('Question,' + csvField(pollData?.question || ''));
+  rows.push('Created by,' + csvField(pollData?.user_id || ''));
+  const creatorReal = realOf(pollData?.user_id);
+  if (creatorReal) rows.push('Created by Real Name,' + csvField(creatorReal));
+  const creatorDisplay = displayOf(pollData?.user_id);
+  if (creatorDisplay) rows.push('Created by Display Name,' + csvField(creatorDisplay));
+  if (pollData?.created_ts) {
+    rows.push('Created at,' + csvField(new Date(pollData.created_ts).toISOString()));
+  }
+  if (pollData?.edited_ts) {
+    rows.push('Last edited,' + csvField(new Date(pollData.edited_ts).toISOString()));
+    rows.push('Edited by,' + csvField(pollData.edited_by || ''));
+    const editorReal = realOf(pollData?.edited_by);
+    if (editorReal) rows.push('Edited by Real Name,' + csvField(editorReal));
+    const editorDisplay = displayOf(pollData?.edited_by);
+    if (editorDisplay) rows.push('Edited by Display Name,' + csvField(editorDisplay));
+  }
+  rows.push('Anonymous,' + (isAnonymous ? 'true' : 'false'));
+  rows.push('');
+
+  rows.push('Option,Vote count');
+  for (let i = 0; i < opts.length; i++) {
+    const voters = votes[String(i)] || [];
+    rows.push(csvField(opts[i]) + ',' + String(voters.length));
+  }
+  rows.push('');
+
+  // Per-voter detail. Anonymous polls suppress this section by design —
+  // the whole point is that voters' identities aren't disclosed.
+  if (!isAnonymous) {
+    rows.push('User ID,Real Name,Display Name,Option');
+    for (let i = 0; i < opts.length; i++) {
+      const voters = votes[String(i)] || [];
+      for (const voterId of voters) {
+        rows.push(
+          csvField(voterId) + ',' +
+          csvField(realOf(voterId)) + ',' +
+          csvField(displayOf(voterId)) + ',' +
+          csvField(opts[i])
+        );
+      }
+    }
+  }
+
+  return rows.join('\n');
+}
+
+// Resolve display names for a Set/array of Slack user IDs via users.info.
+// Returns Map<uid, {realName, displayName}>. Capped at `max` lookups to
+// keep export latency bounded; beyond the cap the CSV simply leaves both
+// name columns blank. Per-user failures (deleted user, scope hiccup, rate
+// limit) leave that entry blank rather than aborting the whole export.
+async function fetchVoterNames(client, botToken, userIds, max = 100) {
+  const out = new Map();
+  let n = 0;
+  for (const uid of userIds) {
+    if (!uid) continue;
+    if (++n > max) break;
+    try {
+      const r = await client.users.info({ token: botToken, user: uid });
+      const p = r?.user?.profile || {};
+      out.set(uid, {
+        realName: p.real_name || r?.user?.name || '',
+        displayName: p.display_name || '',
+      });
+    } catch (e) {
+      out.set(uid, { realName: '', displayName: '' });
+    }
+  }
+  return out;
+}
+
+// Render the CSV inside an ephemeral message visible only to the requester.
+// Slack message text caps at 40k chars; we keep a safe budget for the
+// markdown fence + truncation notice. Larger polls get truncated rather
+// than failing — file-upload delivery would need files:write scope which
+// this app doesn't request.
+//
+// channel + user are passed in explicitly because slash-command body uses
+// flat `body.channel_id`/`body.user_id` while action body uses nested
+// `body.channel.id`/`body.user.id` — the helper can't safely do that
+// resolution itself. Caller knows which shape it has.
+const POLL_EXPORT_MAX_CHARS = 30000;
+async function sendCsvExport(channel, user, context, client, pollData, voteData, userLang, responseUrl) {
+  // Collect unique user IDs to look up: creator, editor (if any), and
+  // every voter (only when not anonymous — anonymous polls never expose
+  // voter identities, so name lookup would just leak the cap budget).
+  const ids = new Set();
+  if (pollData?.user_id) ids.add(pollData.user_id);
+  if (pollData?.edited_by) ids.add(pollData.edited_by);
+  if (!pollData?.para?.anonymous) {
+    const votes = voteData?.votes || {};
+    for (const k of Object.keys(votes)) {
+      for (const uid of (votes[k] || [])) ids.add(uid);
+    }
+  }
+  let nameMap = null;
+  if (client && context?.botToken && ids.size > 0) {
+    try {
+      nameMap = await fetchVoterNames(client, context.botToken, Array.from(ids));
+    } catch (e) {
+      logger.debug('[Export] name lookup failed: ' + (e?.message || e));
+    }
+  }
+
+  const csv = buildPollCsv(pollData, voteData, nameMap);
+  let payload;
+  if (csv.length > POLL_EXPORT_MAX_CHARS) {
+    payload = '```' + csv.substring(0, POLL_EXPORT_MAX_CHARS) + '\n[truncated]```\n' +
+      parameterizedString(stri18n(userLang, 'poll_export_truncated'), { max: POLL_EXPORT_MAX_CHARS });
+  } else {
+    payload = '```' + csv + '```';
+  }
+  const header = parameterizedString(stri18n(userLang, 'poll_export_header'), {
+    poll_id: pollData?._id?.toString() || '',
+  });
+  await postChat(responseUrl || '', 'ephemeral', {
+    token: context.botToken,
+    channel: channel,
+    user: user,
+    text: header + '\n' + payload,
+  });
+}
+
+// Look up vote data for a poll. Tries the indexed (channel, ts) filter
+// first; falls back to a poll_id scan if pollData.ts is null (response_url
+// poll that hasn't been auto-healed yet). poll_id is stored as a string
+// in votesCol because it comes from JSON-parsed button values.
+async function findVoteDataForPoll(pollData) {
+  if (!pollData) return null;
+  if (pollData.channel && pollData.ts) {
+    const v = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
+    if (v) return v;
+  }
+  if (pollData._id) {
+    return await votesCol.findOne({ poll_id: pollData._id.toString() });
+  }
+  return null;
+}
+
+// Menu / action-button entry point for CSV export. Owner-only, same shape
+// as deletePoll/closePoll. Uses body.message.ts/channel.id from the live
+// click for both ownership locator and pollData auto-heal — see CLAUDE.md
+// "Live click body is source of truth" rule.
+async function exportPoll(body, client, context, value) {
+  if (!body || !body.user || !body.user.id) return;
+
+  const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(body));
+  let appLang = gAppLang;
+  if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
+  const userLang = value?.user_lang || appLang;
+
+  const ephemeralReject = async (msgKey) => {
+    if (!body.channel?.id) return;
+    await postChat('', 'ephemeral', {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      text: stri18n(userLang, msgKey),
+    });
+  };
+
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(value.p_id) });
+  } catch (e) { /* falls through */ }
+
+  if (!pollData) { await ephemeralReject('poll_export_not_found'); return; }
+  if (pollData.user_id !== body.user.id) { await ephemeralReject('poll_export_no_permission'); return; }
+
+  // Auto-heal pollData.ts/channel from the live click. Future CLI exports
+  // on this poll then have the right channel/ts for vote lookup.
+  const liveTs = body?.message?.ts || null;
+  const liveChannel = body?.channel?.id || null;
+  if (liveTs && liveChannel && (pollData.ts !== liveTs || pollData.channel !== liveChannel)) {
+    pollCol.updateOne(
+      { _id: pollData._id },
+      { $set: { ts: liveTs, channel: liveChannel } }
+    ).catch(e => logger.debug('[Export][Heal] auto-heal failed: ' + (e?.message || e)));
+    pollData.ts = liveTs;
+    pollData.channel = liveChannel;
+  }
+
+  const voteData = await findVoteDataForPoll(pollData);
+  await sendCsvExport(body?.channel?.id, body?.user?.id, context, client, pollData, voteData, userLang, body?.response_url || null);
 }
 
 const createModalBlockInput = (userLang)  => {
@@ -5312,7 +5571,13 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
           text: stri18n(userLang, 'menu_edit_poll'),
         },
         value: JSON.stringify({action: 'btn_edit', p_id: pollID, user: userId, user_lang: userLang}),
-      }] : [])
+      }] : []), {
+        text: {
+          type: 'plain_text',
+          text: stri18n(userLang, 'menu_export_csv'),
+        },
+        value: JSON.stringify({action: 'btn_export', p_id: pollID, user: userId, user_lang: userLang}),
+      }
       ],
     },
     {//GRP 1
@@ -5606,6 +5871,8 @@ async function btnActions(args) {
     closePoll(body, client, context, value);
   else if ('btn_edit' === value.action)
     editPollOpenModal(body, client, context, value);
+  else if ('btn_export' === value.action)
+    exportPoll(body, client, context, value);
 }
 
 // Build a single option-input row for the edit modal: a plain_text_input

@@ -130,5 +130,11 @@
   "poll_edit_disabled": "このワークスペースでは投票の編集が無効になっています。ワークスペース管理者に有効化を依頼してください。",
   "poll_edit_too_old": "この投票は投稿から `{{minutes}}` 分以内のみ編集できます。",
   "poll_edit_too_many_options": "この投票には `{{count}}` 個の選択肢があり、編集モーダルが保持できる `{{max}}` 個を超えています。コマンドラインから `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` を使用してください。",
-  "modal_edit_poll_max_blocks": ":warning: フォームの最大サイズに達しました。選択肢を削除するか、保存して再編集してください。"
+  "modal_edit_poll_max_blocks": ":warning: フォームの最大サイズに達しました。選択肢を削除するか、保存して再編集してください。",
+  "menu_export_csv": "CSVにエクスポート",
+  "poll_export_usage": "使い方:",
+  "poll_export_not_found": "投票が見つかりません。投票メニューの `Command info` から Poll ID を確認してください。",
+  "poll_export_no_permission": "投票の作成者のみが結果をエクスポートできます。",
+  "poll_export_header": "投票 `{{poll_id}}` のエクスポート:",
+  "poll_export_truncated": ":warning: 出力が `{{max}}` 文字を超えたため、切り詰められました。"
 }

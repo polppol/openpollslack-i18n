@@ -234,6 +234,33 @@ Notes:
 - Editing is only allowed within `enable_poll_edit_max_mins` minutes of the poll being posted (default `60`). Set the value to `0` (server or `/poll config write enable_poll_edit_max_mins 0`) for no time limit.
 - Anonymity, hidden mode, vote limit, and other flags are preserved from the original poll. To change those, delete and recreate the poll.
 
+### Export poll results to CSV
+Export a posted poll's results as a CSV. Only the poll owner can export; the result is shown back as an ephemeral message visible only to you.
+
+Two ways:
+
+**1. Via menu (GUI)** — Open the poll's overflow menu (`⋯`) → **Export to CSV**.
+
+**2. Via command (CLI)**:
+```
+/poll export [POLL_ID]
+```
+Example:
+```
+/poll export 6751aadb2a37a95edbc90a58
+```
+
+Output format (per RFC 4180):
+- A metadata block (Poll ID, question, creator + real name + display name, created/edited timestamps, anonymous flag).
+- A summary section (each option and its vote count).
+- A per-voter section (`User ID,Real Name,Display Name,Option`) — **omitted entirely for anonymous polls** so voter identities aren't disclosed.
+
+Notes:
+- Output caps at 30 000 chars; very large polls get truncated with a warning.
+- Voter / creator / editor names are looked up via Slack's `users.info` (capped at 100 lookups per export to keep latency bounded). Beyond the cap, the Real Name and Display Name columns stay blank.
+- "Real Name" is the user's full name from their Slack profile; "Display Name" is the `@handle` they go by in chat. Either may be empty depending on what each user has filled in.
+- Same export, same format, regardless of how the poll was created (CLI / modal / scheduled).
+
 # Override configuration 
 
 There are three levels of configuration: Server, Team, and User. 
