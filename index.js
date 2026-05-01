@@ -2060,173 +2060,40 @@ async function processCommand(ack, body, client, command, context, say, respond)
             return;
           }
 
-          // Detect option drift so we can warn the user about lost votes.
-          const oldOptionSet = new Set((editPollData.options || []));
-          const newOptionSet = new Set(newOptions);
-          let droppedCount = 0;
-          for (const o of oldOptionSet) if (!newOptionSet.has(o)) droppedCount++;
+          const editResult = await applyPollEdit({
+            pollData: editPollData,
+            newQuestion: newQuestion,
+            newOptions: newOptions,
+            editorUserId: userId,
+          });
 
-          // Take the per-message mutex used by close/recreate flows so a
-          // concurrent vote can't race the chat.update.
-          const mutexKey = `${editPollData.team}/${editPollData.channel}/${editPollData.ts}`;
-          if (!mutexes.hasOwnProperty(mutexKey)) {
-            mutexes[mutexKey] = new Mutex();
-          }
-          let release = null;
-          let countTry = 0;
-          do {
-            ++countTry;
-            try {
-              release = await mutexes[mutexKey].acquire();
-            } catch (e) {
-              logger.info(`[Edit][Try #${countTry}] Error while attempt to acquire mutex lock.`, e);
-            }
-          } while (!release && countTry < 3);
-
-          if (!release) {
+          if (!editResult.ok) {
+            const errSuffix = editResult.error ? `: ${editResult.error}` : '';
             let mRequestBody = {
               token: context.botToken,
               channel: channel,
               user: userId,
-              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command') + errSuffix,
             };
             await postChat(body.response_url, 'ephemeral', mRequestBody);
             return;
           }
 
-          try {
-            const teamInfo = await getTeamInfo(editPollData.team);
-            const editBotToken = teamInfo?.bot?.token;
-            if (!editBotToken) {
-              let mRequestBody = {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
-              };
-              await postChat(body.response_url, 'ephemeral', mRequestBody);
-              return;
-            }
-
-            // Persist the edit before rebuilding the view so the rebuild
-            // reads the new question/options off pollCol consistently.
-            await pollCol.updateOne(
-                { _id: editPollObjId },
-                { $set: {
-                  question: newQuestion,
-                  options: newOptions,
-                  edited_ts: new Date(),
-                  edited_by: userId,
-                } }
-            );
-
-            const editTeamConfig = await getTeamOverride(editPollData.team);
-            const editUserLang = editPollData.para?.user_lang || userLang;
-
-            const pollView = (await createPollView(
-                editPollData.team, editPollData.channel, editTeamConfig,
-                newQuestion, newOptions,
-                editPollData.para?.anonymous ?? false,
-                editPollData.para?.limited,
-                editPollData.para?.limit,
-                editPollData.para?.hidden,
-                editPollData.para?.user_add_choice,
-                editPollData.para?.menu_at_the_end,
-                editPollData.para?.compact_ui,
-                editPollData.para?.show_divider,
-                editPollData.para?.show_help_link,
-                editPollData.para?.show_command_info,
-                editPollData.para?.true_anonymous,
-                editPollData.para?.add_number_emoji_to_choice,
-                editPollData.para?.add_number_emoji_to_choice_btn,
-                editPollData.schedule_end_ts,
-                editUserLang,
-                editPollData.user_id,
-                editPollData.cmd, "edit", null, null,
-                true, editPollData._id
-            ));
-
-            let blocks = pollView?.blocks;
-            if (!pollView || !blocks) {
-              let mRequestBody = {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
-              };
-              await postChat(body.response_url, 'ephemeral', mRequestBody);
-              return;
-            }
-
-            // Re-apply existing vote tally so editing doesn't reset counts.
-            const isHidden = await getInfos(
-                'hidden', blocks,
-                { team: editPollData.team, channel: editPollData.channel, ts: editPollData.ts },
-            );
-            const voteData = await votesCol.findOne({ channel: editPollData.channel, ts: editPollData.ts });
-            const poll = voteData?.votes ?? {};
-
-            let editIsMenuAtTheEnd = gIsMenuAtTheEnd;
-            if (editPollData.para?.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editPollData.para?.menu_at_the_end;
-            else if (editTeamConfig.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editTeamConfig.menu_at_the_end;
-            let editIsCompactUI = gIsCompactUI;
-            if (editPollData.para?.hasOwnProperty('compact_ui')) editIsCompactUI = editPollData.para?.compact_ui;
-            else if (editTeamConfig.hasOwnProperty('compact_ui')) editIsCompactUI = editTeamConfig.compact_ui;
-
-            blocks = await updateVoteBlock(
-                editPollData.team, editPollData.channel, editPollData.ts,
-                blocks, poll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
-            );
-
-            const updateBody = {
-              token: editBotToken,
-              channel: editPollData.channel,
-              ts: editPollData.ts,
-              blocks: blocks,
-              text: `Poll : ${newQuestion}`,
-            };
-            const postRes = await postChat("", 'update', updateBody);
-            if (postRes.status === false) {
-              logger.warn(`[Edit] Failed to update poll ID:${editPollData._id} in CH:${editPollData.channel}: ${postRes.message}`);
-              let mRequestBody = {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command') + `: ${postRes.message}`,
-              };
-              await postChat(body.response_url, 'ephemeral', mRequestBody);
-              return;
-            }
-
-            let successText = "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_success'), {
-              poll_id: editPollData._id.toString(),
+          let successText = "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_success'), {
+            poll_id: editPollData._id.toString(),
+          });
+          if (editResult.droppedCount > 0) {
+            successText += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), {
+              dropped_count: editResult.droppedCount,
             });
-            if (droppedCount > 0) {
-              successText += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), {
-                dropped_count: droppedCount,
-              });
-            }
-            let mRequestBody = {
-              token: context.botToken,
-              channel: channel,
-              user: userId,
-              text: successText,
-            };
-            await postChat(body.response_url, 'ephemeral', mRequestBody);
-            logger.verbose(`[Edit] Poll ID:${editPollData._id} edited by ${userId}`);
-          } catch (e) {
-            logger.error(`[Edit] Unexpected error editing poll ID:${editPollData?._id}`);
-            logger.error(e.toString() + "\n" + e.stack);
-            let mRequestBody = {
-              token: context.botToken,
-              channel: channel,
-              user: userId,
-              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
-            };
-            await postChat(body.response_url, 'ephemeral', mRequestBody);
-          } finally {
-            release();
           }
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: successText,
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
           return;
 
         } else if (cmdBody.startsWith('test')) {
@@ -2921,6 +2788,130 @@ async function processCommand(ack, body, client, command, context, say, respond)
     logger.error(e.toString() + "\n" + e.stack);
     console.log(e);
     console.trace();
+  }
+}
+
+// Shared apply-edit pipeline used by both the CLI subcommand and the
+// modal/GUI view submission. Caller is responsible for pre-flight checks
+// (ownership, well-formed inputs, etc.) — this function only performs the
+// DB update + view rebuild + chat.update under the per-message mutex.
+//
+// Returns: { ok: boolean, droppedCount: number, error: string|null }
+async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }) {
+  if (!pollData || !pollData.ts || !pollData.channel || !pollData.team) {
+    return { ok: false, droppedCount: 0, error: 'not_posted' };
+  }
+  if (!newQuestion || !Array.isArray(newOptions) || newOptions.length === 0) {
+    return { ok: false, droppedCount: 0, error: 'no_question_or_options' };
+  }
+
+  // Detect option drift so callers can warn about lost votes.
+  const oldOptionSet = new Set((pollData.options || []));
+  const newOptionSet = new Set(newOptions);
+  let droppedCount = 0;
+  for (const o of oldOptionSet) if (!newOptionSet.has(o)) droppedCount++;
+
+  const mutexKey = `${pollData.team}/${pollData.channel}/${pollData.ts}`;
+  if (!mutexes.hasOwnProperty(mutexKey)) {
+    mutexes[mutexKey] = new Mutex();
+  }
+  let release = null;
+  let countTry = 0;
+  do {
+    ++countTry;
+    try {
+      release = await mutexes[mutexKey].acquire();
+    } catch (e) {
+      logger.info(`[Edit][Try #${countTry}] Error while attempt to acquire mutex lock.`, e);
+    }
+  } while (!release && countTry < 3);
+
+  if (!release) return { ok: false, droppedCount, error: 'mutex' };
+
+  try {
+    const teamInfo = await getTeamInfo(pollData.team);
+    const editBotToken = teamInfo?.bot?.token;
+    if (!editBotToken) return { ok: false, droppedCount, error: 'no_bot_token' };
+
+    await pollCol.updateOne(
+        { _id: pollData._id },
+        { $set: {
+          question: newQuestion,
+          options: newOptions,
+          edited_ts: new Date(),
+          edited_by: editorUserId,
+        } }
+    );
+
+    const editTeamConfig = await getTeamOverride(pollData.team);
+    const editUserLang = pollData.para?.user_lang || gAppLang;
+
+    const pollView = (await createPollView(
+        pollData.team, pollData.channel, editTeamConfig,
+        newQuestion, newOptions,
+        pollData.para?.anonymous ?? false,
+        pollData.para?.limited,
+        pollData.para?.limit,
+        pollData.para?.hidden,
+        pollData.para?.user_add_choice,
+        pollData.para?.menu_at_the_end,
+        pollData.para?.compact_ui,
+        pollData.para?.show_divider,
+        pollData.para?.show_help_link,
+        pollData.para?.show_command_info,
+        pollData.para?.true_anonymous,
+        pollData.para?.add_number_emoji_to_choice,
+        pollData.para?.add_number_emoji_to_choice_btn,
+        pollData.schedule_end_ts,
+        editUserLang,
+        pollData.user_id,
+        pollData.cmd, "edit", null, null,
+        true, pollData._id
+    ));
+
+    let blocks = pollView?.blocks;
+    if (!pollView || !blocks) return { ok: false, droppedCount, error: 'view_build_failed' };
+
+    const isHidden = await getInfos(
+        'hidden', blocks,
+        { team: pollData.team, channel: pollData.channel, ts: pollData.ts },
+    );
+    const voteData = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
+    const poll = voteData?.votes ?? {};
+
+    let editIsMenuAtTheEnd = gIsMenuAtTheEnd;
+    if (pollData.para?.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = pollData.para?.menu_at_the_end;
+    else if (editTeamConfig.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editTeamConfig.menu_at_the_end;
+    let editIsCompactUI = gIsCompactUI;
+    if (pollData.para?.hasOwnProperty('compact_ui')) editIsCompactUI = pollData.para?.compact_ui;
+    else if (editTeamConfig.hasOwnProperty('compact_ui')) editIsCompactUI = editTeamConfig.compact_ui;
+
+    blocks = await updateVoteBlock(
+        pollData.team, pollData.channel, pollData.ts,
+        blocks, poll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
+    );
+
+    const updateBody = {
+      token: editBotToken,
+      channel: pollData.channel,
+      ts: pollData.ts,
+      blocks: blocks,
+      text: `Poll : ${newQuestion}`,
+    };
+    const postRes = await postChat("", 'update', updateBody);
+    if (postRes.status === false) {
+      logger.warn(`[Edit] Failed to update poll ID:${pollData._id} in CH:${pollData.channel}: ${postRes.message}`);
+      return { ok: false, droppedCount, error: postRes.message || 'chat_update_failed' };
+    }
+
+    logger.verbose(`[Edit] Poll ID:${pollData._id} edited by ${editorUserId}`);
+    return { ok: true, droppedCount, error: null };
+  } catch (e) {
+    logger.error(`[Edit] Unexpected error editing poll ID:${pollData?._id}`);
+    logger.error(e.toString() + "\n" + e.stack);
+    return { ok: false, droppedCount, error: 'exception' };
+  } finally {
+    release();
   }
 }
 
@@ -4996,6 +4987,12 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
           text: stri18n(userLang, 'menu_delete_poll'),
         },
         value: JSON.stringify({action: 'btn_delete', p_id: pollID, user: userId, user_lang: userLang}),
+      }, {
+        text: {
+          type: 'plain_text',
+          text: stri18n(userLang, 'menu_edit_poll'),
+        },
+        value: JSON.stringify({action: 'btn_edit', p_id: pollID, user: userId, user_lang: userLang}),
       }
       ],
     },
@@ -5288,7 +5285,312 @@ async function btnActions(args) {
     deletePoll(body, client, context, value);
   else if ('btn_close' === value.action)
     closePoll(body, client, context, value);
+  else if ('btn_edit' === value.action)
+    editPollOpenModal(body, client, context, value);
 }
+
+// Build a single option-input row for the edit modal: a plain_text_input
+// pre-filled with `value`, paired with a 🗑 delete button accessory in a
+// section block. Each row has a unique block_id so views.update can append
+// or remove rows without colliding with the existing ones.
+function buildEditOptionRow(userLang, optionValue) {
+  const blockId = 'edit_choice_' + uuidv4();
+  const inputBlock = {
+    type: 'input',
+    block_id: blockId,
+    element: {
+      type: 'plain_text_input',
+      action_id: 'edit_choice_input',
+      initial_value: optionValue ?? '',
+      placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_choice') },
+    },
+    label: { type: 'plain_text', text: ' ' },
+    optional: true,
+  };
+  const deleteBlock = {
+    type: 'section',
+    block_id: blockId + '_del',
+    text: { type: 'mrkdwn', text: ' ' },
+    accessory: {
+      type: 'button',
+      action_id: 'edit_del_choice',
+      value: blockId,
+      text: { type: 'plain_text', text: '🗑', emoji: true },
+    },
+  };
+  return [inputBlock, deleteBlock];
+}
+
+async function editPollOpenModal(body, client, context, value) {
+  if (!body || !body.user || !body.user.id || !body.trigger_id) return;
+
+  // Re-check ownership against the DB rather than trusting the value blob.
+  // The static_select is rendered for every viewer, so a non-owner can click
+  // it; we must reject before opening the modal.
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(value.p_id) });
+  } catch (e) { /* falls through */ }
+
+  const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(body));
+  let appLang = gAppLang;
+  if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
+  const userLang = value.user_lang || appLang;
+
+  const ephemeralReject = async (msgKey) => {
+    if (!body.channel?.id) return;
+    await postChat('', 'ephemeral', {
+      token: context.botToken,
+      channel: body.channel.id,
+      user: body.user.id,
+      text: stri18n(userLang, msgKey),
+    });
+  };
+
+  if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
+  if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
+  if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+
+  const blocks = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: stri18n(userLang, 'modal_edit_poll_intro') },
+    },
+    { type: 'divider' },
+    {
+      type: 'input',
+      block_id: 'edit_question',
+      label: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_text') },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'edit_question_input',
+        initial_value: pollData.question ?? '',
+        placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_hint') },
+      },
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: stri18n(userLang, 'modal_input_choice_text') },
+    },
+  ];
+
+  for (const opt of (pollData.options || [])) {
+    for (const b of buildEditOptionRow(userLang, opt)) blocks.push(b);
+  }
+
+  // Trailing "Add option" actions block — keep it last so the dynamic
+  // add handler can simply splice new rows in just before it.
+  blocks.push({
+    type: 'actions',
+    block_id: 'edit_add_choice_actions',
+    elements: [{
+      type: 'button',
+      action_id: 'edit_add_choice',
+      text: { type: 'plain_text', text: stri18n(userLang, 'modal_input_choice_add'), emoji: true },
+    }],
+  });
+
+  const privateMetadata = {
+    poll_id: pollData._id.toString(),
+    user_lang: userLang,
+  };
+
+  try {
+    await client.views.open({
+      token: context.botToken,
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal',
+        callback_id: 'edit_poll_submit',
+        private_metadata: JSON.stringify(privateMetadata),
+        title: { type: 'plain_text', text: stri18n(userLang, 'modal_edit_poll_title') },
+        submit: { type: 'plain_text', text: stri18n(userLang, 'modal_edit_poll_submit') },
+        close: { type: 'plain_text', text: stri18n(userLang, 'btn_cancel') },
+        blocks: blocks,
+      },
+    });
+  } catch (e) {
+    logger.warn('[Edit] views.open failed: ' + (e?.data?.error || e?.message || e));
+  }
+}
+
+// Dynamic add: append one fresh empty option row just before the trailing
+// "Add option" actions block. Mirrors the create-modal btn_add_choice flow.
+app.action('edit_add_choice', async ({ ack, body, client, context }) => {
+  await ack();
+  if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
+
+  let userLang = gAppLang;
+  try {
+    const pm = JSON.parse(body.view.private_metadata || '{}');
+    if (pm.user_lang) userLang = pm.user_lang;
+  } catch (e) { /* fall through */ }
+
+  const blocks = body.view.blocks.slice();
+  const insertAt = blocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
+  const newRow = buildEditOptionRow(userLang, '');
+  if (insertAt === -1) {
+    for (const b of newRow) blocks.push(b);
+  } else {
+    blocks.splice(insertAt, 0, ...newRow);
+  }
+
+  try {
+    await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view_id: body.view.id,
+      view: {
+        type: body.view.type,
+        callback_id: 'edit_poll_submit',
+        private_metadata: body.view.private_metadata,
+        title: body.view.title,
+        submit: body.view.submit,
+        close: body.view.close,
+        blocks: blocks,
+        external_id: body.view.id,
+      },
+    });
+  } catch (e) {
+    logger.debug('edit_add_choice views.update failed: ' + (e?.data?.error || e?.message || e));
+  }
+});
+
+// Dynamic remove: drop the input block whose id matches action.value, plus
+// its paired _del section block.
+app.action('edit_del_choice', async ({ ack, action, body, client, context }) => {
+  await ack();
+  if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
+
+  const targetId = action?.value;
+  if (!targetId) return;
+
+  const blocks = body.view.blocks.filter(b => {
+    if (!b.block_id) return true;
+    return b.block_id !== targetId && b.block_id !== targetId + '_del';
+  });
+
+  try {
+    await client.views.update({
+      token: context.botToken,
+      hash: body.view.hash,
+      view_id: body.view.id,
+      view: {
+        type: body.view.type,
+        callback_id: 'edit_poll_submit',
+        private_metadata: body.view.private_metadata,
+        title: body.view.title,
+        submit: body.view.submit,
+        close: body.view.close,
+        blocks: blocks,
+        external_id: body.view.id,
+      },
+    });
+  } catch (e) {
+    logger.debug('edit_del_choice views.update failed: ' + (e?.data?.error || e?.message || e));
+  }
+});
+
+// Final modal submit: collect the question and any non-empty option
+// values (preserving block order so options stay in the user's chosen
+// sequence), validate, then delegate to applyPollEdit.
+app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
+  if (!view || !view.state || !view.private_metadata || !body?.user?.id) {
+    await ack();
+    return;
+  }
+
+  let pollIdRaw = null;
+  let userLang = gAppLang;
+  try {
+    const pm = JSON.parse(view.private_metadata);
+    pollIdRaw = pm.poll_id;
+    if (pm.user_lang) userLang = pm.user_lang;
+  } catch (e) { /* fall through */ }
+
+  let newQuestion = null;
+  const newOptions = [];
+  for (const blockId of Object.keys(view.state.values)) {
+    const inner = view.state.values[blockId];
+    const firstActionId = Object.keys(inner)[0];
+    const v = inner[firstActionId]?.value;
+    if (blockId === 'edit_question') {
+      newQuestion = (v || '').trim();
+    } else if (blockId.startsWith('edit_choice_') && !blockId.endsWith('_del')) {
+      const trimmed = (v || '').trim();
+      if (trimmed !== '') newOptions.push(trimmed);
+    }
+  }
+
+  if (!newQuestion) {
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: stri18n(userLang, 'poll_edit_no_question') },
+    });
+    return;
+  }
+  if (newOptions.length === 0) {
+    // No specific block to attach the error to once all option rows are
+    // empty/removed — fall back to the question field so the user sees it.
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: stri18n(userLang, 'poll_edit_no_question') },
+    });
+    return;
+  }
+  if (newOptions.length > gSlackLimitChoices) {
+    await ack({
+      response_action: 'errors',
+      errors: { edit_question: parameterizedString(stri18n(userLang, 'err_slack_limit_choices_max'), { slack_limit_choices: gSlackLimitChoices }) },
+    });
+    return;
+  }
+
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(pollIdRaw) });
+  } catch (e) { /* fall through */ }
+
+  if (!pollData) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'poll_edit_not_found') } });
+    return;
+  }
+  if (pollData.user_id !== body.user.id) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'err_action_other') } });
+    return;
+  }
+
+  await ack();
+
+  const editResult = await applyPollEdit({
+    pollData: pollData,
+    newQuestion: newQuestion,
+    newOptions: newOptions,
+    editorUserId: body.user.id,
+  });
+
+  // Best-effort DM the editor with success/warning. We've already acked the
+  // view; if the DM fails the edit still went through.
+  try {
+    const teamInfo = await getTeamInfo(pollData.team);
+    const dmToken = teamInfo?.bot?.token;
+    if (dmToken) {
+      let text;
+      if (!editResult.ok) {
+        text = stri18n(userLang, 'err_invalid_command') + (editResult.error ? `: ${editResult.error}` : '');
+      } else {
+        text = parameterizedString(stri18n(userLang, 'poll_edit_success'), { poll_id: pollData._id.toString() });
+        if (editResult.droppedCount > 0) {
+          text += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), { dropped_count: editResult.droppedCount });
+        }
+      }
+      await postChat('', 'post', { token: dmToken, channel: body.user.id, text: text });
+    }
+  } catch (e) {
+    logger.debug('[Edit] DM after view submit failed: ' + (e?.message || e));
+  }
+});
 
 async function supportAction(body, client, context) {
   if (
