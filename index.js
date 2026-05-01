@@ -11,12 +11,10 @@ const { isValidISO8601 } = require('./src/util/iso');
 const { getTeamOrEnterpriseId } = require('./src/util/teamId');
 const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
 const { convertHoursToString, toBoolean } = require('./src/util/format');
+const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
 const cron = require('node-cron');
-const { CronExpressionParser } = require('cron-parser');
-const cronstrue = require('cronstrue');
-const cronstrueOp = { use24HourTimeFormat: true };
 
 const { createLogger, format, transports } = require('winston');
 const fs = require('fs');
@@ -221,19 +219,10 @@ loadLanguages(logger, gAppLang);
 
 logger.info('Init cron jobs...');
 
-function calculateNextScheduleTime(cronString,timeZoneString) {
-  try {
-    if(timeZoneString===null) timeZoneString = 'UTC';
-    const options = {
-      tz: timeZoneString
-    };
-    const interval = CronExpressionParser.parse(cronString,options);
-    return interval.next().toDate();
-  } catch (e) {
-    //console.log(e);
-    logger.debug(e.toString()+"\n"+e.stack);
-    return null;
-  }
+// Thin wrapper kept for legacy call sites; delegates to the cron SSOT in
+// src/util/cron.js so parsing behaviour stays consistent across the app.
+function calculateNextScheduleTime(cronString, timeZoneString) {
+  return parseNextRun(cronString, timeZoneString);
 }
 const checkAndExecuteTasks = async () => {
   const currentDateTime = new Date();
@@ -1834,13 +1823,8 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              let cronHumanText = "";
-              if (item?.cron_string && item?.cron_string !== "") {
-                try {
-                  cronHumanText = cronstrue.toString(item?.cron_string, cronstrueOp) + ", ";
-                } catch (e) {
-                }
-              }
+              const cronHumanRaw = humanizeCron(item?.cron_string);
+              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
               resString += "```";
               resString += `Poll ID: ${item.poll_id}\n`;
               resString += `Next Run: ` + localizeTimeStamp(myTz, item.next_ts) + `\n`;
@@ -1905,13 +1889,8 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              let cronHumanText = "";
-              if (item?.cron_string && item?.cron_string !== "") {
-                try {
-                  cronHumanText = cronstrue.toString(item?.cron_string, cronstrueOp) + ", ";
-                } catch (e) {
-                }
-              }
+              const cronHumanRaw = humanizeCron(item?.cron_string);
+              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
               resString += "```";
               resString += `Poll ID: ${item.poll_id}\n`;
               resString += `Owner: ${item.created_user_id}\n`;
@@ -2712,6 +2691,9 @@ const createModalBlockInputDelete = (userLang)  => {
   logger.info('Bolt app is running!');
 
   logger.info('Check and start cron jobs.');
+  // Verify every stored cron_string still parses under the current
+  // cron-parser version before the minute scheduler starts firing.
+  await auditSchedules({ scheduleCol, logger });
   // Schedule the task checker to run every minute
   cron.schedule('* * * * *', checkAndExecuteTasks);
   // Cleanup every day
