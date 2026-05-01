@@ -184,6 +184,46 @@ let migrations = null;
 
 const mutexes = {};
 
+// Periodic cleanup of mutexes whose lock has been fully released. The map is
+// keyed on `${team}/${channel}/${ts}` and would otherwise grow unbounded as
+// every poll the bot ever interacts with leaves an entry behind. This is
+// race-free in Node's single-threaded model: the synchronous isLocked() check
+// and the synchronous delete cannot be interrupted by another async caller,
+// and any new acquirer that arrives later simply gets a fresh Mutex via the
+// existing `if (!mutexes.hasOwnProperty(key))` guard at every call site.
+setInterval(() => {
+  try {
+    let removed = 0;
+    for (const key of Object.keys(mutexes)) {
+      if (typeof mutexes[key]?.isLocked === 'function' && !mutexes[key].isLocked()) {
+        delete mutexes[key];
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      // Use console here because logger may not be initialised yet at very
+      // early ticks; once the logger is up, we'd see this via the same
+      // colorize transport. Either way it's diagnostic.
+      console.log(`[MutexGC] Released ${removed} idle mutex(es); ${Object.keys(mutexes).length} active.`);
+    }
+  } catch (e) {
+    console.error('[MutexGC] cleanup failed:', e);
+  }
+}, 60 * 60 * 1000).unref(); // hourly; .unref() so it doesn't keep process alive
+
+// Resolve a stored render setting with a stable fallback chain:
+// pollData.para -> teamConfig -> server default. Used by paths that rebuild
+// a poll's blocks (applyPollEdit, closePollById) so the same value is passed
+// to both createPollView (which builds the layout) and updateVoteBlock
+// (which writes vote tallies into structurally-significant slots like the
+// menu block index and per-choice context blocks). A divergence here causes
+// silent corruption — see commit f0239e8.
+function resolveFromPara(pollData, teamConfig, key, serverDefault) {
+  if (pollData?.para?.hasOwnProperty(key)) return pollData.para[key];
+  if (teamConfig?.hasOwnProperty?.(key)) return teamConfig[key];
+  return serverDefault;
+}
+
 console.log('Init Logger..');
 
 const prettyJson = format.printf(info => {
@@ -3002,24 +3042,11 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     const editTeamConfig = await getTeamOverride(pollData.team);
     const editUserLang = pollData.para?.user_lang || gAppLang;
 
-    // Resolve the two render settings that affect block STRUCTURE (block
-    // ordering and per-choice block layout) up front, with a stable
-    // fallback chain: pollData.para -> teamConfig -> server default.
-    // The same resolved values are passed to both createPollView (which
-    // builds the blocks) and updateVoteBlock (which writes the vote tally
-    // back into them) so the two can never disagree on layout. A
-    // divergence here would either corrupt the choice text (compact_ui
-    // mismatch) or write to the wrong block index (menu_at_the_end
-    // mismatch). show_divider only affects block CONTENT — updateVoteBlock
-    // already gates on .hasOwnProperty('elements') — so it stays as the
-    // direct para read like the other UI flags.
-    const resolveFromPara = (key, serverDefault) => {
-      if (pollData.para?.hasOwnProperty(key)) return pollData.para[key];
-      if (editTeamConfig.hasOwnProperty(key)) return editTeamConfig[key];
-      return serverDefault;
-    };
-    const editIsMenuAtTheEnd = resolveFromPara('menu_at_the_end', gIsMenuAtTheEnd);
-    const editIsCompactUI = resolveFromPara('compact_ui', gIsCompactUI);
+    // Same value MUST flow through createPollView (block builder) and
+    // updateVoteBlock (vote re-applier) for the structurally-significant
+    // settings — see resolveFromPara module-level comment.
+    const editIsMenuAtTheEnd = resolveFromPara(pollData, editTeamConfig, 'menu_at_the_end', gIsMenuAtTheEnd);
+    const editIsCompactUI = resolveFromPara(pollData, editTeamConfig, 'compact_ui', gIsCompactUI);
 
     const pollView = (await createPollView(
         pollData.team, pollData.channel, editTeamConfig,
@@ -5519,6 +5546,31 @@ async function editPollOpenModal(body, client, context, value) {
   if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
   if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
   if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+
+  // Guard the initial-open path against the same Slack 100-block ceiling.
+  // Layout is 5 fixed blocks + 2 per option + 1 trailing actions block, so
+  // N options fit when 6 + 2N <= 100 -> N <= 47. Past that, views.open
+  // would 400 silently. Only reachable if a self-host operator raised
+  // gSlackLimitChoices above this ceiling AND the poll actually has that
+  // many options.
+  const fixedBlocks = 6; // intro section + divider + question input + divider + choices header + trailing actions
+  const maxOptionsInModal = Math.floor((SLACK_MODAL_MAX_BLOCKS - fixedBlocks) / 2);
+  const optionCount = (pollData.options || []).length;
+  if (optionCount > maxOptionsInModal) {
+    if (body.channel?.id) {
+      await postChat('', 'ephemeral', {
+        token: context.botToken,
+        channel: body.channel.id,
+        user: body.user.id,
+        text: parameterizedString(stri18n(userLang, 'poll_edit_too_many_options'), {
+          count: optionCount,
+          max: maxOptionsInModal,
+          slack_command: slackCommand,
+        }),
+      });
+    }
+    return;
+  }
   {
     const win = isWithinEditWindow(pollData, teamConfig);
     if (!win.ok) {
@@ -5600,6 +5652,12 @@ async function editPollOpenModal(body, client, context, value) {
 
 // Dynamic add: append one fresh empty option row just before the trailing
 // "Add option" actions block. Mirrors the create-modal btn_add_choice flow.
+// Slack hard limit: a single view may contain at most 100 blocks. Each
+// option row is 2 blocks (input + 🗑 section), so without a guard a user
+// could click "Add option" enough times to silently overflow this limit
+// — views.update would 400 and the click would appear to do nothing.
+const SLACK_MODAL_MAX_BLOCKS = 100;
+
 app.action('edit_add_choice', async ({ ack, body, client, context }) => {
   await ack();
   if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
@@ -5610,7 +5668,56 @@ app.action('edit_add_choice', async ({ ack, body, client, context }) => {
     if (pm.user_lang) userLang = pm.user_lang;
   } catch (e) { /* fall through */ }
 
-  const blocks = body.view.blocks.slice();
+  const currentBlocks = body.view.blocks.slice();
+
+  // If we're already at the limit, swap the trailing actions block in place
+  // (so we don't add 2 more). If we're at limit-1 (an odd block count would
+  // be unusual but defensively handled), inject a one-line warning context
+  // block in place of the new row. Either way we surface the cap visibly
+  // instead of letting views.update 400 silently.
+  // +2 because each row adds 2 blocks. +1 if there's no warning block yet
+  // and we'd want to add one.
+  const wouldExceed = currentBlocks.length + 2 > SLACK_MODAL_MAX_BLOCKS;
+  if (wouldExceed) {
+    // Insert a one-shot warning context just above the trailing actions
+    // block so the user understands why "Add option" stopped working. The
+    // block_id keeps it idempotent (we don't add more than one warning).
+    const hasWarning = currentBlocks.some(b => b.block_id === 'edit_add_choice_warn');
+    if (hasWarning) return; // already warned, nothing more to do
+    const insertAt = currentBlocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
+    const warningBlock = {
+      type: 'context',
+      block_id: 'edit_add_choice_warn',
+      elements: [{
+        type: 'mrkdwn',
+        text: parameterizedString(stri18n(userLang, 'modal_edit_poll_max_blocks'), { max: SLACK_MODAL_MAX_BLOCKS }),
+      }],
+    };
+    if (insertAt === -1) currentBlocks.push(warningBlock);
+    else currentBlocks.splice(insertAt, 0, warningBlock);
+    try {
+      await client.views.update({
+        token: context.botToken,
+        hash: body.view.hash,
+        view_id: body.view.id,
+        view: {
+          type: body.view.type,
+          callback_id: 'edit_poll_submit',
+          private_metadata: body.view.private_metadata,
+          title: body.view.title,
+          submit: body.view.submit,
+          close: body.view.close,
+          blocks: currentBlocks,
+          external_id: body.view.id,
+        },
+      });
+    } catch (e) {
+      logger.debug('edit_add_choice limit-warn views.update failed: ' + (e?.data?.error || e?.message || e));
+    }
+    return;
+  }
+
+  const blocks = currentBlocks;
   const insertAt = blocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
   const newRow = buildEditOptionRow(userLang, '');
   if (insertAt === -1) {
@@ -6625,13 +6732,11 @@ async function closePollById(poll_id) {
         if (teamConfig.hasOwnProperty("app_lang")) userLang = teamConfig.app_lang;
       }
 
-      let isMenuAtTheEnd = gIsMenuAtTheEnd;
-      if (pollData.para?.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = pollData.para?.menu_at_the_end;
-      else if (teamConfig.hasOwnProperty("menu_at_the_end")) isMenuAtTheEnd = teamConfig.menu_at_the_end;
-
-      let isCompactUI = gIsCompactUI;
-      if (pollData.para?.hasOwnProperty("compact_ui")) isCompactUI = pollData.para?.compact_ui;
-      else if (teamConfig.hasOwnProperty("compact_ui")) isCompactUI = teamConfig.compact_ui;
+      // Resolve once via the module-level helper; same value flows into both
+      // createPollView (below) and updateVoteBlock (later) so the two cannot
+      // disagree on layout. See resolveFromPara comment.
+      const isMenuAtTheEnd = resolveFromPara(pollData, teamConfig, 'menu_at_the_end', gIsMenuAtTheEnd);
+      const isCompactUI = resolveFromPara(pollData, teamConfig, 'compact_ui', gIsCompactUI);
 
 
       //this req conversations.history and *:history scope to read message Retrieve the original message
@@ -6668,7 +6773,7 @@ async function closePollById(poll_id) {
           }
 
           const pollView = (await createPollView(pollData.team, pollData.channel, teamConfig, pollData.question, pollData.options, pollData.para?.anonymous ?? false, pollData.para?.limited, pollData.para?.limit, pollData.para?.hidden, pollData.para?.user_add_choice,
-              pollData.para?.menu_at_the_end, pollData.para?.compact_ui, pollData.para?.show_divider, pollData.para?.show_help_link, pollData.para?.show_command_info, pollData.para?.true_anonymous, pollData.para?.add_number_emoji_to_choice, pollData.para?.add_number_emoji_to_choice_btn, pollData.schedule_end_ts, pollData.para?.user_lang, pollData.user_id, pollData.cmd, pollData.cmd_via, pollData.cmd_via_ref, pollData.cmd_via_note,
+              isMenuAtTheEnd, isCompactUI, pollData.para?.show_divider, pollData.para?.show_help_link, pollData.para?.show_command_info, pollData.para?.true_anonymous, pollData.para?.add_number_emoji_to_choice, pollData.para?.add_number_emoji_to_choice_btn, pollData.schedule_end_ts, pollData.para?.user_lang, pollData.user_id, pollData.cmd, pollData.cmd_via, pollData.cmd_via_ref, pollData.cmd_via_note,
               true,pollData._id));
           let blocks = pollView?.blocks;
           const pollID = pollView?.poll_id;

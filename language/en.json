@@ -110,6 +110,8 @@
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) were renamed or removed; votes for those options were dropped.",
   "poll_edit_disabled": "Poll editing is disabled for this workspace. Ask the installer to enable it via `/poll config write enable_poll_edit true`.",
   "poll_edit_too_old": "This poll can only be edited within `{{minutes}}` minutes of being posted. Set `enable_poll_edit_max_mins` to `0` to remove the time limit.",
+  "poll_edit_too_many_options": "This poll has `{{count}}` options, more than the `{{max}}` an edit modal can hold. Use `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` from the command line to edit it.",
+  "modal_edit_poll_max_blocks": ":warning: Maximum modal size reached (Slack allows up to `{{max}}` blocks per modal). Remove an option or save and re-edit if you need more.",
   "task_error_command_invalid": "Invalid command.",
   "task_error_poll_id_invalid": "Invalid Poll ID.",
   "task_error_date_invalid": "Datetime should be in ISO8601 Format `YYYY-MM-DDTHH:mm:ss.sssZ` , eg. `2023-11-17T21:54:00+07:00`",
