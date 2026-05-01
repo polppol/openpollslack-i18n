@@ -124,9 +124,9 @@
   "poll_edit_not_posted": "此投票尚未發布，因此無法編輯。",
   "poll_edit_no_question": "必須提供新問題與至少一個選項，例如 `\"What's your favourite color?\" \"Red\" \"Green\"`。",
   "poll_edit_success": "投票 `{{poll_id}}` 已更新。",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個選項失去了投票（選項被移除，或在 `enable_poll_edit_keep_votes` 為 `false` 時被重新命名）。",
-  "poll_edit_disabled": "此工作區已停用投票編輯。請要求安裝者透過 `/poll config write enable_poll_edit true` 啟用。",
-  "poll_edit_too_old": "此投票僅能在發布後 `{{minutes}}` 分鐘內編輯。將 `enable_poll_edit_max_mins` 設為 `0` 即可移除時間限制。",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個選項失去了投票。",
+  "poll_edit_disabled": "此工作區已停用投票編輯。請聯絡工作區管理員啟用此功能。",
+  "poll_edit_too_old": "此投票僅能在發布後 `{{minutes}}` 分鐘內編輯。",
   "poll_edit_too_many_options": "此投票有 `{{count}}` 個選項，超過編輯對話框可容納的 `{{max}}` 個。請從命令列使用 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`。",
-  "modal_edit_poll_max_blocks": ":warning: 已達對話框最大大小（Slack 每個對話框最多允許 `{{max}}` 個區塊）。請移除一個選項，或儲存後再次編輯。"
+  "modal_edit_poll_max_blocks": ":warning: 已達表單最大大小。請移除一個選項，或儲存後再次編輯。"
 }

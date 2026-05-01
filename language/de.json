@@ -126,9 +126,9 @@
   "poll_edit_not_posted": "Diese Umfrage wurde noch nicht gepostet und kann daher nicht bearbeitet werden.",
   "poll_edit_no_question": "Sie müssen eine neue Frage und mindestens eine Option angeben, z. B. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Umfrage `{{poll_id}}` aktualisiert.",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` Option(en) haben ihre Stimmen verloren (Option entfernt oder umbenannt, wenn `enable_poll_edit_keep_votes` auf `false` steht).",
-  "poll_edit_disabled": "Das Bearbeiten von Umfragen ist für diesen Workspace deaktiviert. Bitten Sie den Installer, es mit `/poll config write enable_poll_edit true` zu aktivieren.",
-  "poll_edit_too_old": "Diese Umfrage kann nur innerhalb von `{{minutes}}` Minuten nach dem Posten bearbeitet werden. Setzen Sie `enable_poll_edit_max_mins` auf `0`, um das Zeitlimit zu entfernen.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` Option(en) haben ihre Stimmen verloren.",
+  "poll_edit_disabled": "Das Bearbeiten von Umfragen ist für diesen Workspace deaktiviert. Bitte wenden Sie sich an Ihren Workspace-Administrator.",
+  "poll_edit_too_old": "Diese Umfrage kann nur innerhalb von `{{minutes}}` Minuten nach dem Posten bearbeitet werden.",
   "poll_edit_too_many_options": "Diese Umfrage hat `{{count}}` Optionen, mehr als die `{{max}}`, die ein Bearbeitungs-Modal aufnehmen kann. Verwenden Sie `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` von der Befehlszeile.",
-  "modal_edit_poll_max_blocks": ":warning: Maximale Modal-Größe erreicht (Slack erlaubt bis zu `{{max}}` Blöcke pro Modal). Entfernen Sie eine Option oder speichern Sie und bearbeiten Sie erneut, wenn Sie mehr benötigen."
+  "modal_edit_poll_max_blocks": ":warning: Maximale Formulargröße erreicht. Entfernen Sie eine Option oder speichern Sie und bearbeiten Sie erneut, wenn Sie mehr benötigen."
 }

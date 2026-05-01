@@ -124,9 +124,9 @@
   "poll_edit_not_posted": "This poll hasn't been posted yet, so it can't be edited.(โหวตนี้ยังไม่ถูกโพสต์ จึงแก้ไขไม่ได้)",
   "poll_edit_no_question": "You must provide a new question and at least one option, e.g. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Poll `{{poll_id}}` updated.(โหวต `{{poll_id}}` ถูกอัพเดทแล้ว)",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) lost their votes (the option was removed, or renamed when `enable_poll_edit_keep_votes` is `false`).(`{{dropped_count}}` ตัวเลือกสูญเสียคะแนนโหวต (ตัวเลือกถูกลบ หรือเปลี่ยนชื่อเมื่อ `enable_poll_edit_keep_votes` เป็น `false`))",
-  "poll_edit_disabled": "Poll editing is disabled for this workspace. Ask the installer to enable it via `/poll config write enable_poll_edit true`.",
-  "poll_edit_too_old": "This poll can only be edited within `{{minutes}}` minutes of being posted. Set `enable_poll_edit_max_mins` to `0` to remove the time limit.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) lost their votes.(`{{dropped_count}}` ตัวเลือกสูญเสียคะแนนโหวต)",
+  "poll_edit_disabled": "Poll editing is disabled for this workspace. Please contact your workspace admin to enable it.(การแก้ไขโหวตถูกปิดใช้งานในเวิร์กสเปซนี้ กรุณาติดต่อผู้ดูแลเวิร์กสเปซเพื่อเปิดใช้งาน)",
+  "poll_edit_too_old": "This poll can only be edited within `{{minutes}}` minutes of being posted.(โหวตนี้แก้ไขได้ภายใน `{{minutes}}` นาทีหลังโพสต์เท่านั้น)",
   "poll_edit_too_many_options": "This poll has `{{count}}` options, more than the `{{max}}` an edit modal can hold. Use `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` from the command line to edit it.",
-  "modal_edit_poll_max_blocks": ":warning: Maximum modal size reached (Slack allows up to `{{max}}` blocks per modal). Remove an option or save and re-edit if you need more."
+  "modal_edit_poll_max_blocks": ":warning: Maximum form size reached. Remove an option, or save and re-edit if you need more.(:warning: ฟอร์มมีขนาดสูงสุดแล้ว ลบตัวเลือกออก หรือบันทึกและแก้ไขใหม่หากต้องการเพิ่ม)"
 }

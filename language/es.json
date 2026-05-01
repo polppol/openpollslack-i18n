@@ -126,9 +126,9 @@
   "poll_edit_not_posted": "Esta encuesta aún no se ha publicado, por lo que no se puede editar.",
   "poll_edit_no_question": "Debes proporcionar una nueva pregunta y al menos una opción, p. ej. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Encuesta `{{poll_id}}` actualizada.",
-  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` opción(es) perdieron sus votos (la opción fue eliminada o renombrada cuando `enable_poll_edit_keep_votes` es `false`).",
-  "poll_edit_disabled": "La edición de encuestas está deshabilitada para este workspace. Pídele al instalador que la habilite con `/poll config write enable_poll_edit true`.",
-  "poll_edit_too_old": "Esta encuesta solo se puede editar dentro de `{{minutes}}` minutos después de su publicación. Establece `enable_poll_edit_max_mins` en `0` para eliminar el límite de tiempo.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` opción(es) perdieron sus votos.",
+  "poll_edit_disabled": "La edición de encuestas está deshabilitada para este workspace. Contacta al administrador del workspace para habilitarla.",
+  "poll_edit_too_old": "Esta encuesta solo se puede editar dentro de `{{minutes}}` minutos después de su publicación.",
   "poll_edit_too_many_options": "Esta encuesta tiene `{{count}}` opciones, más de las `{{max}}` que un modal de edición puede contener. Usa `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` desde la línea de comandos.",
-  "modal_edit_poll_max_blocks": ":warning: Tamaño máximo del modal alcanzado (Slack permite hasta `{{max}}` bloques por modal). Elimina una opción o guarda y vuelve a editar si necesitas más."
+  "modal_edit_poll_max_blocks": ":warning: Tamaño máximo del formulario alcanzado. Elimina una opción, o guarda y vuelve a editar si necesitas más."
 }
