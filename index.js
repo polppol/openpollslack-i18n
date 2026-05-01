@@ -1935,6 +1935,300 @@ async function processCommand(ack, body, client, command, context, say, respond)
           return;
 
 
+        } else if (cmdBody === 'edit' || cmdBody.startsWith('edit ')) {
+          // /poll edit POLL_ID "new question" "opt1" "opt2" ...
+          // Edits a posted poll's question/options in place. Owner-only.
+          // Votes are re-applied to options whose text is unchanged; votes
+          // for renamed or removed options are dropped (we warn the user).
+          cmdBody = cmdBody.substring(4).trim();
+
+          if (cmdBody === '') {
+            const usage = `\`/${slackCommand} edit POLL_ID "new question" "opt1" "opt2" ...\``;
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_usage') + "\n" + usage,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          // Pull POLL_ID off the front
+          let editPollIdRaw;
+          const firstSpace = cmdBody.indexOf(' ');
+          if (firstSpace === -1) {
+            editPollIdRaw = cmdBody;
+            cmdBody = '';
+          } else {
+            editPollIdRaw = cmdBody.substring(0, firstSpace);
+            cmdBody = cmdBody.substring(firstSpace).trim();
+          }
+
+          let editPollData = null;
+          let editPollObjId = null;
+          try {
+            editPollObjId = new ObjectId(editPollIdRaw);
+            editPollData = await pollCol.findOne({ _id: editPollObjId });
+          } catch (e) {
+            // fall through; editPollData stays null
+          }
+
+          if (!editPollData) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_not_found'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (editPollData.user_id !== userId) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_action_other'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (!editPollData.ts || !editPollData.channel || !editPollData.team) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_not_posted'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          // Parse new question + options from the remainder using the same
+          // quoted-string grammar as poll create.
+          let newQuestion = null;
+          const newOptions = [];
+          try {
+            const quotePattern = `\\${standardQuote}`;
+            const regexp = new RegExp(`${quotePattern}(?:[^${quotePattern}\\\\]|\\\\.)*${quotePattern}`, 'g');
+            const matches = cmdBody.match(regexp);
+            if (matches) {
+              for (const option of matches) {
+                let opt = option.substring(1, option.length - 1);
+                let unescaped = opt.replace(new RegExp(escapedQuotesPattern, 'g'), (match) => match[1])
+                    .replace(/\\\\/g, "\\");
+                if (newQuestion === null) {
+                  newQuestion = unescaped;
+                } else {
+                  newOptions.push(unescaped);
+                }
+              }
+            }
+          } catch (e) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (newQuestion === null || newOptions.length === 0) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_no_question'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          if (newOptions.length > gSlackLimitChoices) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(appLang, 'err_slack_limit_choices_max'), {slack_limit_choices: gSlackLimitChoices}),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          // Detect option drift so we can warn the user about lost votes.
+          const oldOptionSet = new Set((editPollData.options || []));
+          const newOptionSet = new Set(newOptions);
+          let droppedCount = 0;
+          for (const o of oldOptionSet) if (!newOptionSet.has(o)) droppedCount++;
+
+          // Take the per-message mutex used by close/recreate flows so a
+          // concurrent vote can't race the chat.update.
+          const mutexKey = `${editPollData.team}/${editPollData.channel}/${editPollData.ts}`;
+          if (!mutexes.hasOwnProperty(mutexKey)) {
+            mutexes[mutexKey] = new Mutex();
+          }
+          let release = null;
+          let countTry = 0;
+          do {
+            ++countTry;
+            try {
+              release = await mutexes[mutexKey].acquire();
+            } catch (e) {
+              logger.info(`[Edit][Try #${countTry}] Error while attempt to acquire mutex lock.`, e);
+            }
+          } while (!release && countTry < 3);
+
+          if (!release) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
+
+          try {
+            const teamInfo = await getTeamInfo(editPollData.team);
+            const editBotToken = teamInfo?.bot?.token;
+            if (!editBotToken) {
+              let mRequestBody = {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+              };
+              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              return;
+            }
+
+            // Persist the edit before rebuilding the view so the rebuild
+            // reads the new question/options off pollCol consistently.
+            await pollCol.updateOne(
+                { _id: editPollObjId },
+                { $set: {
+                  question: newQuestion,
+                  options: newOptions,
+                  edited_ts: new Date(),
+                  edited_by: userId,
+                } }
+            );
+
+            const editTeamConfig = await getTeamOverride(editPollData.team);
+            const editUserLang = editPollData.para?.user_lang || userLang;
+
+            const pollView = (await createPollView(
+                editPollData.team, editPollData.channel, editTeamConfig,
+                newQuestion, newOptions,
+                editPollData.para?.anonymous ?? false,
+                editPollData.para?.limited,
+                editPollData.para?.limit,
+                editPollData.para?.hidden,
+                editPollData.para?.user_add_choice,
+                editPollData.para?.menu_at_the_end,
+                editPollData.para?.compact_ui,
+                editPollData.para?.show_divider,
+                editPollData.para?.show_help_link,
+                editPollData.para?.show_command_info,
+                editPollData.para?.true_anonymous,
+                editPollData.para?.add_number_emoji_to_choice,
+                editPollData.para?.add_number_emoji_to_choice_btn,
+                editPollData.schedule_end_ts,
+                editUserLang,
+                editPollData.user_id,
+                editPollData.cmd, "edit", null, null,
+                true, editPollData._id
+            ));
+
+            let blocks = pollView?.blocks;
+            if (!pollView || !blocks) {
+              let mRequestBody = {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+              };
+              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              return;
+            }
+
+            // Re-apply existing vote tally so editing doesn't reset counts.
+            const isHidden = await getInfos(
+                'hidden', blocks,
+                { team: editPollData.team, channel: editPollData.channel, ts: editPollData.ts },
+            );
+            const voteData = await votesCol.findOne({ channel: editPollData.channel, ts: editPollData.ts });
+            const poll = voteData?.votes ?? {};
+
+            let editIsMenuAtTheEnd = gIsMenuAtTheEnd;
+            if (editPollData.para?.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editPollData.para?.menu_at_the_end;
+            else if (editTeamConfig.hasOwnProperty('menu_at_the_end')) editIsMenuAtTheEnd = editTeamConfig.menu_at_the_end;
+            let editIsCompactUI = gIsCompactUI;
+            if (editPollData.para?.hasOwnProperty('compact_ui')) editIsCompactUI = editPollData.para?.compact_ui;
+            else if (editTeamConfig.hasOwnProperty('compact_ui')) editIsCompactUI = editTeamConfig.compact_ui;
+
+            blocks = await updateVoteBlock(
+                editPollData.team, editPollData.channel, editPollData.ts,
+                blocks, poll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
+            );
+
+            const updateBody = {
+              token: editBotToken,
+              channel: editPollData.channel,
+              ts: editPollData.ts,
+              blocks: blocks,
+              text: `Poll : ${newQuestion}`,
+            };
+            const postRes = await postChat("", 'update', updateBody);
+            if (postRes.status === false) {
+              logger.warn(`[Edit] Failed to update poll ID:${editPollData._id} in CH:${editPollData.channel}: ${postRes.message}`);
+              let mRequestBody = {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command') + `: ${postRes.message}`,
+              };
+              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              return;
+            }
+
+            let successText = "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_success'), {
+              poll_id: editPollData._id.toString(),
+            });
+            if (droppedCount > 0) {
+              successText += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), {
+                dropped_count: droppedCount,
+              });
+            }
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: successText,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            logger.verbose(`[Edit] Poll ID:${editPollData._id} edited by ${userId}`);
+          } catch (e) {
+            logger.error(`[Edit] Unexpected error editing poll ID:${editPollData?._id}`);
+            logger.error(e.toString() + "\n" + e.stack);
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_invalid_command'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+          } finally {
+            release();
+          }
+          return;
+
         } else if (cmdBody.startsWith('test')) {
           //test functiom
           try {
