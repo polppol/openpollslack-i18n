@@ -209,6 +209,29 @@ Delete all schedules that already finished, done, no longer valid, disabled
 It is not required to run `/poll schedule delete_done` as server will clear out unused schedules for you.
 if you host this by your self you can make change this in `schedule_auto_delete_invalid_day`
 
+### Edit a poll
+Edit the question and/or options of a poll that has already been posted. Only the poll owner can do this.
+
+Two ways:
+
+**1. Via menu (GUI)** — Open the poll's overflow menu (`⋯`) → **Edit the poll**.
+A modal opens with the current question and one input per option. Use the trailing **+ Add a choice** button to add more option fields, or the 🗑 button next to any option to remove it. Click **Save**.
+
+**2. Via command (CLI)** — Useful when you want to copy/edit the original `Command info` text:
+```
+/poll edit [POLL_ID] "new question" "option 1" "option 2" ...
+```
+Example:
+```
+/poll edit 6751aadb2a37a95edbc90a58 "What's for lunch?" "Pizza" "Salad" "Sushi"
+```
+
+Notes:
+- The Slack message is updated in place; existing votes for **unchanged** options are preserved.
+- Votes for options that are renamed or removed are dropped — you'll get a warning telling you how many.
+- Polls that haven't been posted yet (e.g. an unsent scheduled poll) cannot be edited.
+- Anonymity, hidden mode, vote limit, and other flags are preserved from the original poll. To change those, delete and recreate the poll.
+
 # Override configuration 
 
 There are three levels of configuration: Server, Team, and User. 
