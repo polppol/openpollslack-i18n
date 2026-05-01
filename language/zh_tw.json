@@ -121,7 +121,7 @@
   "modal_edit_poll_submit": "儲存",
   "poll_edit_usage": "用法：",
   "poll_edit_not_found": "找不到投票。請從投票選單的 `Command info` 中檢查 Poll ID。",
-  "poll_edit_not_posted": "此投票尚未發布，因此無法編輯。",
+  "poll_edit_not_posted": "此投票暫時無法編輯。如果尚未有投票，請嘗試為任意選項投票一次（之後可以立即取消投票）後再試。",
   "poll_edit_no_question": "必須提供新問題與至少一個選項，例如 `\"What's your favourite color?\" \"Red\" \"Green\"`。",
   "poll_edit_success": "投票 `{{poll_id}}` 已更新。",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個選項失去了投票。",

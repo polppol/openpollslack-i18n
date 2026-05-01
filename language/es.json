@@ -123,7 +123,7 @@
   "modal_edit_poll_submit": "Guardar",
   "poll_edit_usage": "Uso:",
   "poll_edit_not_found": "Encuesta no encontrada. Verifica el Poll ID desde `Command info` en el menú de la encuesta.",
-  "poll_edit_not_posted": "Esta encuesta aún no se ha publicado, por lo que no se puede editar.",
+  "poll_edit_not_posted": "Esta encuesta aún no se puede editar. Si no tiene votos, intenta votar una vez por cualquier opción (puedes anular el voto justo después) y reinténtalo.",
   "poll_edit_no_question": "Debes proporcionar una nueva pregunta y al menos una opción, p. ej. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Encuesta `{{poll_id}}` actualizada.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` opción(es) perdieron sus votos.",

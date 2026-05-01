@@ -123,7 +123,7 @@
   "modal_edit_poll_submit": "Speichern",
   "poll_edit_usage": "Verwendung:",
   "poll_edit_not_found": "Umfrage nicht gefunden. Prüfen Sie die Poll ID unter `Command info` im Umfragemenü.",
-  "poll_edit_not_posted": "Diese Umfrage wurde noch nicht gepostet und kann daher nicht bearbeitet werden.",
+  "poll_edit_not_posted": "Diese Umfrage kann noch nicht bearbeitet werden. Wenn sie keine Stimmen hat, stimme einmal für eine Option ab (du kannst direkt danach wieder abwählen) und versuche es erneut.",
   "poll_edit_no_question": "Sie müssen eine neue Frage und mindestens eine Option angeben, z. B. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Umfrage `{{poll_id}}` aktualisiert.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` Option(en) haben ihre Stimmen verloren.",

@@ -123,7 +123,7 @@
   "modal_edit_poll_submit": "Сохранить",
   "poll_edit_usage": "Использование:",
   "poll_edit_not_found": "Опрос не найден. Проверьте Poll ID в `Command info` меню опроса.",
-  "poll_edit_not_posted": "Этот опрос ещё не опубликован, поэтому его нельзя отредактировать.",
+  "poll_edit_not_posted": "Этот опрос пока нельзя редактировать. Если в нём нет голосов, проголосуйте за любой вариант один раз (сразу после можно отменить голос) и попробуйте снова.",
   "poll_edit_no_question": "Необходимо указать новый вопрос и хотя бы один вариант, например `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Опрос `{{poll_id}}` обновлён.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` вариант(ов) потеряли свои голоса.",

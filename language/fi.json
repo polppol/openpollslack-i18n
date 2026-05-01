@@ -123,7 +123,7 @@
   "modal_edit_poll_submit": "Tallenna",
   "poll_edit_usage": "Käyttö:",
   "poll_edit_not_found": "Kyselyä ei löytynyt. Tarkista Poll ID kohdasta `Command info` kyselyn valikossa.",
-  "poll_edit_not_posted": "Tätä kyselyä ei ole vielä julkaistu, joten sitä ei voi muokata.",
+  "poll_edit_not_posted": "Tätä kyselyä ei voi vielä muokata. Jos siinä ei ole ääniä, äänestä mitä tahansa vaihtoehtoa kerran (voit perua äänesi heti perään) ja yritä uudelleen.",
   "poll_edit_no_question": "Sinun on annettava uusi kysymys ja vähintään yksi vaihtoehto, esim. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Kysely `{{poll_id}}` päivitetty.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` vaihtoehto(a) menettivät äänensä.",

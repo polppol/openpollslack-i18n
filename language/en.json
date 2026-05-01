@@ -104,7 +104,7 @@
   "task_usage_stop_poll": "To stop the schedule:\n`/{{slack_command}} schedule delete {{poll_id}}`",
   "poll_edit_usage": "Usage:",
   "poll_edit_not_found": "Poll not found. Check the Poll ID from `Command info` on the poll menu.",
-  "poll_edit_not_posted": "This poll hasn't been posted yet, so it can't be edited.",
+  "poll_edit_not_posted": "This poll can't be edited yet. If it has no votes, try voting on any option once (you can unvote right after) and retry.",
   "poll_edit_no_question": "You must provide a new question and at least one option, e.g. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Poll `{{poll_id}}` updated.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) lost their votes.",

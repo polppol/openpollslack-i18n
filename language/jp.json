@@ -123,7 +123,7 @@
   "modal_edit_poll_submit": "保存",
   "poll_edit_usage": "使い方:",
   "poll_edit_not_found": "投票が見つかりません。投票メニューの `Command info` から Poll ID を確認してください。",
-  "poll_edit_not_posted": "この投票はまだ投稿されていないため、編集できません。",
+  "poll_edit_not_posted": "この投票はまだ編集できません。投票がない場合は、いずれかの選択肢に一度投票してから（直後に投票を取り消せます）、再試行してください。",
   "poll_edit_no_question": "新しい質問と少なくとも1つの選択肢が必要です。例: `\"What's your favourite color?\" \"Red\" \"Green\"`。",
   "poll_edit_success": "投票 `{{poll_id}}` を更新しました。",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個の選択肢が投票を失いました。",

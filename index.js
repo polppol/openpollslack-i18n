@@ -3066,8 +3066,18 @@ async function processCommand(ack, body, client, command, context, say, respond)
 // DB update + view rebuild + chat.update under the per-message mutex.
 //
 // Returns: { ok: boolean, droppedCount: number, error: string|null }
-async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }) {
-  if (!pollData || !pollData.ts || !pollData.channel || !pollData.team) {
+async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId, targetChannel, targetTs, responseUrl }) {
+  if (!pollData || !pollData.team) {
+    return { ok: false, droppedCount: 0, error: 'not_posted' };
+  }
+  // Caller-provided target wins over DB-stored values. Live menu clicks give
+  // us body.message.ts/channel.id directly — same source-of-truth pattern as
+  // closePoll/deletePoll/btn_vote. Polls posted via response_url have ts:null
+  // in the DB (response_url doesn't return one) but the click on the live
+  // message reveals it.
+  const channel = targetChannel || pollData.channel;
+  const ts = targetTs || pollData.ts;
+  if (!ts || !channel) {
     return { ok: false, droppedCount: 0, error: 'not_posted' };
   }
   if (!newQuestion || !Array.isArray(newOptions) || newOptions.length === 0) {
@@ -3078,7 +3088,7 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
   // that's the only place we can tell which positions actually had votes.
   let droppedCount = 0;
 
-  const mutexKey = `${pollData.team}/${pollData.channel}/${pollData.ts}`;
+  const mutexKey = `${pollData.team}/${channel}/${ts}`;
   if (!mutexes.hasOwnProperty(mutexKey)) {
     mutexes[mutexKey] = new Mutex();
   }
@@ -3100,14 +3110,20 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     const editBotToken = teamInfo?.bot?.token;
     if (!editBotToken) return { ok: false, droppedCount, error: 'no_bot_token' };
 
+    // Auto-heal: if the live click revealed a ts/channel that the DB lacks
+    // or disagrees with, persist them on the same write. Future CLI edits
+    // (which can only consult pollData.ts) then work without a menu trip.
+    const setOps = {
+      question: newQuestion,
+      options: newOptions,
+      edited_ts: new Date(),
+      edited_by: editorUserId,
+    };
+    if (ts !== pollData.ts) setOps.ts = ts;
+    if (channel !== pollData.channel) setOps.channel = channel;
     await pollCol.updateOne(
         { _id: pollData._id },
-        { $set: {
-          question: newQuestion,
-          options: newOptions,
-          edited_ts: new Date(),
-          edited_by: editorUserId,
-        } }
+        { $set: setOps }
     );
 
     const editTeamConfig = await getTeamOverride(pollData.team);
@@ -3120,7 +3136,7 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     const editIsCompactUI = resolveFromPara(pollData, editTeamConfig, 'compact_ui', gIsCompactUI);
 
     const pollView = (await createPollView(
-        pollData.team, pollData.channel, editTeamConfig,
+        pollData.team, channel, editTeamConfig,
         newQuestion, newOptions,
         pollData.para?.anonymous ?? false,
         pollData.para?.limited,
@@ -3147,7 +3163,7 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
 
     const isHidden = await getInfos(
         'hidden', blocks,
-        { team: pollData.team, channel: pollData.channel, ts: pollData.ts },
+        { team: pollData.team, channel: channel, ts: ts },
     );
 
     // Re-key the vote map across the edit. Text-matching first means
@@ -3155,7 +3171,7 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
     // (and a removed option's votes are dropped, not silently inherited
     // by whatever ends up at that index). The optional positional pass
     // preserves votes through pure renames per the team's policy.
-    const voteData = await votesCol.findOne({ channel: pollData.channel, ts: pollData.ts });
+    const voteData = await votesCol.findOne({ channel: channel, ts: ts });
     const oldPoll = voteData?.votes ?? {};
     const keepVotesOnRename = isEditKeepVotes(editTeamConfig);
     const remap = rebuildVoteMap(pollData.options, newOptions, oldPoll, keepVotesOnRename);
@@ -3165,24 +3181,28 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId }
       // Persist the rebuilt map so future vote clicks (which use position
       // index) read the correct per-option voters.
       await votesCol.updateOne(
-          { channel: pollData.channel, ts: pollData.ts },
+          { channel: channel, ts: ts },
           { $set: { votes: remap.newPoll } }
       );
     }
 
     blocks = await updateVoteBlock(
-        pollData.team, pollData.channel, pollData.ts,
+        pollData.team, channel, ts,
         blocks, remap.newPoll, editUserLang, isHidden, editIsCompactUI, editIsMenuAtTheEnd
     );
 
     const updateBody = {
       token: editBotToken,
-      channel: pollData.channel,
-      ts: pollData.ts,
+      channel: channel,
+      ts: ts,
       blocks: blocks,
       text: `Poll : ${newQuestion}`,
     };
-    const postRes = await postChat("", 'update', updateBody);
+    // Prefer the menu click's response_url for the chat.update — same
+    // pattern closePoll/deletePoll use, and works regardless of bot
+    // membership in the channel. Falls back to chat.update via the SDK
+    // when no response_url is available (e.g., the CLI edit path).
+    const postRes = await postChat(responseUrl || "", 'update', updateBody);
     if (postRes.status === false) {
       logger.warn(`[Edit] Failed to update poll ID:${pollData._id} in CH:${pollData.channel}: ${postRes.message}`);
       return { ok: false, droppedCount, error: postRes.message || 'chat_update_failed' };
@@ -3438,6 +3458,21 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
     let poll_id = null;
     if (value.hasOwnProperty('poll_id'))
       poll_id = value.poll_id;
+
+    // Auto-heal pollData.ts/channel from the live click. Polls posted via
+    // response_url have ts:null in pollCol because the response_url POST
+    // doesn't return a message ts; the click on the live message gives us
+    // the real one. Same source-of-truth pattern as closePoll. Fire-and-
+    // forget so we don't slow down voting; the next vote retries if needed.
+    if (poll_id && message?.ts && channel) {
+      try {
+        const pollOid = new ObjectId(poll_id);
+        pollCol.updateOne(
+          { _id: pollOid, $or: [{ ts: null }, { ts: '' }, { ts: { $ne: message.ts } }] },
+          { $set: { ts: message.ts, channel: channel } }
+        ).catch(e => logger.debug('[Vote][Heal] pollCol.ts auto-heal failed: ' + (e?.message || e)));
+      } catch (e) { /* invalid ObjectId — ignore */ }
+    }
 
     let userLang = null;
     if (value.hasOwnProperty('user_lang'))
@@ -5634,7 +5669,32 @@ async function editPollOpenModal(body, client, context, value) {
   if (!isPollEditEnabled(teamConfig)) { await ephemeralReject('poll_edit_disabled'); return; }
   if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
   if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
-  if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+
+  // Source of truth for the actual Slack message: the live menu click. Same
+  // pattern closePoll/deletePoll/btn_vote use, so this works for any poll
+  // regardless of how it was created (cmd, modal, or scheduled). Polls
+  // posted via response_url have ts:null in pollCol because response_url
+  // doesn't return a message ts — but the click on the live message gives
+  // us the real one.
+  const liveTs = body?.message?.ts || null;
+  const liveChannel = body?.channel?.id || null;
+  const targetTs = liveTs || pollData.ts;
+  const targetChannel = liveChannel || pollData.channel;
+  if (!targetTs || !targetChannel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+
+  // Auto-heal pollData.ts/channel from the live click so future CLI edits
+  // (which can only consult pollData) work without going through the menu.
+  // Best-effort fire-and-forget — a missed heal at this stage will be
+  // re-attempted on the next interaction or persisted by applyPollEdit on
+  // submit.
+  if (liveTs && liveChannel && (pollData.ts !== liveTs || pollData.channel !== liveChannel)) {
+    pollCol.updateOne(
+      { _id: pollData._id },
+      { $set: { ts: liveTs, channel: liveChannel } }
+    ).catch(e => logger.debug('[Edit][Heal] pollCol.ts auto-heal failed: ' + (e?.message || e)));
+    pollData.ts = liveTs;
+    pollData.channel = liveChannel;
+  }
 
   // Guard the initial-open path against the same Slack 100-block ceiling.
   // Layout is 5 fixed blocks + 2 per option + 1 trailing actions block, so
@@ -5718,6 +5778,13 @@ async function editPollOpenModal(body, client, context, value) {
   const privateMetadata = {
     poll_id: pollData._id.toString(),
     user_lang: userLang,
+    // Forward the live click's target so applyPollEdit on submit doesn't have
+    // to re-derive it from pollData (which would be missing ts for response_url
+    // polls). response_url is the menu click's URL, valid 30 min from this
+    // click — well within the modal-fill-and-submit window.
+    channel: targetChannel,
+    ts: targetTs,
+    response_url: body?.response_url || null,
   };
 
   try {
@@ -5882,10 +5949,16 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
 
   let pollIdRaw = null;
   let userLang = gAppLang;
+  let pmChannel = null;
+  let pmTs = null;
+  let pmResponseUrl = null;
   try {
     const pm = JSON.parse(view.private_metadata);
     pollIdRaw = pm.poll_id;
     if (pm.user_lang) userLang = pm.user_lang;
+    pmChannel = pm.channel || null;
+    pmTs = pm.ts || null;
+    pmResponseUrl = pm.response_url || null;
   } catch (e) { /* fall through */ }
 
   let newQuestion = null;
@@ -5967,6 +6040,9 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
     newQuestion: newQuestion,
     newOptions: newOptions,
     editorUserId: body.user.id,
+    targetChannel: pmChannel,
+    targetTs: pmTs,
+    responseUrl: pmResponseUrl,
   });
 
   // Best-effort DM the editor with success/warning. We've already acked the

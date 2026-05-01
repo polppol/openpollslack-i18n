@@ -151,7 +151,7 @@
   "modal_edit_poll_submit": "Enregistrer",
   "poll_edit_usage": "Utilisation :",
   "poll_edit_not_found": "Sondage introuvable. Vérifiez le Poll ID dans `Command info` du menu du sondage.",
-  "poll_edit_not_posted": "Ce sondage n'a pas encore été publié, il ne peut donc pas être modifié.",
+  "poll_edit_not_posted": "Ce sondage ne peut pas encore être modifié. S'il n'a pas de votes, essayez de voter une fois pour n'importe quelle option (vous pouvez retirer votre vote juste après) et réessayez.",
   "poll_edit_no_question": "Vous devez fournir une nouvelle question et au moins une option, par ex. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Sondage `{{poll_id}}` mis à jour.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) ont perdu leurs votes.",
