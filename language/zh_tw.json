@@ -114,5 +114,19 @@
   "emoji_13": ":one::three:",
   "emoji_14": ":one::four:",
   "emoji_15": ":one::five:",
-  "emoji_16": ":one::six:"
+  "emoji_16": ":one::six:",
+  "menu_edit_poll": "編輯投票",
+  "modal_edit_poll_title": "編輯投票",
+  "modal_edit_poll_intro": "在下方更新問題或選項。未變更選項的投票將會保留。",
+  "modal_edit_poll_submit": "儲存",
+  "poll_edit_usage": "用法：",
+  "poll_edit_not_found": "找不到投票。請從投票選單的 `Command info` 中檢查 Poll ID。",
+  "poll_edit_not_posted": "此投票尚未發布，因此無法編輯。",
+  "poll_edit_no_question": "必須提供新問題與至少一個選項，例如 `\"What's your favourite color?\" \"Red\" \"Green\"`。",
+  "poll_edit_success": "投票 `{{poll_id}}` 已更新。",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 個選項已重新命名或移除；這些選項的投票已被捨棄。",
+  "poll_edit_disabled": "此工作區已停用投票編輯。請要求安裝者透過 `/poll config write enable_poll_edit true` 啟用。",
+  "poll_edit_too_old": "此投票僅能在發布後 `{{minutes}}` 分鐘內編輯。將 `enable_poll_edit_max_mins` 設為 `0` 即可移除時間限制。",
+  "poll_edit_too_many_options": "此投票有 `{{count}}` 個選項，超過編輯對話框可容納的 `{{max}}` 個。請從命令列使用 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`。",
+  "modal_edit_poll_max_blocks": ":warning: 已達對話框最大大小（Slack 每個對話框最多允許 `{{max}}` 個區塊）。請移除一個選項，或儲存後再次編輯。"
 }

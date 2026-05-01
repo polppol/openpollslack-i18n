@@ -116,5 +116,19 @@
   "emoji_13": ":one::three:",
   "emoji_14": ":one::four:",
   "emoji_15": ":one::five:",
-  "emoji_16": ":one::six:"
+  "emoji_16": ":one::six:",
+  "menu_edit_poll": "Редактировать опрос",
+  "modal_edit_poll_title": "Редактирование опроса",
+  "modal_edit_poll_intro": "Обновите вопрос или варианты ниже. Голоса за неизменённые варианты сохраняются.",
+  "modal_edit_poll_submit": "Сохранить",
+  "poll_edit_usage": "Использование:",
+  "poll_edit_not_found": "Опрос не найден. Проверьте Poll ID в `Command info` меню опроса.",
+  "poll_edit_not_posted": "Этот опрос ещё не опубликован, поэтому его нельзя отредактировать.",
+  "poll_edit_no_question": "Необходимо указать новый вопрос и хотя бы один вариант, например `\"What's your favourite color?\" \"Red\" \"Green\"`.",
+  "poll_edit_success": "Опрос `{{poll_id}}` обновлён.",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` вариант(ов) переименованы или удалены; голоса за эти варианты отброшены.",
+  "poll_edit_disabled": "Редактирование опросов отключено для этого рабочего пространства. Попросите установщика включить его через `/poll config write enable_poll_edit true`.",
+  "poll_edit_too_old": "Этот опрос можно редактировать только в течение `{{minutes}}` минут после публикации. Установите `enable_poll_edit_max_mins` в `0`, чтобы снять ограничение по времени.",
+  "poll_edit_too_many_options": "В этом опросе `{{count}}` вариантов, больше чем `{{max}}`, которые может вместить модальное окно редактирования. Используйте `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...` из командной строки.",
+  "modal_edit_poll_max_blocks": ":warning: Достигнут максимальный размер модального окна (Slack допускает до `{{max}}` блоков на окно). Удалите вариант или сохраните и отредактируйте снова."
 }

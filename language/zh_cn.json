@@ -114,5 +114,19 @@
   "emoji_13": ":one::three:",
   "emoji_14": ":one::four:",
   "emoji_15": ":one::five:",
-  "emoji_16": ":one::six:"
+  "emoji_16": ":one::six:",
+  "menu_edit_poll": "编辑投票",
+  "modal_edit_poll_title": "编辑投票",
+  "modal_edit_poll_intro": "在下面更新问题或选项。未更改选项的投票将被保留。",
+  "modal_edit_poll_submit": "保存",
+  "poll_edit_usage": "用法：",
+  "poll_edit_not_found": "未找到投票。请从投票菜单的 `Command info` 中检查 Poll ID。",
+  "poll_edit_not_posted": "此投票尚未发布，因此无法编辑。",
+  "poll_edit_no_question": "必须提供新问题和至少一个选项，例如 `\"What's your favourite color?\" \"Red\" \"Green\"`。",
+  "poll_edit_success": "投票 `{{poll_id}}` 已更新。",
+  "poll_edit_warn_votes": ":warning: `{{dropped_count}}` 个选项已重命名或删除；这些选项的投票已被丢弃。",
+  "poll_edit_disabled": "此工作区已禁用投票编辑。请要求安装者通过 `/poll config write enable_poll_edit true` 启用它。",
+  "poll_edit_too_old": "此投票仅可在发布后 `{{minutes}}` 分钟内编辑。将 `enable_poll_edit_max_mins` 设置为 `0` 以移除时间限制。",
+  "poll_edit_too_many_options": "此投票有 `{{count}}` 个选项，超过编辑模态框可容纳的 `{{max}}` 个。请从命令行使用 `/{{slack_command}} edit POLL_ID \"question\" \"opt1\" \"opt2\" ...`。",
+  "modal_edit_poll_max_blocks": ":warning: 已达到模态框最大尺寸（Slack 每个模态框最多允许 `{{max}}` 个块）。请移除一个选项，或保存后重新编辑。"
 }
