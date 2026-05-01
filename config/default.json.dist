@@ -31,6 +31,7 @@
   "mongo_db_name": "open_poll",
   "delete_data_on_poll_delete": true,
   "enable_poll_edit": true,
+  "enable_poll_edit_max_mins": 60,
   "log_level_app": "debug",
   "log_level_app_file": "debug",
   "log_level_bolt": "info",

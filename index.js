@@ -117,8 +117,14 @@ const gScheduleMaxRun = parseInt(config.get('schedule_max_run'));
 const gScheduleAutoDeleteDay = config.get('schedule_auto_delete_invalid_day');
 const gDisplayPollerName = config.get('display_poller_name');
 const gEnablePollEdit = config.has('enable_poll_edit') ? config.get('enable_poll_edit') : true;
+const gEnablePollEditMaxMins = config.has('enable_poll_edit_max_mins') ? parseInt(config.get('enable_poll_edit_max_mins'), 10) : 60;
 
 const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit"];
+
+// Integer-valued team overrides. Separate from the true/false list so the
+// /poll config write dispatcher knows to parse the value as a non-negative
+// integer rather than a boolean.
+const validTeamOverrideConfigInt = ["enable_poll_edit_max_mins"];
 
 // SSOT for "is /poll edit allowed?" — server flag is the default, team override
 // (if set) wins. Used by the menu builder, CLI subcommand, modal opener, and
@@ -128,6 +134,39 @@ function isPollEditEnabled(teamConfig) {
     return toBoolean(teamConfig.enable_poll_edit);
   }
   return toBoolean(gEnablePollEdit);
+}
+
+// Resolve the effective "edit allowed for N minutes since posting" value:
+// team override wins over the server default. 0 means "no time limit".
+// Negatives or NaN fall back to the server default to avoid accidental
+// hard-locks from a malformed override.
+function getPollEditMaxMins(teamConfig) {
+  let raw;
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit_max_mins')) {
+    raw = teamConfig.enable_poll_edit_max_mins;
+  } else {
+    raw = gEnablePollEditMaxMins;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return Number.isFinite(gEnablePollEditMaxMins) && gEnablePollEditMaxMins >= 0 ? gEnablePollEditMaxMins : 60;
+  return n;
+}
+
+// Time-window guard, paired with isPollEditEnabled. Returns:
+//   { ok: true }                — within window (or window disabled)
+//   { ok: false, maxMins }      — past the window; caller surfaces maxMins
+//                                 in the rejection message.
+// Measures from pollData.ts (Slack message ts), which is when the poll
+// became visible in the channel. Scheduled polls only set ts after they
+// post, so the window correctly starts from posting time, not creation.
+function isWithinEditWindow(pollData, teamConfig) {
+  const maxMins = getPollEditMaxMins(teamConfig);
+  if (maxMins === 0) return { ok: true };
+  const tsNum = parseFloat(pollData?.ts);
+  if (!Number.isFinite(tsNum) || tsNum <= 0) return { ok: true }; // be permissive if ts is malformed
+  const ageMs = Date.now() - tsNum * 1000;
+  if (ageMs <= maxMins * 60 * 1000) return { ok: true };
+  return { ok: false, maxMins };
 }
 
 const validUserOverrideConfigTF = ["user_allow_dm"];
@@ -2088,6 +2127,20 @@ async function processCommand(ack, body, client, command, context, say, respond)
             return;
           }
 
+          {
+            const win = isWithinEditWindow(editPollData, teamConfig);
+            if (!win.ok) {
+              let mRequestBody = {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }),
+              };
+              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              return;
+            }
+          }
+
           // Parse new question + options from the remainder using the same
           // quoted-string grammar as poll create.
           let newQuestion = null;
@@ -2293,6 +2346,9 @@ async function processCommand(ack, body, client, command, context, say, respond)
           for (const eachOverrideable of validTeamOverrideConfigTF) {
             validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [true/false]`;
           }
+          for (const eachOverrideable of validTeamOverrideConfigInt) {
+            validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [number]`;
+          }
 
           validWritePara += '\n' + parameterizedString(stri18n(userLang, 'info_need_help'), {
             email: helpEmail,
@@ -2372,6 +2428,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
               isWriteValid = true;
             }
 
+            if (validTeamOverrideConfigInt.includes(inputPara)) {
+              cmdBody = cmdBody.substring(inputPara.length).trim();
+              isWriteValid = true;
+            }
+
             if (inputPara === "app_lang") {
               cmdBody = cmdBody.substring(8).trim();
               isWriteValid = true;
@@ -2409,6 +2470,20 @@ async function processCommand(ack, body, client, command, context, say, respond)
                     await postChat(body.response_url, 'ephemeral', mRequestBody);
                     return;
                 }
+              }
+              else if (validTeamOverrideConfigInt.includes(inputPara)) {
+                const parsed = parseInt(inputVal, 10);
+                if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== inputVal.trim()) {
+                  let mRequestBody = {
+                    token: context.botToken,
+                    channel: channel,
+                    user: userId,
+                    text: `Usage: ${inputPara} [non-negative integer, 0 = no limit]`,
+                  };
+                  await postChat(body.response_url, 'ephemeral', mRequestBody);
+                  return;
+                }
+                inputVal = parsed;
               }
               else {
                 if (cmdBody.startsWith("true")) {
@@ -5432,6 +5507,20 @@ async function editPollOpenModal(body, client, context, value) {
   if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
   if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
   if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
+  {
+    const win = isWithinEditWindow(pollData, teamConfig);
+    if (!win.ok) {
+      if (body.channel?.id) {
+        await postChat('', 'ephemeral', {
+          token: context.botToken,
+          channel: body.channel.id,
+          user: body.user.id,
+          text: parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }),
+        });
+      }
+      return;
+    }
+  }
 
   const blocks = [
     {
@@ -5643,12 +5732,24 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
     return;
   }
 
-  // Re-check the kill-switch at submit time too — the modal may have been
-  // open when an installer disabled the feature.
+  // Re-check the kill-switch and time window at submit time too — the modal
+  // may have been opened minutes ago, the installer may have flipped the
+  // kill-switch, or the poll may have aged out of the edit window between
+  // open and submit.
   const submitTeamConfig = await getTeamOverride(pollData.team);
   if (!isPollEditEnabled(submitTeamConfig)) {
     await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'poll_edit_disabled') } });
     return;
+  }
+  {
+    const win = isWithinEditWindow(pollData, submitTeamConfig);
+    if (!win.ok) {
+      await ack({
+        response_action: 'errors',
+        errors: { edit_question: parameterizedString(stri18n(userLang, 'poll_edit_too_old'), { minutes: win.maxMins }) },
+      });
+      return;
+    }
   }
 
   await ack();

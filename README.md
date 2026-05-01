@@ -230,6 +230,7 @@ Notes:
 - The Slack message is updated in place; existing votes for **unchanged** options are preserved.
 - Votes for options that are renamed or removed are dropped — you'll get a warning telling you how many.
 - Polls that haven't been posted yet (e.g. an unsent scheduled poll) cannot be edited.
+- Editing is only allowed within `enable_poll_edit_max_mins` minutes of the poll being posted (default `60`). Set the value to `0` (server or `/poll config write enable_poll_edit_max_mins 0`) for no time limit.
 - Anonymity, hidden mode, vote limit, and other flags are preserved from the original poll. To change those, delete and recreate the poll.
 
 # Override configuration 
@@ -276,6 +277,7 @@ Usage:
 /poll config write delete_data_on_poll_delete [true/false]
 /poll config write display_poller_name [tag/none]
 /poll config write enable_poll_edit [true/false]
+/poll config write enable_poll_edit_max_mins [number]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -309,6 +311,7 @@ Usage:
 - `schedule_auto_delete_invalid_day` Schedules that already finished, done, no longer valid, disabled will be automatically delete after this value(days)
 - `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
 - `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
+- `enable_poll_edit_max_mins` (default `60`); how many minutes after a poll is **posted** the owner is still allowed to edit it. Set to `0` to allow editing forever. After this window the menu entry still appears but the modal/CLI rejects with a message telling the user the limit. Can also be overridden per team via `/poll config write enable_poll_edit_max_mins [number]`.
 
 ### Self-heal of missing keys
 
