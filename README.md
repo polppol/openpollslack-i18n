@@ -275,6 +275,7 @@ Usage:
 /poll config write add_number_emoji_to_choice_btn [true/false]
 /poll config write delete_data_on_poll_delete [true/false]
 /poll config write display_poller_name [tag/none]
+/poll config write enable_poll_edit [true/false]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -307,6 +308,11 @@ Usage:
 - `schedule_max_run` Maximum/Default run count for single schedule that can be set.
 - `schedule_auto_delete_invalid_day` Schedules that already finished, done, no longer valid, disabled will be automatically delete after this value(days)
 - `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
+- `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
+
+### Self-heal of missing keys
+
+When the app starts and `config/default.json` is missing keys that exist in `config/default.json.dist` (e.g. after pulling a new version that introduced a setting), the missing keys are auto-written into `config/default.json` with the `.dist` defaults and a warning is logged. Existing values are never touched. This means a self-host upgrade no longer crashes on a new config key — you only need to merge in changes you want to customise.
 
 ## Example
 

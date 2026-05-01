@@ -1,4 +1,63 @@
 const { App, ExpressReceiver, LogLevel } = require('@slack/bolt');
+
+// --- Config self-heal ---------------------------------------------------
+// node-config loads config/default.json eagerly when required, and any
+// config.get('x') for a missing key throws and crashes startup. That makes
+// every new config key a hard upgrade for self-hosters: they have to merge
+// the new key into their default.json before the app will boot.
+//
+// To avoid that, we run a one-time heal pass BEFORE requiring 'config':
+// for every key present in config/default.json.dist (which always ships
+// with the source) but absent in the user's config/default.json, we copy
+// the .dist default into default.json and log a warning. The healed file
+// is what node-config then reads, so config.get(...) works everywhere.
+//
+// .dist is the SSOT for "what keys are expected"; default.json is the
+// per-deployment override file. We never touch values that are already set.
+(function selfHealConfig() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cfgDir = path.join(__dirname, 'config');
+  const cfgPath = path.join(cfgDir, 'default.json');
+  const distPath = path.join(cfgDir, 'default.json.dist');
+
+  if (!fs.existsSync(cfgPath) || !fs.existsSync(distPath)) {
+    // Either the operator hasn't run initial setup yet, or .dist is missing
+    // (shouldn't happen in a clean checkout). Either way, don't synthesise
+    // a config from thin air — let the normal startup error surface.
+    return;
+  }
+  let current, distDefaults;
+  try {
+    current = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    distDefaults = JSON.parse(fs.readFileSync(distPath, 'utf8'));
+  } catch (e) {
+    console.error('[ConfigHeal] Failed to read/parse config files:', e.message);
+    return;
+  }
+
+  const added = [];
+  for (const key of Object.keys(distDefaults)) {
+    if (!Object.prototype.hasOwnProperty.call(current, key)) {
+      current[key] = distDefaults[key];
+      added.push(key);
+    }
+  }
+  if (added.length === 0) return;
+
+  try {
+    // Preserve 2-space indent + trailing newline to match the .dist style
+    // and keep diffs minimal for operators.
+    fs.writeFileSync(cfgPath, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    console.warn(
+      `[ConfigHeal] Added ${added.length} missing config key(s) to config/default.json with .dist defaults: ${added.join(', ')}. ` +
+      `Review and customise as needed.`
+    );
+  } catch (e) {
+    console.error('[ConfigHeal] Failed to write back to config/default.json:', e.message);
+  }
+})();
+
 const config = require('config');
 
 const { MongoClient, ObjectId } = require('mongodb');
@@ -57,8 +116,19 @@ const gScheduleLimitHr = config.get('schedule_limit_hrs');
 const gScheduleMaxRun = parseInt(config.get('schedule_max_run'));
 const gScheduleAutoDeleteDay = config.get('schedule_auto_delete_invalid_day');
 const gDisplayPollerName = config.get('display_poller_name');
+const gEnablePollEdit = config.has('enable_poll_edit') ? config.get('enable_poll_edit') : true;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit"];
+
+// SSOT for "is /poll edit allowed?" — server flag is the default, team override
+// (if set) wins. Used by the menu builder, CLI subcommand, modal opener, and
+// view-submission handler so a single setting governs every entry point.
+function isPollEditEnabled(teamConfig) {
+  if (teamConfig && teamConfig.hasOwnProperty('enable_poll_edit')) {
+    return toBoolean(teamConfig.enable_poll_edit);
+  }
+  return toBoolean(gEnablePollEdit);
+}
 
 const validUserOverrideConfigTF = ["user_allow_dm"];
 
@@ -1941,6 +2011,17 @@ async function processCommand(ack, body, client, command, context, say, respond)
           // Votes are re-applied to options whose text is unchanged; votes
           // for renamed or removed options are dropped (we warn the user).
           cmdBody = cmdBody.substring(4).trim();
+
+          if (!isPollEditEnabled(teamConfig)) {
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + stri18n(userLang, 'poll_edit_disabled'),
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
+          }
 
           if (cmdBody === '') {
             const usage = `\`/${slackCommand} edit POLL_ID "new question" "opt1" "opt2" ...\``;
@@ -4987,13 +5068,13 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
           text: stri18n(userLang, 'menu_delete_poll'),
         },
         value: JSON.stringify({action: 'btn_delete', p_id: pollID, user: userId, user_lang: userLang}),
-      }, {
+      }, ...(isPollEditEnabled(teamConfig) ? [{
         text: {
           type: 'plain_text',
           text: stri18n(userLang, 'menu_edit_poll'),
         },
         value: JSON.stringify({action: 'btn_edit', p_id: pollID, user: userId, user_lang: userLang}),
-      }
+      }] : [])
       ],
     },
     {//GRP 1
@@ -5347,6 +5428,7 @@ async function editPollOpenModal(body, client, context, value) {
     });
   };
 
+  if (!isPollEditEnabled(teamConfig)) { await ephemeralReject('poll_edit_disabled'); return; }
   if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
   if (pollData.user_id !== body.user.id) { await ephemeralReject('err_action_other'); return; }
   if (!pollData.ts || !pollData.channel || !pollData.team) { await ephemeralReject('poll_edit_not_posted'); return; }
@@ -5558,6 +5640,14 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
   }
   if (pollData.user_id !== body.user.id) {
     await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'err_action_other') } });
+    return;
+  }
+
+  // Re-check the kill-switch at submit time too — the modal may have been
+  // open when an installer disabled the feature.
+  const submitTeamConfig = await getTeamOverride(pollData.team);
+  if (!isPollEditEnabled(submitTeamConfig)) {
+    await ack({ response_action: 'errors', errors: { edit_question: stri18n(userLang, 'poll_edit_disabled') } });
     return;
   }
 

@@ -108,6 +108,7 @@
   "poll_edit_no_question": "You must provide a new question and at least one option, e.g. `\"What's your favourite color?\" \"Red\" \"Green\"`.",
   "poll_edit_success": "Poll `{{poll_id}}` updated.",
   "poll_edit_warn_votes": ":warning: `{{dropped_count}}` option(s) were renamed or removed; votes for those options were dropped.",
+  "poll_edit_disabled": "Poll editing is disabled for this workspace. Ask the installer to enable it via `/poll config write enable_poll_edit true`.",
   "task_error_command_invalid": "Invalid command.",
   "task_error_poll_id_invalid": "Invalid Poll ID.",
   "task_error_date_invalid": "Datetime should be in ISO8601 Format `YYYY-MM-DDTHH:mm:ss.sssZ` , eg. `2023-11-17T21:54:00+07:00`",
