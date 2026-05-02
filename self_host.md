@@ -1,20 +1,71 @@
 # Self hosted installation (v4)
 ## Self hosted installation guide
 ### Requirements
-To use the app you will configure, you need two things:
+To use the app you will configure, you need:
 
-- a server (this can be a raspberry at your home or a dedicated server in any provider you want) that can access to internet
-- a domain name with https certificate. Maybe that work with http, but you can generate free certificates with [Let's Encrypt](https://letsencrypt.org/). This is more secure. You also can use [No-IP Hostname](https://www.noip.com/support/knowledgebase/how-to-configure-your-no-ip-hostname/).
-- [Node.js®](https://nodejs.org/fr/) >= 12
-- [npm](https://www.npmjs.com/) >= 6 or [yarn](https://yarnpkg.com/)
+- a server (this can be a raspberry at your home or a dedicated server in any provider you want) with internet access
+- a domain name with HTTPS certificate. (Free certs via [Let's Encrypt](https://letsencrypt.org/), or use a [No-IP Hostname](https://www.noip.com/support/knowledgebase/how-to-configure-your-no-ip-hostname/).)
+- [Node.js](https://nodejs.org/) **>= 20.19** (LTS recommended; tested on 24.x)
+- [Corepack](https://nodejs.org/api/corepack.html) — bundled with Node.js 16.10+; just needs to be enabled once (see below)
 
 ### Get the code
 Firstly you need to get the source code. Go back to the root repository page and click on `Clone or download`.
 
-Clone method require `git` installed on your server. Download method require `zip` installed on your server. You can also unzip it on your host machine and rsync the files or drop it into a ftp.
+Clone method requires `git` installed on your server. Download method requires `zip` installed on your server. You can also unzip it on your host machine and rsync the files or drop it into ftp.
 
 ### Install dependencies
-To install dependencies, run `npm install` or `yarn install`. That's all.
+The package manager is **Yarn 4** (pinned via the `packageManager` field in `package.json`). Corepack downloads and runs the exact yarn version on demand — no global yarn install required.
+
+```bash
+# One-time on the server (and dev machine):
+corepack enable
+# (On Linux you may need sudo if Node was installed system-wide.)
+
+# From the project root:
+yarn install
+```
+
+That's all. `node_modules/` is populated and `yarn.lock` stays in sync with `package.json`.
+
+### Update dependencies (pulling in newer versions)
+When `package.json` or `yarn.lock` changes upstream:
+
+```bash
+git pull
+yarn install
+pm2 restart <id>   # if running under pm2 (see "Run the app" below)
+```
+
+To check for outdated packages:
+
+```bash
+yarn outdated
+```
+
+To bump a single package within its current semver range:
+
+```bash
+yarn up <package>
+```
+
+To bump to the latest version (may be a major upgrade — review the changelog first):
+
+```bash
+yarn up <package>@latest
+```
+
+After any `yarn up`, commit both `package.json` and `yarn.lock`.
+
+### Upgrade Yarn itself
+Yarn's version is pinned by the `packageManager` field. To upgrade:
+
+```bash
+# Pick a version from https://yarnpkg.com/getting-started/install
+corepack use yarn@<version>
+yarn install
+```
+
+`corepack use` rewrites the `packageManager` field (with an integrity hash) and refreshes `yarn.lock`. Commit both files.
 
 ### Run the app
 You have many way to run the app. Basically, you can use `node index.js`. But if you leave your shell, your app stop working. Prefer use package like [pm2](https://pm2.keymetrics.io/):
