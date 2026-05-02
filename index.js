@@ -3045,6 +3045,20 @@ async function processCommand(ack, body, client, command, context, say, respond)
       } else {
         try {
           const schTs = new Date(postDateTime);
+
+          // The poll record we just created is a TEMPLATE (a recipe for the
+          // future post), not a posted poll. Clear schedule_end_active so the
+          // close cron doesn't try to close a phantom at end-time. The actual
+          // run record - created when the schedule fires - inherits
+          // schedule_end_ts via createPollView and gets its own
+          // schedule_end_active=true once posted.
+          if (endDateTime !== null) {
+            await pollCol.updateOne(
+                { _id: new ObjectId(pollID) },
+                { $set: { schedule_end_active: false } }
+            );
+          }
+
           const dataToInsert = {
             poll_id: new ObjectId(pollID),
             next_ts: schTs,
@@ -5317,6 +5331,17 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       //console.log(postDateTime);
       try {
 
+        // Same template-record fix as the cmd handler: this poll record is a
+        // recipe, not a posted poll. Clear schedule_end_active so the close
+        // cron doesn't try to close a phantom. The run record - created when
+        // the schedule fires - inherits schedule_end_ts and sets its own
+        // schedule_end_active=true once posted.
+        if (endTs !== null) {
+          await pollCol.updateOne(
+              { _id: new ObjectId(pollID) },
+              { $set: { schedule_end_active: false } }
+          );
+        }
 
         //console.log(isoStr);
         //console.log(schTs);;
@@ -7160,6 +7185,12 @@ async function closePollById(poll_id) {
       const dmToken = teamInfo?.bot?.token;
       if (!dmToken) return;
 
+      // Resolve DM permission: server default -> team override -> user override.
+      // Same resolution order as the schedule task path (~line 477) and the
+      // modal_poll_submit path (~line 5001).
+      const teamConfig = await getTeamOverride(pollData.team);
+      let isAppAllowDM = gAppAllowDM;
+      if (teamConfig?.hasOwnProperty('app_allow_dm')) isAppAllowDM = teamConfig.app_allow_dm;
       let isUserAllowDM = isAppAllowDM;
       const uConfig = await getUserConfig(pollData.team, pollData.user_id);
       if (uConfig?.config?.hasOwnProperty('user_allow_dm')) {
