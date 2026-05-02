@@ -3564,6 +3564,15 @@ const createModalBlockInput = (userLang, isRichText, initialMrkdwn)  => {
     return block;
 };
 
+// Auto-discriminate a Slack input element's submitted value as a mrkdwn string.
+// rich_text_input populates option.rich_text_value (a rich_text block); plain_text_input
+// populates option.value (a string). The same reader works for both modal submits
+// (modal_poll_submit, edit_poll_submit) regardless of which element was rendered.
+function readInputAsMrkdwn(option) {
+  if (option && option.rich_text_value) return richTextToMrkdwn(option.rich_text_value);
+  return option?.value;
+}
+
 const createModalBlockInputDelete = (userLang)  => {
   return {
       "type": "section",
@@ -5197,15 +5206,10 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
 
     let isAck = false;
 
-    // Auto-discriminate between plain_text_input (option.value) and
-    // rich_text_input (option.rich_text_value). The flag is also stamped into
-    // private_metadata.is_rich_text_input but we don't need to read it here —
-    // the input element decides which field is populated, so we just pick the
-    // one that's present and run it through the converter for rich_text.
-    const readInputAsMrkdwn = (option) => {
-      if (option && option.rich_text_value) return richTextToMrkdwn(option.rich_text_value);
-      return option?.value;
-    };
+    // Same readInputAsMrkdwn at module scope auto-discriminates plain_text_input
+    // (option.value) and rich_text_input (option.rich_text_value). Flag is in
+    // private_metadata.is_rich_text_input but the reader doesn't need it — the
+    // input element decides which field is populated.
     if (state.values) {
       for (const optionName in state.values) {
         const option = state.values[optionName][Object.keys(state.values[optionName])[0]];
@@ -6117,21 +6121,38 @@ async function btnActions(args) {
     exportPoll(body, client, context, value);
 }
 
-// Build a single option-input row for the edit modal: a plain_text_input
+// Build a single option-input row for the edit modal: an input element
 // pre-filled with `value`, paired with a 🗑 delete button accessory in a
 // section block. Each row has a unique block_id so views.update can append
 // or remove rows without colliding with the existing ones.
-function buildEditOptionRow(userLang, optionValue) {
+//
+// Element type flips with the per-team enable_rich_text_input flag (PR-C):
+// rich_text_input pre-filled via mrkdwnToRichText (so old polls' stored
+// mrkdwn renders correctly in the editor) when on; plain_text_input
+// pre-filled with the raw string when off (kill-switch path).
+function buildEditOptionRow(userLang, optionValue, isRichText) {
   const blockId = 'edit_choice_' + uuidv4();
-  const inputBlock = {
-    type: 'input',
-    block_id: blockId,
-    element: {
+  let element;
+  if (isRichText) {
+    element = {
+      type: 'rich_text_input',
+      action_id: 'edit_choice_input',
+    };
+    if (typeof optionValue === 'string' && optionValue.length > 0) {
+      element.initial_value = mrkdwnToRichText(optionValue);
+    }
+  } else {
+    element = {
       type: 'plain_text_input',
       action_id: 'edit_choice_input',
       initial_value: optionValue ?? '',
       placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_choice') },
-    },
+    };
+  }
+  const inputBlock = {
+    type: 'input',
+    block_id: blockId,
+    element,
     label: { type: 'plain_text', text: ' ' },
     optional: true,
   };
@@ -6164,6 +6185,10 @@ async function editPollOpenModal(body, client, context, value) {
   let appLang = gAppLang;
   if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
   const userLang = value.user_lang || appLang;
+  // Resolve rich-text-input mode for the edit modal — same flag, same chain
+  // (server default -> team override) as createModal in PR-B.
+  let isRichTextInput = gIsRichTextInput;
+  if (teamConfig.hasOwnProperty('enable_rich_text_input')) isRichTextInput = teamConfig.enable_rich_text_input;
 
   const ephemeralReject = async (msgKey) => {
     if (!body.channel?.id) return;
@@ -6254,12 +6279,23 @@ async function editPollOpenModal(body, client, context, value) {
       type: 'input',
       block_id: 'edit_question',
       label: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_text') },
-      element: {
-        type: 'plain_text_input',
-        action_id: 'edit_question_input',
-        initial_value: pollData.question ?? '',
-        placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_hint') },
-      },
+      element: isRichTextInput
+        ? (() => {
+            const el = {
+              type: 'rich_text_input',
+              action_id: 'edit_question_input',
+            };
+            if (typeof pollData.question === 'string' && pollData.question.length > 0) {
+              el.initial_value = mrkdwnToRichText(pollData.question);
+            }
+            return el;
+          })()
+        : {
+            type: 'plain_text_input',
+            action_id: 'edit_question_input',
+            initial_value: pollData.question ?? '',
+            placeholder: { type: 'plain_text', text: stri18n(userLang, 'modal_input_question_hint') },
+          },
     },
     { type: 'divider' },
     {
@@ -6269,7 +6305,7 @@ async function editPollOpenModal(body, client, context, value) {
   ];
 
   for (const opt of (pollData.options || [])) {
-    for (const b of buildEditOptionRow(userLang, opt)) blocks.push(b);
+    for (const b of buildEditOptionRow(userLang, opt, isRichTextInput)) blocks.push(b);
   }
 
   // Trailing "Add option" actions block — keep it last so the dynamic
@@ -6294,6 +6330,10 @@ async function editPollOpenModal(body, client, context, value) {
     channel: targetChannel,
     ts: targetTs,
     response_url: body?.response_url || null,
+    // Stamp the flag so edit_add_choice keeps dynamic-add rows consistent
+    // with the surrounding inputs and the submit handler can treat the value
+    // shape correctly even if the team config flips mid-modal.
+    is_rich_text_input: isRichTextInput,
   };
 
   try {
@@ -6328,9 +6368,11 @@ app.action('edit_add_choice', async ({ ack, body, client, context }) => {
   if (!body || !body.view || !body.view.blocks || !body.view.id || !body.view.hash) return;
 
   let userLang = gAppLang;
+  let isRichTextInput = gIsRichTextInput;
   try {
     const pm = JSON.parse(body.view.private_metadata || '{}');
     if (pm.user_lang) userLang = pm.user_lang;
+    if (typeof pm.is_rich_text_input === 'boolean') isRichTextInput = pm.is_rich_text_input;
   } catch (e) { /* fall through */ }
 
   const currentBlocks = body.view.blocks.slice();
@@ -6384,7 +6426,7 @@ app.action('edit_add_choice', async ({ ack, body, client, context }) => {
 
   const blocks = currentBlocks;
   const insertAt = blocks.findIndex(b => b.block_id === 'edit_add_choice_actions');
-  const newRow = buildEditOptionRow(userLang, '');
+  const newRow = buildEditOptionRow(userLang, '', isRichTextInput);
   if (insertAt === -1) {
     for (const b of newRow) blocks.push(b);
   } else {
@@ -6475,7 +6517,11 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
   for (const blockId of Object.keys(view.state.values)) {
     const inner = view.state.values[blockId];
     const firstActionId = Object.keys(inner)[0];
-    const v = inner[firstActionId]?.value;
+    // readInputAsMrkdwn auto-discriminates between plain_text_input (option.value)
+    // and rich_text_input (option.rich_text_value -> richTextToMrkdwn). Same
+    // helper used by modal_poll_submit; stays correct regardless of which
+    // element type the modal rendered.
+    const v = readInputAsMrkdwn(inner[firstActionId]);
     if (blockId === 'edit_question') {
       newQuestion = (v || '').trim();
     } else if (blockId.startsWith('edit_choice_') && !blockId.endsWith('_del')) {
