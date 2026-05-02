@@ -3284,6 +3284,11 @@ function csvField(s) {
 // otherwise they show empty.
 function buildPollCsv(pollData, voteData, nameMap) {
   const isAnonymous = !!(pollData?.para?.anonymous);
+  const isTrueAnonymous = !!(pollData?.para?.true_anonymous);
+  // Hide identities only when the in-app "see all voters" menu would also
+  // refuse — i.e. anonymous + true_anonymous together. Plain anonymous polls
+  // still let the creator see voters in the menu, so the export matches.
+  const hideIdentities = isAnonymous && isTrueAnonymous;
   const opts = pollData?.options || [];
   const votes = voteData?.votes || {};
   const rows = [];
@@ -3309,6 +3314,7 @@ function buildPollCsv(pollData, voteData, nameMap) {
     if (editorDisplay) rows.push('Edited by Display Name,' + csvField(editorDisplay));
   }
   rows.push('Anonymous,' + (isAnonymous ? 'true' : 'false'));
+  if (isAnonymous) rows.push('True Anonymous,' + (isTrueAnonymous ? 'true' : 'false'));
   rows.push('');
 
   rows.push('Option,Vote count');
@@ -3318,13 +3324,24 @@ function buildPollCsv(pollData, voteData, nameMap) {
   }
   rows.push('');
 
-  // Per-voter detail. Anonymous polls suppress this section by design —
-  // the whole point is that voters' identities aren't disclosed.
-  if (!isAnonymous) {
-    rows.push('User ID,Real Name,Display Name,Option');
-    for (let i = 0; i < opts.length; i++) {
-      const voters = votes[String(i)] || [];
-      for (const voterId of voters) {
+  // Per-voter detail. Always emitted so analysts can see the cross-tab
+  // (which voter chose what). When hideIdentities is on, real Slack IDs
+  // and names are replaced with USER-1, USER-2, … assigned in the order
+  // each unique voter is first encountered (option index, then voter
+  // position) so the labels are deterministic for a given snapshot.
+  rows.push('User ID,Real Name,Display Name,Option');
+  const labelMap = new Map();
+  let nextLabel = 1;
+  const labelOf = (uid) => {
+    if (!labelMap.has(uid)) labelMap.set(uid, 'USER-' + nextLabel++);
+    return labelMap.get(uid);
+  };
+  for (let i = 0; i < opts.length; i++) {
+    const voters = votes[String(i)] || [];
+    for (const voterId of voters) {
+      if (hideIdentities) {
+        rows.push(csvField(labelOf(voterId)) + ',,,' + csvField(opts[i]));
+      } else {
         rows.push(
           csvField(voterId) + ',' +
           csvField(realOf(voterId)) + ',' +
@@ -3368,6 +3385,8 @@ async function fetchVoterNames(client, botToken, userIds, max = 100) {
 // markdown fence + truncation notice. Larger polls get truncated rather
 // than failing — file-upload delivery would need files:write scope which
 // this app doesn't request.
+// TODO(WIP): switch to files.uploadV2 once files:write scope is added —
+// removes the 30k truncation and delivers a real .csv attachment.
 //
 // channel + user are passed in explicitly because slash-command body uses
 // flat `body.channel_id`/`body.user_id` while action body uses nested
@@ -3376,12 +3395,15 @@ async function fetchVoterNames(client, botToken, userIds, max = 100) {
 const POLL_EXPORT_MAX_CHARS = 30000;
 async function sendCsvExport(channel, user, context, client, pollData, voteData, userLang, responseUrl) {
   // Collect unique user IDs to look up: creator, editor (if any), and
-  // every voter (only when not anonymous — anonymous polls never expose
-  // voter identities, so name lookup would just leak the cap budget).
+  // every voter — except in true-anonymous mode where the per-voter
+  // section uses USER-N labels and never needs real names.
+  const isAnonymous = !!(pollData?.para?.anonymous);
+  const isTrueAnonymous = !!(pollData?.para?.true_anonymous);
+  const hideIdentities = isAnonymous && isTrueAnonymous;
   const ids = new Set();
   if (pollData?.user_id) ids.add(pollData.user_id);
   if (pollData?.edited_by) ids.add(pollData.edited_by);
-  if (!pollData?.para?.anonymous) {
+  if (!hideIdentities) {
     const votes = voteData?.votes || {};
     for (const k of Object.keys(votes)) {
       for (const uid of (votes[k] || [])) ids.add(uid);
