@@ -128,6 +128,16 @@ Schedule post and close
 - If an end time is set, it will attempt to close the poll at that time once. If the owner re-opens it, the scheduled close will not run again.
 - **Heads-up for polls created via the `/poll` GUI menu (modal):** Auto-close only works if at least one person votes or clicks any button on the poll *before* the scheduled close time. This is a Slack API limitation — when a poll is created through the modal, Slack doesn't give us a reference to the posted message, so we rely on the first user interaction to capture it. We *could* recover the reference automatically by reading channel message history, but that would require granting the app permission to read everyone's messages in the channel — we chose not to ask for that broader access just to handle this edge case. If nobody interacts before the close time, the poll won't auto-close and you'll need to close it manually.
 
+#### Modal / GUI: post-time and auto-close
+The same scheduling shown above is also available from the `/poll` modal — no need to remember the ISO8601 syntax:
+
+- **When:** `Now` (post immediately) or `Schedule` (pick a date/time to post later).
+- **Auto-close:** `Never` (default) or `Schedule` (pick a date/time at which the poll auto-closes once).
+
+Validation: the auto-close time must be in the future *and* after the post time; otherwise the modal returns an error and stays open.
+
+The same heads-up about modal-created polls applies: for response_url-style posts the bot only learns the message reference once someone interacts with the poll. In practice that means: post Now + auto-close at T works; schedule + schedule auto-close also works (the actual posted run inherits the close time and auto-closes cleanly).
+
 ### Advanced Schedule/Recurring Poll
 For advanced recurring polls, please use a simple poll as a template and then use the `POLL_ID` of that poll in the `/poll schedule` command. If you don't want any members to see or respond to your template poll, you can create it in an empty private channel and specify the `CH_ID` in the schedule command.
 

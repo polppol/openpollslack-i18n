@@ -4418,6 +4418,25 @@ async function createModal(context, client, trigger_id,response_url,channel) {
       },
       "value": "later"
     };
+    // Auto-close options. Submit handler reads block_id='poll_end' as a static
+    // select with values 'never' / 'schedule'; the matching 'poll_end_ts'
+    // datetimepicker is inserted dynamically by modal_select_poll_end below.
+    const closeNeverBlock = {
+      "text": {
+        "type": "plain_text",
+        "text": stri18n(appLang,'task_scheduled_close_never'),
+        "emoji": true
+      },
+      "value": "never"
+    };
+    const closeScheduleBlock = {
+      "text": {
+        "type": "plain_text",
+        "text": stri18n(appLang,'task_scheduled_close_at'),
+        "emoji": true
+      },
+      "value": "schedule"
+    };
     blocks = blocks.concat([
 
       {
@@ -4435,7 +4454,7 @@ async function createModal(context, client, trigger_id,response_url,channel) {
             nowBlock,laterBlock
           ],
           "initial_option" : nowBlock,
-          
+
         },
         "label": {
           "type": "plain_text",
@@ -4453,6 +4472,24 @@ async function createModal(context, client, trigger_id,response_url,channel) {
             text: parameterizedString(stri18n(appLang,'task_scheduled_when_note'),{slack_command:slackCommand,bot_name:botName,task_scheduled_later:stri18n(appLang, 'task_scheduled_later')}),
           },
         ],
+      },
+      {
+        "type": "input",
+        "dispatch_action": true,
+        "element": {
+          "type": "static_select",
+          "action_id": "modal_select_poll_end",
+          "options": [
+            closeNeverBlock, closeScheduleBlock
+          ],
+          "initial_option": closeNeverBlock,
+        },
+        "label": {
+          "type": "plain_text",
+          "text": stri18n(appLang,'task_scheduled_close_when'),
+          "emoji": true
+        },
+        "block_id": 'poll_end',
       },
       {
         type: 'divider',
@@ -4839,6 +4876,91 @@ app.action('modal_select_when', async ({ action, ack, body, client, context }) =
   }
 });
 
+// Toggle poll_end_ts datetimepicker right after the poll_end static select
+// based on the user's choice (never / schedule). Mirrors the modal_select_when
+// pattern above, but isolated to the poll_end -> poll_end_ts pair.
+app.action('modal_select_poll_end', async ({ action, ack, body, client, context }) => {
+  try {
+    await ack();
+
+    if (
+        !action
+        || !action.selected_option?.value
+    ) {
+      return;
+    }
+
+    const isSchedule = (action.selected_option.value === 'schedule');
+    const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(body));
+    let appLang = gAppLang;
+    if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
+
+    let blocks = body.view.blocks;
+    let blockPointer = 0;
+    for (const i in blocks) {
+      const b = blocks[i];
+      if (b?.block_id === 'poll_end') {
+        const nextIndex = blockPointer + 1;
+        const nextIsPicker = blocks[nextIndex]?.block_id === 'poll_end_ts';
+        if (isSchedule) {
+          if (!nextIsPicker) {
+            const dateTimeInput = {
+              "type": "input",
+              "block_id": 'poll_end_ts',
+              "element": {
+                "type": "datetimepicker",
+              },
+              "label": {
+                "type": "plain_text",
+                "text": stri18n(appLang, 'task_scheduled_close_on'),
+                "emoji": true
+              }
+            };
+            const beginBlocks = blocks.slice(0, blockPointer + 1);
+            const endBlocks = blocks.slice(blockPointer + 1);
+            blocks = beginBlocks.concat([dateTimeInput], endBlocks);
+          }
+        } else {
+          if (nextIsPicker) {
+            const beginBlocks = blocks.slice(0, blockPointer + 1);
+            const endBlocks = blocks.slice(blockPointer + 2);
+            blocks = beginBlocks.concat(endBlocks);
+          }
+        }
+        break;
+      }
+      blockPointer++;
+    }
+
+    const view = {
+      type: body.view.type,
+      private_metadata: body.view.private_metadata,
+      callback_id: 'modal_poll_submit',
+      title: body.view.title,
+      submit: body.view.submit,
+      close: body.view.close,
+      blocks: blocks,
+      external_id: body.view.id,
+    };
+
+    try {
+      await client.views.update({
+        token: context.botToken,
+        hash: body.view.hash,
+        view: view,
+        view_id: body.view.id,
+      });
+    } catch (e) {
+      logger.debug("Error on modal_select_poll_end (maybe user click too fast)");
+    }
+  } catch (e) {
+    logger.error(`UNEXPECTED ERROR in modal_select_poll_end :` + e.message);
+    logger.error(e.toString() + "\n" + e.stack);
+    console.log(e);
+    console.trace();
+  }
+});
+
 app.action('modal_poll_channel', async ({ action, ack, body, client, context }) => {
   try {
     await ack();
@@ -5137,6 +5259,22 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       endtimestamp = parseInt(endDateTime, 10);
       endTs = new Date(endtimestamp * 1000); // multiply by 1000 to convert seconds to milliseconds
       endisoStr = endTs.toISOString();
+    }
+
+    // Auto-close time must be in the future AND after the post time. This
+    // catches user mistakes (picked yesterday, picked before "Post on") that
+    // would otherwise produce a useless / immediately-firing close.
+    if (endTs !== null) {
+      const nowDate = new Date();
+      if (endTs <= nowDate || (schTs !== null && endTs <= schTs)) {
+        await ack({
+          response_action: 'errors',
+          errors: {
+            poll_end_ts: stri18n(appLang, 'err_close_before_post'),
+          },
+        });
+        return;
+      }
     }
 
     if (!isUseResponseUrl || !response_url || response_url === "" || forceNotUsingResponseURL) {

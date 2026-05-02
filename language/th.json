@@ -134,5 +134,10 @@
   "poll_export_not_found": "Poll not found(ไม่พบคำถาม). Check the Poll ID from `Command info` on the poll menu.",
   "poll_export_no_permission": "Only the poll creator can export results.(เฉพาะผู้สร้างคำถามเท่านั้นที่สามารถส่งออกผลได้)",
   "poll_export_header": "Export of poll `{{poll_id}}`:(ผลของคำถาม `{{poll_id}}`:)",
-  "poll_export_truncated": ":warning: Output exceeded `{{max}}` chars and was truncated.(:warning: ผลลัพธ์เกิน `{{max}}` ตัวอักษร ถูกตัดทอน)"
+  "poll_export_truncated": ":warning: Output exceeded `{{max}}` chars and was truncated.(:warning: ผลลัพธ์เกิน `{{max}}` ตัวอักษร ถูกตัดทอน)",
+  "task_scheduled_close_when": "ปิดคำถามอัตโนมัติ:",
+  "task_scheduled_close_never": "ไม่ปิด",
+  "task_scheduled_close_at": "ตั้งเวลาปิด",
+  "task_scheduled_close_on": "ปิดเมื่อ:",
+  "err_close_before_post": "เวลาปิดอัตโนมัติต้องอยู่ในอนาคต และต้องหลังเวลาโพสต์คำถาม"
 }
