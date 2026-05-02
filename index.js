@@ -7147,8 +7147,43 @@ async function deletePollConfirm(body, context, value) {
 
 async function closePollById(poll_id) {
   let menuAtIndex = 0;
+  let pollData = null;
+
+  // Best-effort DM to the poll creator when an auto-close fails.
+  // Silently no-ops if we lack the bare minimum (team + user_id + bot token)
+  // or if the user opted out of DMs. Never throws — DM failure must not
+  // mask the underlying close failure in the logs.
+  const sendCloseFailedDM = async (reason) => {
+    try {
+      if (!pollData?.team || !pollData?.user_id) return;
+      const teamInfo = await getTeamInfo(pollData.team);
+      const dmToken = teamInfo?.bot?.token;
+      if (!dmToken) return;
+
+      let isUserAllowDM = isAppAllowDM;
+      const uConfig = await getUserConfig(pollData.team, pollData.user_id);
+      if (uConfig?.config?.hasOwnProperty('user_allow_dm')) {
+        isUserAllowDM = uConfig.config.user_allow_dm;
+      }
+      if (!isUserAllowDM) return;
+
+      const text = parameterizedString(stri18n(gAppLang, 'info_schedule_close_failed'), {
+        question: pollData.question || '(no question)',
+        poll_id: String(pollData._id || poll_id),
+        reason: reason,
+      });
+      await postChat("", 'post', {
+        token: dmToken,
+        channel: pollData.user_id,
+        text: text,
+      });
+    } catch (e) {
+      logger.warn(`[Schedule_close] Failed to DM poller for poll_id ${poll_id}: ${e?.message || e}`);
+    }
+  };
+
   try {
-    let pollData = await pollCol.findOne({_id: new ObjectId(poll_id)});
+    pollData = await pollCol.findOne({_id: new ObjectId(poll_id)});
     if (!pollData) {
       logger.warn(`Invalid poll_id ${poll_id} on closePollById`);
       return false;
@@ -7160,11 +7195,19 @@ async function closePollById(poll_id) {
         pollData.hasOwnProperty('ts')
     ) {
       if (!pollData.team || !pollData.channel || !pollData.user_id || !pollData.ts) {
-        logger.warn(`Cannot close poll_id ${poll_id} on closePollById due to incomplete data `);
+        const issues = ['team','channel','user_id','ts']
+            .map(f => !pollData.hasOwnProperty(f) ? `${f}=<missing>` : !pollData[f] ? `${f}=<null/empty>` : null)
+            .filter(Boolean)
+            .join(', ') || 'unknown';
+        logger.warn(`Cannot close poll_id ${poll_id} on closePollById due to incomplete data: ${issues}`);
         await pollCol.updateOne(
             {_id: pollData._id},
             {$set: {schedule_end_active: false}}
         );
+        const humanReason = (issues === 'ts=<null/empty>')
+            ? "Nobody voted or clicked any button on the poll before its scheduled close time. For polls created via the `/poll` menu (GUI), the app needs at least one interaction so it can find the message in Slack to close."
+            : `The poll record is missing required information (\`${issues}\`). This is unusual — please contact your admin.`;
+        await sendCloseFailedDM(humanReason);
         return false;
       }
 
@@ -7223,6 +7266,7 @@ async function closePollById(poll_id) {
                 {_id: pollData._id},
                 {$set: {schedule_end_active: false}}
             );
+            await sendCloseFailedDM("Couldn't access this workspace's bot token. The app may need to be reinstalled.");
             return false;
           }
 
@@ -7239,6 +7283,7 @@ async function closePollById(poll_id) {
                 {_id: pollData._id},
                 {$set: {schedule_end_active: false}}
             );
+            await sendCloseFailedDM("Couldn't rebuild the poll's display. Please contact your admin if this keeps happening.");
             return false;
           }
 
@@ -7298,6 +7343,7 @@ async function closePollById(poll_id) {
           if (postRes.status === false) {
             logger.warn("[Schedule_close] Failed to update poll data.");
             logger.warn(postRes);
+            await sendCloseFailedDM("Couldn't update the poll message in Slack — it may have been deleted, or Slack had a temporary issue.");
             //continue;
           }
 
@@ -7305,6 +7351,7 @@ async function closePollById(poll_id) {
           logger.warn(`Cannot close poll_id ${poll_id}  `);
           logger.warn(e);
           logger.warn(e.toString() + "\n" + e.stack);
+          await sendCloseFailedDM('Something unexpected went wrong while closing the poll. Please contact your admin if this keeps happening.');
           return false;
         } finally {
           release();
@@ -7312,11 +7359,19 @@ async function closePollById(poll_id) {
       }//end on release
 
     } else {
-      logger.warn(`Cannot close poll_id ${poll_id} on closePollById due to incomplete data `);
+      const issues = ['team','channel','user_id','ts']
+          .map(f => !pollData.hasOwnProperty(f) ? `${f}=<missing>` : !pollData[f] ? `${f}=<null/empty>` : null)
+          .filter(Boolean)
+          .join(', ') || 'unknown';
+      logger.warn(`Cannot close poll_id ${poll_id} on closePollById due to incomplete data: ${issues}`);
       await pollCol.updateOne(
           {_id: pollData._id},
           {$set: {schedule_end_active: false}}
       );
+      const humanReason = (issues === 'ts=<missing>' || issues === 'ts=<null/empty>')
+          ? "Nobody voted or clicked any button on the poll before its scheduled close time. For polls created via the `/poll` menu (GUI), the app needs at least one interaction so it can find the message in Slack to close."
+          : `The poll record is missing required information (\`${issues}\`). This is unusual — please contact your admin.`;
+      await sendCloseFailedDM(humanReason);
     }
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in closePollById`);
@@ -7324,6 +7379,7 @@ async function closePollById(poll_id) {
     logger.error(e.toString() + "\n" + e.stack);
     console.log(e);
     console.trace();
+    await sendCloseFailedDM('Something unexpected went wrong while closing the poll. Please contact your admin if this keeps happening.');
     return false;
   }
 

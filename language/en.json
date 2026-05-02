@@ -97,6 +97,7 @@
   "task_scheduled_post_noti": "Your scheduled poll has been posted.\nPoll ID: `{{poll_id}}`\nCMD:`{{poll_cmd}}`\nScheduled on: `{{ts}}`{{note}}",
   "task_scheduled_post_noti_error": "There was an error `{{error}}` while trying to post your scheduled poll.\nPoll ID: `{{poll_id}}`\nCMD:`{{poll_cmd}}`\nScheduled on: `{{ts}}`{{note}}",
   "task_scheduled_post_noti_done": "Your scheduled poll has been posted, marking the completion of its final scheduled Recurring Poll.{{info}}\nPoll ID: `{{poll_id}}`\nCMD:`{{poll_cmd}}`\nScheduled on: `{{ts}}`{{note}}",
+  "info_schedule_close_failed": "Your scheduled auto-close failed for the poll below. The poll was *not* closed — please close it manually if needed.\n*Question:* {{question}}\n*Poll ID:* `{{poll_id}}`\n*Reason:* {{reason}}",
   "task_scheduled_warn_too_fast": "[Schedule][Warn] Poll ID:`{{poll_id}}` First scheduled job and next one is less than {{run_max_hrs}} hours (current {{run_current_hrs}} hours).",
   "task_scheduled_error_too_fast": "[Schedule][Error] Poll ID:`{{poll_id}}` Scheduled job run more than once in {{run_max_hrs}} hours (current {{run_current_hrs}} hours). Job is now disabled.",
   "task_scheduled_time_missing": "Please select the date and time. If you don't see the DateTime Picker, try to re-select `{{task_scheduled_later}}` again and wait for the picker to show up in a few seconds.",
