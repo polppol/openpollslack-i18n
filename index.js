@@ -7336,7 +7336,11 @@ async function closePollById(poll_id) {
       }
       if (!isUserAllowDM) return;
 
-      const text = parameterizedString(stri18n(gAppLang, 'info_schedule_close_failed'), {
+      // Per-poll lang resolution: pollData.para.user_lang -> teamConfig.app_lang -> gAppLang.
+      // Matches the closer's main success path (~line 7368) so a Thai-language poll
+      // delivers its failure DM in Thai instead of the server-default English.
+      const userLang = (pollData.para?.user_lang) || teamConfig?.app_lang || gAppLang;
+      const text = parameterizedString(stri18n(userLang, 'info_schedule_close_failed'), {
         question: pollData.question || '(no question)',
         poll_id: String(pollData._id || poll_id),
         reason: reason,
