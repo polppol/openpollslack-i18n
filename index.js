@@ -71,6 +71,7 @@ const { getTeamOrEnterpriseId } = require('./src/util/teamId');
 const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
 const { convertHoursToString, toBoolean } = require('./src/util/format');
 const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron');
+const { richTextToMrkdwn, mrkdwnToRichText } = require('./src/util/richtext');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
 const cron = require('node-cron');
@@ -119,8 +120,15 @@ const gDisplayPollerName = config.get('display_poller_name');
 const gEnablePollEdit = config.has('enable_poll_edit') ? config.get('enable_poll_edit') : true;
 const gEnablePollEditMaxMins = config.has('enable_poll_edit_max_mins') ? parseInt(config.get('enable_poll_edit_max_mins'), 10) : 60;
 const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? config.get('enable_poll_edit_keep_votes') : true;
+// Kill-switch flag for the rich_text_input modal migration. Default false so
+// existing tenants see no behavior change. Per-team override via
+// `/poll config write enable_rich_text_input true|false`. When false, the
+// /poll modal renders the original plain_text_input elements; when true, it
+// renders rich_text_input + the converters in src/util/richtext.js bridge to
+// the same mrkdwn-string storage shape (DB schema unchanged).
+const gIsRichTextInput = config.has('enable_rich_text_input') ? config.get('enable_rich_text_input') : false;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input"];
 
 // Integer-valued team overrides. Separate from the true/false list so the
 // /poll config write dispatcher knows to parse the value as a non-negative
@@ -3514,8 +3522,29 @@ async function exportPoll(body, client, context, value) {
   await sendCsvExport(body?.channel?.id, body?.user?.id, context, client, pollData, voteData, userLang, body?.response_url || null);
 }
 
-const createModalBlockInput = (userLang)  => {
-    return {
+const createModalBlockInput = (userLang, isRichText, initialMrkdwn)  => {
+    // rich_text_input branch: emit a rich_text editor. Optionally pre-fill via
+    // initial_value (used by the edit modal in PR-C). rich_text_input does not
+    // support a placeholder field.
+    if (isRichText) {
+      const block = {
+        type: 'input',
+        element: {
+          type: 'rich_text_input',
+        },
+        label: {
+          type: 'plain_text',
+          text: ' ',
+        },
+      };
+      if (typeof initialMrkdwn === 'string' && initialMrkdwn.length > 0) {
+        block.element.initial_value = mrkdwnToRichText(initialMrkdwn);
+      }
+      return block;
+    }
+    // Default: plain_text_input — original behavior, also the kill-switch path
+    // when enable_rich_text_input=false.
+    const block = {
       type: 'input',
       element: {
         type: 'plain_text_input',
@@ -3528,7 +3557,11 @@ const createModalBlockInput = (userLang)  => {
         type: 'plain_text',
         text: ' ',
       },
-  }
+    };
+    if (typeof initialMrkdwn === 'string' && initialMrkdwn.length > 0) {
+      block.element.initial_value = initialMrkdwn;
+    }
+    return block;
 };
 
 const createModalBlockInputDelete = (userLang)  => {
@@ -3611,13 +3644,17 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
     return;
   }
 
-  // Read user_lang from the modal's private_metadata — set when the modal
-  // was opened, preserved across updates. Avoids a Mongo round-trip per click.
+  // Read user_lang and the rich-text-input flag from the modal's private_metadata
+  // — both are set when the modal is opened and preserved across updates so we
+  // don't round-trip Mongo on every click. is_rich_text_input keeps a freshly-
+  // added choice block consistent with the modal's existing inputs.
   let appLang = gAppLang;
+  let isRichTextInput = gIsRichTextInput;
   try {
     const pm = JSON.parse(body.view.private_metadata);
     if (pm.user_lang) appLang = pm.user_lang;
-  } catch (e) { /* fall through to gAppLang */ }
+    if (typeof pm.is_rich_text_input === 'boolean') isRichTextInput = pm.is_rich_text_input;
+  } catch (e) { /* fall through to gAppLang / gIsRichTextInput */ }
 
   let blocks = body.view.blocks;
   const hash = body.view.hash;
@@ -3625,7 +3662,7 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
   let beginBlocks = blocks.slice(0, blocks.length - 1);
   let endBlocks = blocks.slice(-1);
 
-  let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
+  let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang, isRichTextInput)));
   //tempModalBlockInput.block_id = 'choice_'+(blocks.length-8);
   tempModalBlockInput.block_id = 'choice_'+uuidv4();
 
@@ -4257,10 +4294,16 @@ async function createModal(context, client, trigger_id,response_url,channel) {
     const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
     let appLang= gAppLang;
     if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
-    let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
+    // Resolve rich-text-input mode for this team. Default false. Per-team
+    // override flips it on. The flag is then stamped into private_metadata so
+    // every subsequent modal action (btn_add_choice, modal_select_when, etc.)
+    // can read the same value without re-fetching team config.
+    let isRichTextInput = gIsRichTextInput;
+    if (teamConfig.hasOwnProperty("enable_rich_text_input")) isRichTextInput = teamConfig.enable_rich_text_input;
+    let tempModalBlockInput = JSON.parse(JSON.stringify(createModalBlockInput(appLang, isRichTextInput)));
     tempModalBlockInput.block_id = 'choice_0';
 
-    let tempModalBlockInput2 = JSON.parse(JSON.stringify(createModalBlockInput(appLang)));
+    let tempModalBlockInput2 = JSON.parse(JSON.stringify(createModalBlockInput(appLang, isRichTextInput)));
     tempModalBlockInput2.block_id = 'choice_'+uuidv4();
     let tempModalBlockInputDelete2 = JSON.parse(JSON.stringify(createModalBlockInputDelete(appLang)));
     tempModalBlockInputDelete2.block_id = tempModalBlockInput2.block_id+"_del";
@@ -4293,6 +4336,7 @@ async function createModal(context, client, trigger_id,response_url,channel) {
       true_anonymous: isTrueAnonymous,
       add_number_emoji_to_choice: isShowNumberInChoice,
       add_number_emoji_to_choice_btn: isShowNumberInChoiceBtn,
+      is_rich_text_input: isRichTextInput,
       response_url: response_url,
       channel: channel,
     };
@@ -4644,13 +4688,17 @@ async function createModal(context, client, trigger_id,response_url,channel) {
           type: 'plain_text',
           text: stri18n(appLang,'modal_input_question_text'),
         },
-        element: {
-          type: 'plain_text_input',
-          placeholder: {
-            type: 'plain_text',
-            text: stri18n(appLang,'modal_input_question_hint'),
-          },
-        },
+        // The element type flips with the rich-text-input flag. rich_text_input
+        // doesn't accept a placeholder; plain_text_input keeps the original hint.
+        element: isRichTextInput
+          ? { type: 'rich_text_input' }
+          : {
+              type: 'plain_text_input',
+              placeholder: {
+                type: 'plain_text',
+                text: stri18n(appLang,'modal_input_question_hint'),
+              },
+            },
         block_id: 'question',
       },
       {
@@ -5149,11 +5197,20 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
 
     let isAck = false;
 
+    // Auto-discriminate between plain_text_input (option.value) and
+    // rich_text_input (option.rich_text_value). The flag is also stamped into
+    // private_metadata.is_rich_text_input but we don't need to read it here —
+    // the input element decides which field is populated, so we just pick the
+    // one that's present and run it through the converter for rich_text.
+    const readInputAsMrkdwn = (option) => {
+      if (option && option.rich_text_value) return richTextToMrkdwn(option.rich_text_value);
+      return option?.value;
+    };
     if (state.values) {
       for (const optionName in state.values) {
         const option = state.values[optionName][Object.keys(state.values[optionName])[0]];
         if ('question' === optionName) {
-          question = option.value;
+          question = readInputAsMrkdwn(option);
         } else if ('user_lang' === optionName) {
           if (langList.hasOwnProperty(option.selected_option.value)) {
             userLang = option.selected_option.value;
@@ -5161,7 +5218,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
         } else if ('limit' === optionName) {
           limit = parseInt(option.value, 10);
         } else if (optionName.startsWith('choice_')) {
-          options.push(option.value);
+          options.push(readInputAsMrkdwn(option));
           elementToAlert = optionName;
         } else if ('options' === optionName) {
           const checkedbox = state.values[optionName]['modal_poll_options']['selected_options'];
