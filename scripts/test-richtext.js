@@ -2,7 +2,7 @@
 // framework in this project — run directly: `node scripts/test-richtext.js`.
 // Exits non-zero on failure so it's wired into CI later if we add one.
 
-const { richTextToMrkdwn, mrkdwnToRichText } = require('../src/util/richtext');
+const { richTextToMrkdwn, mrkdwnToRichText, readInputAsMrkdwn } = require('../src/util/richtext');
 
 let pass = 0;
 let fail = 0;
@@ -298,6 +298,72 @@ for (const [input, expectedAfterNormalize] of normalizeCases) {
   const twice = richTextToMrkdwn(mrkdwnToRichText(once));
   test(`stable after normalize: "${input}"`, once, twice);
 }
+
+// ─── Kill-switch behavior — readInputAsMrkdwn ────────────────────
+// When enable_rich_text_input is false, the modal renders plain_text_input.
+// Submitted state has option.value (string) and NO option.rich_text_value.
+// The reader must return the raw string — byte-for-byte the legacy shape.
+//
+// When the flag is true, the modal renders rich_text_input. Submitted state has
+// option.rich_text_value (a rich_text block) and NO option.value. The reader
+// must run it through richTextToMrkdwn to produce the same string-typed value
+// the rest of the pipeline expects.
+console.log('\nKill-switch (readInputAsMrkdwn auto-discriminator):');
+
+test(
+  'flag=false path: option.value passes through untouched',
+  'Hello *world*',
+  readInputAsMrkdwn({ value: 'Hello *world*' })
+);
+
+test(
+  'flag=false path: empty string returns empty',
+  '',
+  readInputAsMrkdwn({ value: '' })
+);
+
+test(
+  'flag=false path: undefined option safely returns undefined (no throw)',
+  undefined,
+  readInputAsMrkdwn(undefined)
+);
+
+test(
+  'flag=true path: rich_text_value goes through converter',
+  'Hello *world*',
+  readInputAsMrkdwn({
+    rich_text_value: {
+      type: 'rich_text',
+      elements: [{
+        type: 'rich_text_section',
+        elements: [
+          { type: 'text', text: 'Hello ' },
+          { type: 'text', text: 'world', style: { bold: true } },
+        ],
+      }],
+    },
+  })
+);
+
+test(
+  'flag=true path: empty rich_text returns empty string',
+  '',
+  readInputAsMrkdwn({
+    rich_text_value: { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: [] }] },
+  })
+);
+
+test(
+  'BOTH present (rare race): rich_text_value wins (modal flipped to rich during open)',
+  'rich-wins',
+  readInputAsMrkdwn({
+    value: 'plain-loses',
+    rich_text_value: {
+      type: 'rich_text',
+      elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'rich-wins' }] }],
+    },
+  })
+);
 
 // ─── Summary ─────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? `All ${pass} tests passed.` : `${pass} passed, ${fail} FAILED`));

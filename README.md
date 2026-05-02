@@ -318,6 +318,7 @@ Usage:
 /poll config write enable_poll_edit [true/false]
 /poll config write enable_poll_edit_max_mins [number]
 /poll config write enable_poll_edit_keep_votes [true/false]
+/poll config write enable_rich_text_input [true/false]
 ```
 
 ## Self-host: Server configuration (config/default.json)
@@ -353,6 +354,7 @@ Usage:
 - `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
 - `enable_poll_edit_max_mins` (default `60`); how many minutes after a poll is **posted** the owner is still allowed to edit it. Set to `0` to allow editing forever. After this window the menu entry still appears but the modal/CLI rejects with a message telling the user the limit. Can also be overridden per team via `/poll config write enable_poll_edit_max_mins [number]`.
 - `enable_poll_edit_keep_votes` (default `true`); how the edit feature handles votes when an option's wording changes at the same position. With `true`, votes are kept (a typo fix doesn't reset the tally). With `false`, votes for any position whose text changed are cleared. Either way, options whose text matches across the edit (even if reordered or shifted by an inserted/removed neighbour) keep their votes via text-matching. Can also be overridden per team via `/poll config write enable_poll_edit_keep_votes [true/false]`.
+- `enable_rich_text_input` (default `false`, **experimental**); when `true`, the `/poll` create modal and the **Edit the poll** modal render Slack's native rich-text editor (`rich_text_input`) for the question and each choice instead of a plain text field. Users get an emoji picker, formatting toolbar (bold/italic/strike/code/lists/links), and inline mention rendering. Storage stays a mrkdwn string in MongoDB — old polls and CLI-created polls keep working unchanged; only the input element flips. To kill the experiment for a team, run `/poll config write enable_rich_text_input false` and re-open the modal — it falls back to `plain_text_input` immediately, no restart needed. Can also be overridden per team via `/poll config write enable_rich_text_input [true/false]`.
 
 ### Self-heal of missing keys
 

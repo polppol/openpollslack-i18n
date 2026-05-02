@@ -282,8 +282,20 @@ function mrkdwnToRichText(s) {
   return { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: flat }] };
 }
 
+// Auto-discriminate a Slack input element's submitted value as a mrkdwn string.
+// rich_text_input populates option.rich_text_value (a rich_text block);
+// plain_text_input populates option.value (a string). The same reader works for
+// both modal submits regardless of which element was rendered — used at both
+// modal_poll_submit and edit_poll_submit so the kill-switch flag (when off) just
+// falls through to option.value, byte-for-byte legacy behavior.
+function readInputAsMrkdwn(option) {
+  if (option && option.rich_text_value) return richTextToMrkdwn(option.rich_text_value);
+  return option?.value;
+}
+
 module.exports = {
   richTextToMrkdwn,
   mrkdwnToRichText,
   escapeForMrkdwn,
+  readInputAsMrkdwn,
 };

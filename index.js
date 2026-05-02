@@ -71,7 +71,7 @@ const { getTeamOrEnterpriseId } = require('./src/util/teamId');
 const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
 const { convertHoursToString, toBoolean } = require('./src/util/format');
 const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron');
-const { richTextToMrkdwn, mrkdwnToRichText } = require('./src/util/richtext');
+const { richTextToMrkdwn, mrkdwnToRichText, readInputAsMrkdwn } = require('./src/util/richtext');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
 const cron = require('node-cron');
@@ -3563,15 +3563,6 @@ const createModalBlockInput = (userLang, isRichText, initialMrkdwn)  => {
     }
     return block;
 };
-
-// Auto-discriminate a Slack input element's submitted value as a mrkdwn string.
-// rich_text_input populates option.rich_text_value (a rich_text block); plain_text_input
-// populates option.value (a string). The same reader works for both modal submits
-// (modal_poll_submit, edit_poll_submit) regardless of which element was rendered.
-function readInputAsMrkdwn(option) {
-  if (option && option.rich_text_value) return richTextToMrkdwn(option.rich_text_value);
-  return option?.value;
-}
 
 const createModalBlockInputDelete = (userLang)  => {
   return {
