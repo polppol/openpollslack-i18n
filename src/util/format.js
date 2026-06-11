@@ -30,4 +30,15 @@ function toBoolean(value) {
   return false;
 }
 
-module.exports = { convertHoursToString, toBoolean };
+// Strict boolean vocabulary for config WRITES: exactly true/yes/1 or
+// false/no/0 (case-insensitive, whole token), undefined for anything else
+// so the caller can show a usage error. The permissive read-side coercion
+// stays in toBoolean above - writes are strict, reads are forgiving.
+function parseBooleanToken(value) {
+  const s = String(value ?? '').trim().toLowerCase();
+  if (s === 'true' || s === 'yes' || s === '1') return true;
+  if (s === 'false' || s === 'no' || s === '0') return false;
+  return undefined;
+}
+
+module.exports = { convertHoursToString, toBoolean, parseBooleanToken };

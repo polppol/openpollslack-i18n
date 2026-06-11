@@ -23,8 +23,12 @@ const { App, ExpressReceiver, LogLevel } = require('@slack/bolt');
 
   if (!fs.existsSync(cfgPath) || !fs.existsSync(distPath)) {
     // Either the operator hasn't run initial setup yet, or .dist is missing
-    // (shouldn't happen in a clean checkout). Either way, don't synthesise
-    // a config from thin air — let the normal startup error surface.
+    // (shouldn't happen in a clean checkout). Don't synthesise a config from
+    // thin air - but DO say what's wrong, because node-config's own error
+    // ('property "port" is not defined') doesn't mention the fix.
+    if (!fs.existsSync(cfgPath) && fs.existsSync(distPath)) {
+      console.error('[ConfigHeal] config/default.json not found. Copy config/default.json.dist to config/default.json and fill in your Slack credentials (see self_host.md).');
+    }
     return;
   }
   let current, distDefaults;
@@ -69,7 +73,7 @@ const { Mutex } = require('async-mutex');
 const { isValidISO8601 } = require('./src/util/iso');
 const { getTeamOrEnterpriseId } = require('./src/util/teamId');
 const { acceptedQuotes, standardQuote, getSupportDoubleQuoteToStr } = require('./src/util/quotes');
-const { convertHoursToString, toBoolean } = require('./src/util/format');
+const { convertHoursToString, toBoolean, parseBooleanToken } = require('./src/util/format');
 const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron');
 const { richTextToMrkdwn, mrkdwnToRichText, readInputAsMrkdwn } = require('./src/util/richtext');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
@@ -77,6 +81,7 @@ const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadL
 const cron = require('node-cron');
 
 const { createLogger, format, transports } = require('winston');
+require('winston-daily-rotate-file'); // side-effect: registers transports.DailyRotateFile
 const fs = require('fs');
 const path = require('path');
 //const moment = require('moment');
@@ -113,6 +118,7 @@ const gLogLevelAppFile = config.get('log_level_app_file');
 const gLogLevelBolt = config.get('log_level_bolt');
 const gLogLevelBoltFile = config.get('log_level_bolt_file');
 const gLogToFile = config.get('log_to_file');
+const gLogMaxFiles = config.has('log_max_files') ? config.get('log_max_files').toString() : '30d';
 const gScheduleLimitHr = config.get('schedule_limit_hrs');
 const gScheduleMaxRun = parseInt(config.get('schedule_max_run'));
 const gScheduleAutoDeleteDay = config.get('schedule_auto_delete_invalid_day');
@@ -134,6 +140,31 @@ const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectab
 // /poll config write dispatcher knows to parse the value as a non-negative
 // integer rather than a boolean.
 const validTeamOverrideConfigInt = ["enable_poll_edit_max_mins"];
+
+// SSOT map key -> current server default, used by `/poll config read|list`
+// and `/poll config reset` so the displayed effective values can never drift
+// from the write validators above. Function (not literal) so it always
+// reflects the g* constants resolved at startup.
+const serverDefaultsForConfig = () => ({
+  app_lang: gAppLang,
+  create_via_cmd_only: gIsViaCmdOnly,
+  app_lang_user_selectable: gIsAppLangSelectable,
+  menu_at_the_end: gIsMenuAtTheEnd,
+  compact_ui: gIsCompactUI,
+  show_divider: gIsShowDivider,
+  show_help_link: gIsShowHelpLink,
+  show_command_info: gIsShowCommandInfo,
+  true_anonymous: gTrueAnonymous,
+  add_number_emoji_to_choice: gIsShowNumberInChoice,
+  add_number_emoji_to_choice_btn: gIsShowNumberInChoiceBtn,
+  delete_data_on_poll_delete: gIsDeleteDataOnRequest,
+  app_allow_dm: gAppAllowDM,
+  display_poller_name: gDisplayPollerName,
+  enable_poll_edit: gEnablePollEdit,
+  enable_poll_edit_keep_votes: gEnablePollEditKeepVotes,
+  enable_rich_text_input: gIsRichTextInput,
+  enable_poll_edit_max_mins: gEnablePollEditMaxMins,
+});
 
 // SSOT for "is /poll edit allowed?" — server flag is the default, team override
 // (if set) wins. Used by the menu builder, CLI subcommand, modal opener, and
@@ -194,18 +225,35 @@ function isEditKeepVotes(teamConfig) {
 //
 // droppedCount counts old positions that had voters but didn't match
 // anywhere in the new options (effectively lost from the user POV).
+// Canonicalize a stored mrkdwn string through the current converter pair so
+// strings written under OLDER normalization rules (pre-2026-06 link escaping,
+// single-marker multi-line styles) compare equal to freshly-submitted text.
+// Falls back to the raw string if the converters reject the input.
+function canonMrkdwn(s) {
+  try {
+    return richTextToMrkdwn(mrkdwnToRichText(String(s ?? '')));
+  } catch (e) {
+    return String(s ?? '');
+  }
+}
+
 function rebuildVoteMap(oldOptions, newOptions, oldPoll, keepVotesOnRename) {
   oldOptions = oldOptions || [];
   newOptions = newOptions || [];
   oldPoll = oldPoll || {};
   const newPoll = {};
   const matchedOldIdx = new Set();
+  // Compare on canonical form: legacy options stored under older mrkdwn
+  // normalization must still exact-match their unchanged re-submission, or
+  // votes would be silently treated as "reworded" and dropped.
+  const oldCanon = oldOptions.map(canonMrkdwn);
+  const newCanon = newOptions.map(canonMrkdwn);
 
   // Pass 1: exact text match.
   for (let i = 0; i < newOptions.length; i++) {
     for (let j = 0; j < oldOptions.length; j++) {
       if (matchedOldIdx.has(j)) continue;
-      if (oldOptions[j] === newOptions[i]) {
+      if (oldCanon[j] === newCanon[i]) {
         newPoll[String(i)] = (oldPoll[String(j)] || []).slice();
         matchedOldIdx.add(j);
         break;
@@ -322,6 +370,17 @@ const prettyJson = format.printf(info => {
   return `${info.timestamp} ${info.level}: ${info.message}`
 })
 
+// Logger-level normaliser: object payloads render as JSON (instead of
+// '[object Object]') and Error objects keep their stack on EVERY transport -
+// including the file transports, which carry no format of their own.
+const stringifyObjects = format((info) => {
+  if (info.message !== null && typeof info.message === 'object') {
+    try { info.message = JSON.stringify(info.message, null, 4); }
+    catch (e) { info.message = String(info.message); }
+  }
+  return info;
+});
+
 const appTransportsArray = [
   new transports.Console({
     level: gLogLevelApp,
@@ -354,43 +413,52 @@ if (gLogToFile) {
   const gLogDir = path.normalize(config.get('log_dir').toString());
   // Create the log directory if it does not exist
   if (!fs.existsSync(gLogDir)) {
-    fs.mkdirSync(gLogDir);
+    fs.mkdirSync(gLogDir, { recursive: true });
   }
-  const logTS = moment().format('YYYY-MM-DD');
-  const filenameLogApp = path.join(gLogDir, logTS+'_app.log');
-  const filenameLogBolt = path.join(gLogDir, logTS+'_bolt.log');
 
-  // Sync access check — must be sync because the result has to be known
-  // BEFORE we construct the winston loggers below (transports.File is
-  // pushed into the arrays winston reads at construction time).
-  // ENOENT is treated as writable: winston will create the file on first
-  // write, assuming the directory is writable (we created it above).
-  const _isLogFileWritable = (filename) => {
+  // Sync directory writability check — must be sync because the result has
+  // to be known BEFORE we construct the winston loggers below. The rotating
+  // transport stamps its own dated filenames at rollover, so only the
+  // directory can be pre-checked.
+  const _isLogDirWritable = (dir) => {
     try {
-      fs.accessSync(filename, fs.constants.W_OK);
+      fs.accessSync(dir, fs.constants.W_OK);
       return true;
     } catch (err) {
-      if (err.code === 'ENOENT') return true;
-      console.error(`Log file '${filename}' is not writable, SKIP LOG TO FILE!`, err.message);
+      console.error(`Log dir '${dir}' is not writable, SKIP LOG TO FILE!`, err.message);
       return false;
     }
   };
 
-  if (_isLogFileWritable(filenameLogApp)) {
-    appTransportsArray.push(new transports.File({ filename: filenameLogApp }));
-  }
-  if (_isLogFileWritable(filenameLogBolt)) {
-    boltTransportsArray.push(new transports.File({ filename: filenameLogBolt }));
+  if (_isLogDirWritable(gLogDir)) {
+    // Daily rotation with retention (config key log_max_files, default 30d).
+    // Filenames keep the historical YYYY-MM-DD_app.log shape, but the date
+    // now re-stamps at midnight instead of freezing at boot time, and old
+    // files are pruned instead of accumulating forever.
+    appTransportsArray.push(new transports.DailyRotateFile({
+      dirname: gLogDir,
+      filename: '%DATE%_app.log',
+      datePattern: 'YYYY-MM-DD',
+      maxFiles: gLogMaxFiles,
+    }));
+    boltTransportsArray.push(new transports.DailyRotateFile({
+      dirname: gLogDir,
+      filename: '%DATE%_bolt.log',
+      datePattern: 'YYYY-MM-DD',
+      maxFiles: gLogMaxFiles,
+    }));
   }
 }
 
 const logger = createLogger({
   level: gLogLevelAppFile,
   format: format.combine(
+      format.errors({ stack: true }),
+      stringifyObjects(),
       format.timestamp({
         format: 'YYYY-MM-DD HH:mm:ss'
       }),
-      format.printf(info => `${info.timestamp} ${info.level}[App]: ${info.message}`)
+      format.printf(info => `${info.timestamp} ${info.level}[App]: ${info.message}${info.stack ? `\n${info.stack}` : ''}`)
   ),
   transports: appTransportsArray
 });
@@ -398,10 +466,12 @@ const logger = createLogger({
 const loggerBolt = createLogger({
   level: gLogLevelBoltFile,
   format: format.combine(
+      format.errors({ stack: true }),
+      stringifyObjects(),
       format.timestamp({
         format: 'YYYY-MM-DD HH:mm:ss'
       }),
-      format.printf(info => `${info.timestamp} ${info.level}[Bolt]: ${info.message}`)
+      format.printf(info => `${info.timestamp} ${info.level}[Bolt]: ${info.message}${info.stack ? `\n${info.stack}` : ''}`)
   ),
   transports: boltTransportsArray
 });
@@ -427,7 +497,6 @@ try {
   mClient.close();
   logger.error(e)
   logger.error(e.toString()+"\n"+e.stack);
-  console.log(e);
   process.exit();
 }
 
@@ -454,9 +523,66 @@ logger.info('Init cron jobs...');
 function calculateNextScheduleTime(cronString, timeZoneString) {
   return parseNextRun(cronString, timeZoneString);
 }
+
+// Best-effort scheduler DM to the poll owner. Centralised so every terminal
+// schedule state (disabled, failed, done) notifies through one path.
+async function notifyScheduleOwner(botToken, ownerId, allowDM, text) {
+  if (text == null || text === '' || ownerId == null || botToken == null || !allowDM) return;
+  try {
+    await postChat("", 'post', { token: botToken, channel: ownerId, text: text });
+  } catch (e) {
+    logger.error("Can not send DM, you might not enable Bot Messages Tab in Slack App!");
+  }
+}
+
+// Poll ids with a close currently in flight - stops an overlapping tick (or
+// the startup run) from launching closePollById twice for the same poll.
+const closeInFlight = new Set();
+
+// Renders one row for `/poll schedule list*` - skips absent fields instead
+// of printing literal 'undefined'/'null' for fresh schedules.
+const formatScheduleListItem = (item, myTz, includeOwner) => {
+  let s = "```";
+  s += `Poll ID: ${item.poll_id}\n`;
+  if (includeOwner) s += `Owner: ${item.created_user_id}\n`;
+  s += `Next Run: ` + localizeTimeStamp(myTz, item.next_ts) + `\n`;
+  if (item.cron_string) {
+    const cronHumanRaw = humanizeCron(item.cron_string);
+    s += `Cron Expression: ${item.cron_string} (${cronHumanRaw ? cronHumanRaw + ", " : ""}${item.tz ?? 'UTC'} Time Zone)\n`;
+  }
+  s += `Enable: ${item.is_enable}\n`;
+  if (item.poll_ch) s += `Override CH: ${item.poll_ch}\n`;
+  if (item.pollData?.cmd) s += `CMD : ${item.pollData.cmd}\n`;
+  s += `Run Counter : ${item.run_counter ?? 0}/${item.run_max ?? gScheduleMaxRun}\n`;
+  if (item.last_error_text) {
+    s += `Last Error : ${item.last_error_text}\n`;
+    if (item.last_error_ts) s += `Last Error TS : ` + localizeTimeStamp(myTz, item.last_error_ts) + `\n`;
+  }
+  s += "```\n";
+  return s;
+};
+
 const checkAndExecuteTasks = async () => {
   const currentDateTime = new Date();
   try {
+    // Reconcile stranded claims: a crash between the claim (is_done:true)
+    // and the re-arm/disable would otherwise leave a row no query ever
+    // touches again. Anything still claimed 15+ minutes after its run
+    // started was interrupted - disable it so cleanup, delete_done and the
+    // schedule list regain visibility.
+    const strandedRes = await scheduleCol.updateMany(
+        {
+          is_done: true,
+          is_enable: true,
+          last_run_ts: { $lt: new Date(currentDateTime.getTime() - 15 * 60 * 1000) },
+          next_ts: { $lte: currentDateTime },
+        },
+        { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: 'Stranded by an interrupted run (process restart mid-task). Re-create the schedule if still needed.' } }
+    );
+    if (strandedRes?.modifiedCount > 0) {
+      logger.warn(`[Schedule] Disabled ${strandedRes.modifiedCount} stranded schedule row(s) (claimed but never re-armed).`);
+    }
+
     const pendingTasks = await scheduleCol.find({
       next_ts: { $lte: currentDateTime },
       is_enable: true,
@@ -464,7 +590,23 @@ const checkAndExecuteTasks = async () => {
     }).toArray();
 
     for (const task of pendingTasks) {
+      // Blast shield: no single task - via any code path - may abort the tick
+      // for the other teams' schedules. (Indentation of the pre-existing body
+      // is left untouched to keep the diff reviewable.)
+      try {
       logger.debug(`[Schedule] processing poll_id: ${task.poll_id}.`);
+
+      // Claim this run atomically BEFORE any I/O so an overlapping tick (or a
+      // second process) can never double-post the same schedule row.
+      const claimed = await scheduleCol.findOneAndUpdate(
+          { _id: task._id, is_done: false },
+          { $set: { is_done: true, last_run_ts: new Date() } }
+      );
+      if (!claimed) {
+        logger.verbose(`[Schedule] poll_id: ${task.poll_id} already claimed by another tick - skipping.`);
+        continue;
+      }
+
       let calObjId = null;
       let pollData = null;
       let pollCh = null;
@@ -477,9 +619,21 @@ const checkAndExecuteTasks = async () => {
       }
       catch (e) { }
 
+      if (!pollData) {
+        // Source poll deleted: disable instead of zombie-firing every period.
+        logger.verbose(`[Schedule] poll_id: ${task.poll_id}: source poll no longer exists. Disabling schedule.`);
+        await scheduleCol.updateOne(
+            { _id: task._id },
+            { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: 'Source poll deleted' } }
+        );
+        continue;
+      }
+
       let isPollValid = true;
       let mBotToken = null;
       let mTaskOwner = null;
+      let postOk = false;
+      let lastFailReason = null;
 
       let appLang= gAppLang;
       let isAppAllowDM = gAppAllowDM;
@@ -489,19 +643,29 @@ const checkAndExecuteTasks = async () => {
         if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
       }
 
+      if(task.hasOwnProperty('created_user_id')) mTaskOwner = task.created_user_id;
+
+      // User DM preference is needed by every terminal branch below, so it is
+      // resolved up front (it used to be fetched only after the posting block).
+      let isUserAllowDM = isAppAllowDM;
+      if(pollData?.team !== null && mTaskOwner !== null) {
+        let uConfig = await getUserConfig(pollData?.team??null,mTaskOwner??null);
+        if(uConfig?.config?.hasOwnProperty('user_allow_dm')) {
+          isUserAllowDM = uConfig.config.user_allow_dm;
+        }
+      }
+
+      // Owner-facing "this schedule was turned off" notice (i18n).
+      const disabledNoti = (reason) => parameterizedString(stri18n(appLang, 'task_scheduled_disabled_noti'), { poll_id: task.poll_id, reason: reason ?? '' });
+
       let taskRunCounter = 1;
       let taskRunMax = gScheduleMaxRun;
       if(task.hasOwnProperty('run_counter')) taskRunCounter = task.run_counter + 1;
       if(task.hasOwnProperty('run_max')) taskRunMax = Math.min(task.run_max,gScheduleMaxRun);
-      let cmdNote = `Run: ${taskRunCounter} of ${taskRunMax}`;
+      let cmdNote = parameterizedString(stri18n(appLang, 'task_run_counter_note'), { current: taskRunCounter, max: taskRunMax });
 
-      if(task.hasOwnProperty('created_user_id')) mTaskOwner = task.created_user_id;
-
-      if (!pollData) {
-        isPollValid = false;
-      }
-      else
-      {
+      { // pollData is guaranteed non-null here (checked above); block kept so
+        // the body's existing closing brace stays balanced.
         // Perform poll info checking
         let errMsg = "";
         if(pollData.hasOwnProperty('team') && pollData.hasOwnProperty('channel')) {
@@ -537,10 +701,10 @@ const checkAndExecuteTasks = async () => {
               { _id: task._id },
               { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: errMsg} }
           );
+          // Tell the owner the schedule is dead instead of disabling silently
+          // (no-op when the bot token could not be resolved).
+          await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, disabledNoti(errMsg));
           continue;
-          // Delete the invalid task from scheduleCol
-          //await scheduleCol.deleteOne({ _id: task._id });
-          //continue; // Skip this task and move to the next one
         }
 
 
@@ -560,9 +724,16 @@ const checkAndExecuteTasks = async () => {
 
           if (null === pollView || null === blocks) {
             errMsg = `[Schedule] Failed to create poll ch:${pollData.channel} ID:${task.poll_id} CMD:${pollData.cmd}`;
-            dmOwnerString = errMsg;
             logger.warn(errMsg);
-            return;
+            // Disable + notify + move on - a single bad poll must never abort
+            // the whole scheduler tick (this used to `return`, starving every
+            // other team's schedules forever).
+            await scheduleCol.updateOne(
+                { _id: task._id },
+                { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: errMsg } }
+            );
+            await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, disabledNoti(errMsg));
+            continue;
           }
 
           let mRequestBody = {
@@ -574,24 +745,26 @@ const checkAndExecuteTasks = async () => {
           const postRes = await postChat("",'post',mRequestBody);
           let localizeTS = await getAndlocalizeTimeStamp(mBotToken,mTaskOwner,task.next_ts);
           if(postRes.status === false) {
-            dmOwnerString = parameterizedString(stri18n(gAppLang,'task_scheduled_post_noti_error'), {error:postRes.message,poll_id:task.poll_id,poll_cmd:pollData.cmd,ts:localizeTS,note:`\n${cmdNote}`} )
+            dmOwnerString = parameterizedString(stri18n(appLang,'task_scheduled_post_noti_error'), {error:postRes.message,poll_id:task.poll_id,poll_cmd:pollData.cmd,ts:localizeTS,note:`\n${cmdNote}`} )
 
-            if(task.hasOwnProperty('next_error_disable_poll'))  {
-              if(task.next_error_disable_poll === true) {
-                await scheduleCol.updateOne(
-                    { _id: task._id },
-                    { $set: { is_enable: false } }
-                );
-                continue;
-              }
+            if(task.next_error_disable_poll === true) {
+              // Second consecutive failure: this strike kills the schedule -
+              // notify the owner (it used to disable silently).
+              await scheduleCol.updateOne(
+                  { _id: task._id },
+                  { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: postRes?.message } }
+              );
+              await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, dmOwnerString + "\n" + disabledNoti(postRes?.message));
+              continue;
             }
 
             await scheduleCol.updateOne(
                 { _id: task._id },
                 { $set: { last_error_ts: new Date(), last_error_text: postRes?.message, next_error_disable_poll: true } }
             );
-            //continue;
+            lastFailReason = postRes?.message ?? '';
           } else {
+            postOk = true;
             //update slack_ts
             await pollCol.updateOne(
                 { _id: new ObjectId(pollID)},
@@ -599,7 +772,7 @@ const checkAndExecuteTasks = async () => {
             );
             if(taskRunCounter>=taskRunMax) {
               //last one
-              dmOwnerString = parameterizedString(stri18n(gAppLang,'task_scheduled_post_noti_done'), {info:"",poll_id:task.poll_id,poll_cmd:pollData.cmd,ts:localizeTS,note:`\n${cmdNote}`} );
+              dmOwnerString = parameterizedString(stri18n(appLang,'task_scheduled_post_noti_done'), {info:"",poll_id:task.poll_id,poll_cmd:pollData.cmd,ts:localizeTS,note:`\n${cmdNote}`} );
             } else {
               //Dont spam user!
               //dmOwnerString = parameterizedString(stri18n(gAppLang,'task_scheduled_post_noti'), {poll_id:task.poll_id,poll_cmd:pollData.cmd,ts:localizeTS,note:`\n${cmdNote}`} )
@@ -617,65 +790,68 @@ const checkAndExecuteTasks = async () => {
         } catch (e) {
           errMsg = `[Schedule] Executing task for poll_id: ${task.poll_id} to CH:${pollCh} FAILED!`;
           dmOwnerString = errMsg;
-          logger.verbose(errMsg);
-          logger.verbose(e);
-          logger.error(e.toString()+"\n"+e.stack);
-          console.log(e);
-        }
-      }
-      //get user config
-      let isUserAllowDM = isAppAllowDM;
-      if(pollData?.team !== null && mTaskOwner !== null) {
-        let uConfig = await getUserConfig(pollData?.team??null,mTaskOwner??null);
-        if(uConfig?.config?.hasOwnProperty('user_allow_dm')) {
-          isUserAllowDM = uConfig.config.user_allow_dm;
-        }
-      }
-
-
-      try {
-        if(dmOwnerString !== null && mTaskOwner!==null) {
-
-          if (isUserAllowDM) {
-            let mRequestBody = {
-              token: mBotToken,
-              channel: mTaskOwner,
-              text: dmOwnerString,
-            };
-            await postChat("", 'post', mRequestBody);
+          logger.error(`${errMsg} ${e.toString()}\n${e.stack}`);
+          // Thrown failures get the same two-strike bookkeeping as postRes
+          // failures - they used to be invisible to the disable mechanism.
+          if (task.next_error_disable_poll === true) {
+            await scheduleCol.updateOne(
+                { _id: task._id },
+                { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: e.message } }
+            ).catch(() => {});
+            await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, disabledNoti(e.message));
+            continue;
           }
+          await scheduleCol.updateOne(
+              { _id: task._id },
+              { $set: { last_error_ts: new Date(), last_error_text: e.message, next_error_disable_poll: true } }
+          ).catch(() => {});
+          lastFailReason = e.message;
         }
-      } catch (e) {
-        logger.error("Can not send DM, you might not enable Bot Messages Tab in Slack App!");
       }
+      await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, dmOwnerString);
       dmOwnerString=null;
 
 
 
 
       let taskIsEnable = true;
-      if(taskRunCounter>=taskRunMax) taskIsEnable = false;
+      if(postOk && taskRunCounter>=taskRunMax) taskIsEnable = false;
 
-      // Update is_done to true
+      // A failed ONE-SHOT has no cron re-arm path: disable it instead of
+      // leaving an enabled-but-done zombie that autoCleanupTask, delete_done
+      // and the schedule list all mis-handle. Failed CRON runs stay enabled -
+      // the cron block below re-arms them for the next occurrence.
+      const oneShotFailed = !postOk && !task.cron_string;
+      if (oneShotFailed) {
+        dmOwnerString = disabledNoti(lastFailReason ?? '');
+      }
+
+      // Run accounting (is_done was already claimed up front). Only successful
+      // posts consume the run_max budget - a failed run keeps its counter so
+      // transient errors cannot eat scheduled occurrences.
       await scheduleCol.updateOne(
           { _id: task._id },
-          { $set: { is_done: true, last_run_ts: new Date(), run_counter: taskRunCounter,run_max: taskRunMax, is_enable: taskIsEnable  } }
+          { $set: postOk
+              ? { is_done: true, last_run_ts: new Date(), run_counter: taskRunCounter, run_max: taskRunMax, is_enable: taskIsEnable }
+              : { is_done: true, last_run_ts: new Date(), run_max: taskRunMax, ...(oneShotFailed ? { is_enable: false } : {}) } }
       );
 
 
       if (task.cron_string && taskIsEnable) {
-        // Calculate the next schedule time
-        const nextScheduleTime = calculateNextScheduleTime(task.cron_string,null);
+        // Calculate the next schedule time. Evaluated in the creator's Slack
+        // timezone when the row has one (new rows store it at create time);
+        // legacy rows without tz keep the historical UTC behaviour.
+        const nextScheduleTime = calculateNextScheduleTime(task.cron_string, task.tz ?? null);
 
         if (!nextScheduleTime) {
-          dmOwnerString = `[Schedule] Error parsing cron_string for poll_id ${task.poll_id} and cron_string ${task.cron_string}`;
-
-          console.error(dmOwnerString);
-          // Set cron_string to null when it's invalid
+          const cronErr = `cron_string '${task.cron_string}' is invalid`;
+          logger.error(`[Schedule] Error parsing cron_string for poll_id ${task.poll_id} and cron_string ${task.cron_string}`);
           await scheduleCol.updateOne(
               { _id: task._id },
-              { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: `cron_string '${task.cron_string}' is invalid` } }
+              { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: cronErr } }
           );
+          // The owner used to get NO notification on this terminal disable.
+          await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, disabledNoti(cronErr));
           continue; // Skip this task and move to the next one
         }
 
@@ -735,22 +911,22 @@ const checkAndExecuteTasks = async () => {
 
       }//end cron_string
 
-      try {
-        if(dmOwnerString !== null && mTaskOwner!==null) {
-          if (isUserAllowDM) {
-            let mRequestBody = {
-              token: mBotToken,
-              channel: mTaskOwner,
-              text: dmOwnerString,
-            };
-            await postChat("", 'post', mRequestBody);
-          }
-        }
-      } catch (e) {
-        logger.error("Can not send DM, you might not enable Bot Messages Tab in Slack App!");
-      }
+      await notifyScheduleOwner(mBotToken, mTaskOwner, isUserAllowDM, dmOwnerString);
       dmOwnerString=null;
 
+      } catch (e) {
+        // Blast-shield catch: log with the task identity and move on to the
+        // next team's schedule - never abort the whole tick. The run was
+        // already claimed (is_done:true), so without a terminal write the
+        // row would silently strand forever (never re-armed, never cleaned).
+        // Disabling - rather than re-arming - avoids re-posting a poll that
+        // may already have gone out before the throw.
+        logger.error(`[Schedule] task ${task._id} (poll_id: ${task.poll_id}) failed unexpectedly: ${e.message}\n${e.stack}`);
+        await scheduleCol.updateOne(
+            { _id: task._id },
+            { $set: { is_enable: false, last_error_ts: new Date(), last_error_text: e.message } }
+        ).catch(() => {});
+      }
     }
   } catch (e) {
     logger.error(e);
@@ -764,13 +940,24 @@ const checkAndExecuteTasks = async () => {
     }).toArray();
 
     for (const poll of closingTasks) {
+      const pollIdStr = String(poll._id);
+      if (closeInFlight.has(pollIdStr)) {
+        logger.verbose(`[closingTasks] close already in flight for poll_id: ${poll._id} - skipping.`);
+        continue;
+      }
+      closeInFlight.add(pollIdStr);
       logger.debug(`[closingTasks] closing poll_id: ${poll._id}.`);
-      closePollById(poll._id);
+      try {
+        await closePollById(poll._id);
+      } catch (e) {
+        logger.error(`[closingTasks] close failed for poll_id ${poll._id}: ${e.message}\n${e.stack}`);
+      } finally {
+        closeInFlight.delete(pollIdStr);
+      }
     }
 
   } catch (e) {
     logger.error(e);
-    console.log(e);
   }
 
 };
@@ -853,6 +1040,26 @@ const boltLoggerAdapter = {
   setName: () => {} // This can be a no-op if you don't need to implement it
 };
 
+// Fail fast on unconfigured Slack credentials. With empty strings the app
+// boots "cleanly" and then every interaction dies as dispatch_failed - which
+// is miserable to diagnose. Mirrors the fail-fast Mongo connect handling.
+{
+  const missingCreds = [];
+  if (!signing_secret) missingCreds.push('signing_secret');
+  if (!config.get('client_id')) missingCreds.push('client_id');
+  if (!config.get('client_secret')) missingCreds.push('client_secret');
+  if (missingCreds.length > 0) {
+    console.error(`[Config] Missing required Slack credential(s) in config/default.json: ${missingCreds.join(', ')}. ` +
+        `Fill them in (see self_host.md / README "Server configuration") and restart.`);
+    process.exit(1);
+  }
+  for (const k of ['oauth_success', 'oauth_failure']) {
+    if (String(config.get(k)).includes('yoururlhere')) {
+      console.warn(`[Config] ${k} still contains the placeholder URL - OAuth install redirects will not work until you set it.`);
+    }
+  }
+}
+
 const receiver = new ExpressReceiver({
   signingSecret: signing_secret,
   logger: boltLoggerAdapter,
@@ -876,7 +1083,7 @@ const receiver = new ExpressReceiver({
       },
       failure: (error, installOptions , req, res) => {
         res.redirect(config.get('oauth_failure'));
-        logger.debug(res);
+        logger.error(`OAuth install failed: ${error?.stack || error}`);
       },
     },
   },
@@ -959,6 +1166,26 @@ receiver.router.get('/ping', (req, res) => {
   res.status(200).send('pong');
 })
 
+// Real health endpoint for uptime monitors: verifies Mongo responds (the
+// Slack handlers swallow DB errors, so a dead Mongo leaves /ping green
+// while every poll silently fails). 200 = healthy, 503 = Mongo unreachable.
+receiver.router.get('/healthz', async (req, res) => {
+  try {
+    await Promise.race([
+      mClient.db(config.get('mongo_db_name')).command({ ping: 1 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('mongo ping timeout')), 2000)),
+    ]);
+    res.status(200).json({
+      ok: true,
+      mongo: 'up',
+      version: require('./package.json').version,
+      uptime_s: Math.floor(process.uptime()),
+    });
+  } catch (e) {
+    res.status(503).json({ ok: false, mongo: 'down' });
+  }
+})
+
 const app = new App({
   receiver: receiver
 });
@@ -974,6 +1201,9 @@ const sendMessageUsingUrl = async (url,newMessage) => {
 const postChat = async (url,type,requestBody) => {
   let ret = {status:false,message : "N/A",slack_response:null, slack_ts:null };
   const addChNotFoundErr = "(Bot might not in this channel)";
+  // Captured before the response_url branch deletes requestBody.channel, so
+  // the catch below can correlate errors to a channel.
+  const logCh = requestBody?.channel ?? '(response_url)';
   try {
     if(isUseResponseUrl && url!==undefined && url!=="")
     {
@@ -1039,35 +1269,34 @@ const postChat = async (url,type,requestBody) => {
         e && e.data && e.data && e.data.error
         && 'channel_not_found' === e.data.error
     ) {
-      logger.error('Channel not found error : ignored');
+      logger.error(`Channel not found error : ignored (CH:${logCh})`);
       ret.message = "Channel not found error : ignored"+` ${addChNotFoundErr}`;
     }
     else if (
         e && e.data && e.data && e.data.error
         && 'team_not_found' === e.data.error
     ) {
-      logger.error('Team not found error : ignored');
+      logger.error(`Team not found error : ignored (CH:${logCh})`);
       ret.message = "Team not found error : ignored"+` ${addChNotFoundErr}`;
     }
     else if (
         e && e.data && e.data && e.data.error
         && 'team_access_not_granted' === e.data.error
     ) {
-      logger.error('Team not found/not granted error : ignored');
+      logger.error(`Team not found/not granted error : ignored (CH:${logCh})`);
       ret.message = "Team not found/not grante error : ignored"+` ${addChNotFoundErr}`;
     }
     else if (
         e && e.data && e.data && e.data.error
         && 'message_not_found' === e.data.error
     ) {
-      logger.error('message_not_found error : ignored');
+      logger.error(`message_not_found error : ignored (CH:${logCh})`);
       ret.message = "message_not_found error : ignored"+` ${addChNotFoundErr}`;
     } else {
-      logger.error(e);
-      console.log(e);
-      console.log(requestBody);
       logger.error(e.toString()+"\n"+e.stack);
-      console.trace();
+      // Redact the bot token before logging - the Web API path keeps it in
+      // requestBody, and tokens must never land in log files.
+      logger.error(`postChat failed, requestBody: ${JSON.stringify({ ...requestBody, ...(requestBody?.token ? { token: '<redacted>' } : {}) })}`);
       ret.message = "Unknown error: "+e?.data?.error;
     }
     ret.status = false;
@@ -1129,6 +1358,36 @@ function createHelpBlock(appLang) {
       },
     },
     {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "Edit poll",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "Click Menu and select Edit at your poll, or:\n```/"+slackCommand+" edit [POLL_ID]```\nOnly the creator can edit a poll (within the configured edit window).",
+      },
+    },
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "Export poll results (CSV)",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "Click Menu and select Export at your poll, or:\n```/"+slackCommand+" export [POLL_ID]```\nOnly the creator can export. Exports respect the poll's anonymity settings.",
+      },
+    },
+    {
       type: "divider",
     },
     {
@@ -1154,9 +1413,11 @@ function createHelpBlock(appLang) {
             "`limit x` - Limit the maximum number of choices each user can vote for to `x` choices.\n" +
             "`hidden` - Vote results will be hidden until revealed.\n" +
             "`add-choice` - Allow other members to add more choices to this poll.\n" +
+            "`lang XX` - Set this poll's language (`" + Object.keys(langList).join('`/`') + "`).\n" +
             "`on TIME_STAMP` - Schedule a poll to be posted on TIME_STAMP.\n" +
             "`end TIME_STAMP` - Schedule a poll to be closed on TIME_STAMP.\n" +
-            "   - TIME_STAMP in ISO8601 format eg. `YYYY-MM-DDTHH:mm:ss.sssZ`",
+            "   - TIME_STAMP in ISO8601 format eg. `YYYY-MM-DDTHH:mm:ss.sssZ` (no offset = your Slack timezone).\n" +
+            "*Options must come BEFORE the question.*",
       },
     },
     {
@@ -1324,7 +1585,7 @@ function createHelpBlock(appLang) {
             "- `TS` = Time stamp of first run (ISO8601 format `YYYY-MM-DDTHH:mm:ss.sssZ`, eg. `2023-11-17T21:54:00+07:00`).\n" +
             "- `CH_ID` = (Optional) Channel ID to post the poll, set to `-` to post to orginal channel that poll was created (eg. `A0123456`).\n" +
             "  - To get channel ID: go to your channel, Click down arrow next to channel name, channel ID will be at the very bottom.\n" +
-            "- `CRON_EXP` = (Optional) Do not set to run once, or put [cron expression] in UTC Timezone (with \"Double Quote\") here (eg. `\"30 12 15 * *\"` , Post poll 12:30 PM on the 15th day of every month in UTC).\n" +
+            "- `CRON_EXP` = (Optional) Do not set to run once, or put [cron expression] (with \"Double Quote\") here (eg. `\"30 12 15 * *\"` , Post poll 12:30 PM on the 15th day of every month). New schedules run in YOUR Slack timezone; schedules created before mid-2026 keep running in UTC.\n" +
             "- `MAX_RUN` = (Optional) Do not set to run maximum time that server allows (`"+gScheduleMaxRun+"` times), After Run Counter greater than this number; schedule will disable itself.\n" +
             "\n" +
             "NOTE: If a cron expression results in having more than 1 job within `"+gScheduleLimitHr+"` hours, the Poll will post once, and then the job will get disabled.\n" +
@@ -1339,6 +1600,15 @@ function createHelpBlock(appLang) {
             "```/"+slackCommand+" schedule create 0123456789abcdef01234567 2023-11-18T08:00:00+07:00```\n" +
             "```/"+slackCommand+" schedule create 0123456789abcdef01234567 2023-11-15T10:30:00+07:00 - \"30 12 15 * *\" 12```\n" +
             "```/"+slackCommand+" schedule create 0123456789abcdef01234567 2023-11-15T10:30:00+07:00 C0000000000 \"30 12 15 * *\" 12```"
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Manage schedules*\n" +
+            "```/"+slackCommand+" schedule list```\n" +
+            "```/"+slackCommand+" schedule delete [POLL_ID]```",
       },
     },
 
@@ -1358,6 +1628,13 @@ function createHelpBlock(appLang) {
       text: {
         type: "mrkdwn",
         text: "```\n/" + slackCommand + " config```",
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "Per-user settings (e.g. allow the bot to DM you):\n```\n/" + slackCommand + " user_config```",
       },
     },
     {
@@ -1382,7 +1659,7 @@ function createHelpBlock(appLang) {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "*Limitations*\nSlack have limitations and that include \"message length\". So you can't have more than 15 options per poll. You can create multiple polls if you want more options",
+        text: "*Limitations*\nSlack have limitations and that include \"message length\". So you can't have more than "+gSlackLimitChoices+" options per poll. You can create multiple polls if you want more options",
       },
     },
     {
@@ -1475,8 +1752,6 @@ app.event('app_home_opened', async ({ event, client, context }) => {
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in app_home_opened :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -1517,7 +1792,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
     }
     const fullCmd = `/${slackCommand} ${cmdBody}`
 
-    const isHelp = cmdBody ? 'help' === cmdBody : false;
+    const isHelp = cmdBody ? (cmdBody.toLowerCase() === 'help' || cmdBody.toLowerCase().startsWith('help ')) : false;
     const channel = (command && command.channel_id) ? command.channel_id : null;
     const userId = (command && command.user_id) ? command.user_id : null;
 
@@ -1584,11 +1859,14 @@ async function processCommand(ack, body, client, command, context, say, respond)
 
       while (fetchArgs) {
         fetchArgs = false;
-        if (cmdBody.startsWith('anonymous')) {
+        // Flag keywords match case-insensitively (mobile keyboards
+        // auto-capitalise); the original-cased cmdBody is what gets consumed.
+        const cmdLower = cmdBody.toLowerCase();
+        if (cmdLower.startsWith('anonymous')) {
           fetchArgs = true;
           isAnonymous = true;
           cmdBody = cmdBody.substring(9).trim();
-        } else if (cmdBody.startsWith('schedule')) {
+        } else if (cmdLower.startsWith('schedule')) {
           cmdBody = cmdBody.substring(8).trim();
 
           let isEndOfCmd = false;
@@ -1597,6 +1875,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           let schCH = null;
           let schMAXRUN = gScheduleMaxRun;
           let schCron = null;
+          let schUserTz = null;
           let schTs = new Date(schTsText);
           let cmdMode = "";
           let ignoreOwnerCheck = false;
@@ -1818,8 +2097,6 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 } else {
                   //ignore it!
                   logger.debug(`Error on client.conversations.info (CH:${chToCheck}) :` + e.message);
-                  console.log(e);
-                  console.trace();
                 }
               }
 
@@ -1848,8 +2125,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 cmdBody = cmdBody.substring(inputPara.length + 2).trim();
                 if (cmdBody === "") isEndOfCmd = true;
 
-                //test cron
-                const nextScheduleTime = calculateNextScheduleTime(inputPara, null);
+                //test cron - evaluated in the creator's Slack timezone so the
+                //recurrence matches their local wall-clock (legacy rows
+                //without tz keep UTC; see checkAndExecuteTasks).
+                if (schUserTz === null) schUserTz = await getUserTz(context.botToken, userId);
+                const nextScheduleTime = calculateNextScheduleTime(inputPara, schUserTz);
 
                 if (!nextScheduleTime) {
                   logger.debug(`Command reject: Cron Expression is invalid [${inputPara}] `)
@@ -1897,7 +2177,10 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 }
               }
 
-              schTs = new Date(schTsText);
+              // No-offset timestamps are interpreted in the creator's Slack
+              // timezone (same rule as on/end in the plain create path).
+              if (schUserTz === null) schUserTz = await getUserTz(context.botToken, userId);
+              schTs = parseISOInUserTz(schTsText, schUserTz);
 
               if(schCron===null) schMAXRUN = 1;
 
@@ -1912,6 +2195,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 is_enable: true,
                 poll_ch: schCH,
                 cron_string: schCron,
+                tz: schUserTz,
               };
 
               // Insert the data into scheduleCol
@@ -2053,20 +2337,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              const cronHumanRaw = humanizeCron(item?.cron_string);
-              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
-              resString += "```";
-              resString += `Poll ID: ${item.poll_id}\n`;
-              resString += `Next Run: ` + localizeTimeStamp(myTz, item.next_ts) + `\n`;
-              resString += `Cron Expression: ${item.cron_string} (${cronHumanText}UTC Time Zone)\n`;
-              resString += `Enable: ${item.is_enable}\n`;
-              resString += `Override CH: ${item.poll_ch}\n`;
-              //resString+=`Question : ${item.pollData?.question}\n`;
-              resString += `CMD : ${item.pollData?.cmd}\n`;
-              resString += `Run Counter : ${item.run_counter}/${item.run_max ?? gScheduleMaxRun}\n`;
-              resString += `Last Error : ${item.last_error_text}\n`;
-              resString += `Last Error TS : ` + localizeTimeStamp(myTz, item.last_error_ts) + `\n`;
-              resString += "```\n";
+              resString += formatScheduleListItem(item, myTz, false);
               foundCount++;
             }
 
@@ -2119,21 +2390,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
             let resString = "";
             let foundCount = 0;
             for (const item of queryRes) {
-              const cronHumanRaw = humanizeCron(item?.cron_string);
-              const cronHumanText = cronHumanRaw ? cronHumanRaw + ", " : "";
-              resString += "```";
-              resString += `Poll ID: ${item.poll_id}\n`;
-              resString += `Owner: ${item.created_user_id}\n`;
-              resString += `Next Run: ` + localizeTimeStamp(myTz, item.next_ts) + `\n`;
-              resString += `Cron Expression: ${item.cron_string} (${cronHumanText}UTC Time Zone)\n`;
-              resString += `Enable: ${item.is_enable}\n`;
-              resString += `Override CH: ${item.poll_ch}\n`;
-              //resString+=`Question : ${item.pollData?.question}\n`;
-              resString += `CMD : ${item.pollData?.cmd}\n`;
-              resString += `Run Counter : ${item.run_counter}/${item.run_max ?? gScheduleMaxRun}\n`;
-              resString += `Last Error : ${item.last_error_text}\n`;
-              resString += `Last Error TS : ` + localizeTimeStamp(myTz, item.last_error_ts) + `\n`;
-              resString += "```\n";
+              resString += formatScheduleListItem(item, myTz, true);
               foundCount++;
             }
 
@@ -2165,7 +2422,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           return;
 
 
-        } else if (cmdBody === 'edit' || cmdBody.startsWith('edit ')) {
+        } else if (cmdLower === 'edit' || cmdLower.startsWith('edit ')) {
           // /poll edit POLL_ID "new question" "opt1" "opt2" ...
           // Edits a posted poll's question/options in place. Owner-only.
           // Votes are re-applied to options whose text is unchanged; votes
@@ -2351,7 +2608,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           await postChat(body.response_url, 'ephemeral', mRequestBody);
           return;
 
-        } else if (cmdBody === 'export' || cmdBody.startsWith('export ')) {
+        } else if (cmdLower === 'export' || cmdLower.startsWith('export ')) {
           // /poll export POLL_ID — owner-only CSV export. Both the menu
           // action and this CLI form go through buildPollCsv + sendCsvExport.
           cmdBody = cmdBody.substring(6).trim();
@@ -2399,48 +2656,88 @@ async function processCommand(ack, body, client, command, context, say, respond)
           await sendCsvExport(channel, userId, context, client, exportPollData, exportVoteData, userLang, body.response_url);
           return;
 
-        } else if (cmdBody.startsWith('test')) {
-          //test functiom
+        } else if (cmdLower === 'test' || cmdLower.startsWith('test ')) {
+          //test function (debug) - installer only, replies ephemerally.
+          //NEVER log the Bolt context here: it contains the bot token.
           try {
-            logger.debug(context);
             cmdBody = cmdBody.substring(4).trim();
-            let teamId = getTeamOrEnterpriseId(context);
+            const teamId = getTeamOrEnterpriseId(context);
             logger.debug("TeamID:" + teamId);
 
-            // const userInfo = await app.client.users.info({
-            //   token: context.botToken,
-            //   user: userId
-            // });
-            //
+            let testConfigUser = null;
+            const testTeam = await getTeamInfo(teamId);
+            if (testTeam?.user?.id) testConfigUser = testTeam.user.id;
+            if (userId !== testConfigUser) {
+              await postChat(body.response_url, 'ephemeral', {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: stri18n(userLang, 'err_only_installer'),
+              });
+              return;
+            }
+
             const testDate = new Date();
             const testDateStr = testDate.toString();
             let mRequestBody = {
               token: context.botToken,
-              channel: cmdBody,
-              //blocks: blocks,
-              text: `UserID ${userId} Date ${testDateStr}}\n` +
-                  //`Your time zone is: ${userInfo?.user?.tz} (${userInfo?.user?.tz_label}, Offset: ${userInfo?.user?.tz_offset} seconds)\n`+
+              channel: channel,
+              user: userId,
+              text: `UserID ${userId} Date ${testDateStr}\n` +
                   (await getAndlocalizeTimeStamp(context.botToken, userId, testDate))
               ,
             };
-            //logger.debug(mRequestBody);
-            await postChat(body.response_url, 'post', mRequestBody);
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
             return;
           } catch (e) {
             logger.debug("Error: Failed to get user timezone");
             logger.debug(e.toString() + "\n" + e.stack);
+            return;
           }
 
-
-        } else if (cmdBody.startsWith('limit')) {
+        } else if (cmdLower.startsWith('limit')) {
           fetchArgs = true;
           cmdBody = cmdBody.substring(5).trim();
           isLimited = true;
-          if (!isNaN(parseInt(cmdBody.charAt(0)))) {
-            limit = parseInt(cmdBody.substring(0, cmdBody.indexOf(' ')));
-            cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
+          const limitToken = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
+          if (/^\d+$/.test(limitToken)) {
+            limit = parseInt(limitToken, 10);
+            cmdBody = cmdBody.substring(limitToken.length).trim();
+            if (limit < 1) {
+              // 'limit 0' would create a poll nobody can vote on - reject.
+              await postChat(body.response_url, 'ephemeral', {
+                token: context.botToken,
+                channel: channel,
+                user: userId,
+                text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_para_invalid'), {
+                  parameter: "limit",
+                  value: String(limit),
+                  error_msg: "limit must be 1 or more"
+                })
+              });
+              return;
+            }
+          } else if (limitToken !== "" && !limitToken.startsWith(standardQuote)
+              && !['anonymous', 'hidden', 'add-choice', 'lang', 'on', 'end'].includes(limitToken.toLowerCase())) {
+            // Non-numeric value used to be silently swallowed (limit fell
+            // back to 1 without telling the user). A known FLAG word after a
+            // bare `limit` is legal though - createCmdFromInfos historically
+            // emitted `limit hidden ...` / `limit lang xx ...` and those
+            // stored cmd strings must keep re-running (limit defaults to 1,
+            // the next loop iteration consumes the flag).
+            await postChat(body.response_url, 'ephemeral', {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_para_invalid'), {
+                parameter: "limit",
+                value: limitToken,
+                error_msg: "expected a number of 1 or more"
+              })
+            });
+            return;
           }
-        } else if (cmdBody.startsWith('on')) {
+        } else if (cmdLower.startsWith('on')) {
           fetchArgs = true;
           reqBotInCh = true;
           cmdBody = cmdBody.substring(2).trim();
@@ -2460,7 +2757,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           }
 
           cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
-        } else if (cmdBody.startsWith('end')) {
+        } else if (cmdLower.startsWith('end')) {
           fetchArgs = true;
           reqBotInCh = true;
           forceNotUsingResponseURL = true;
@@ -2482,24 +2779,36 @@ async function processCommand(ack, body, client, command, context, say, respond)
 
           cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
         }
-        else if (cmdBody.startsWith('lang')) {
+        else if (cmdLower.startsWith('lang')) {
           fetchArgs = true;
           cmdBody = cmdBody.substring(4).trim();
-          let inputLang = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+          const inputLang = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
           if (langList.hasOwnProperty(inputLang)) {
             userLang = inputLang;
+            cmdBody = cmdBody.substring(inputLang.length).trim();
+          } else {
+            // Unknown code: reject with the valid codes instead of silently
+            // falling back to the default language.
+            await postChat(body.response_url, 'ephemeral', {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_lang_invalid'), {
+                value: inputLang,
+                langs: Object.keys(langList).join('/')
+              })
+            });
+            return;
           }
-
-          cmdBody = cmdBody.substring(cmdBody.indexOf(' ')).trim();
-        } else if (cmdBody.startsWith('hidden')) {
+        } else if (cmdLower.startsWith('hidden')) {
           fetchArgs = true;
           cmdBody = cmdBody.substring(6).trim();
           isHidden = true;
-        } else if (cmdBody.startsWith('add-choice')) {
+        } else if (cmdLower.startsWith('add-choice')) {
           fetchArgs = true;
           cmdBody = cmdBody.substring(10).trim();
           isAllowUserAddChoice = true;
-        } else if (cmdBody.startsWith('config')) {
+        } else if (cmdLower.startsWith('config')) {
           await respond(`/${slackCommand} ${command.text}`);
           fetchArgs = true;
           cmdBody = cmdBody.substring(6).trim();
@@ -2525,14 +2834,13 @@ async function processCommand(ack, body, client, command, context, say, respond)
           });
           //validWritePara += `\n${helpEmail}\n<${helpLink}|`+stri18n(userLang,'info_need_help')+`>`;
           //let teamOrEntId = getTeamOrEnterpriseId(context);
-          let team = await orgCol.findOne(
-              {
-                $or: [
-                  {'team.id': teamOrEntId},
-                  {'enterprise.id': teamOrEntId},
-                ]
-              }
-          );
+          const teamFilter = {
+            $or: [
+              {'team.id': teamOrEntId},
+              {'enterprise.id': teamOrEntId},
+            ]
+          };
+          let team = await orgCol.findOne(teamFilter);
           let validConfigUser = "";
           if (team) {
             if (team.hasOwnProperty("user"))
@@ -2563,19 +2871,21 @@ async function processCommand(ack, body, client, command, context, say, respond)
             return;
           }
 
-          if (cmdBody.startsWith("read")) {
+          if (cmdBody.startsWith("read") || cmdBody.startsWith("list")) {
 
-
-            let configTxt = "Config: not found";
-            if (team) {
-              if (team.hasOwnProperty("openPollConfig")) {
-                configTxt = "Override found:\n```" + JSON.stringify(team.openPollConfig) + "```";
-
-              } else {
-                configTxt = "No override: using server setting";
-              }
+            // Render every known key with its EFFECTIVE value and source so
+            // an installer can see resolved settings without reading code.
+            const overrides = team?.openPollConfig ?? {};
+            const defaults = serverDefaultsForConfig();
+            const lines = [];
+            for (const key of Object.keys(defaults)) {
+              const hasOverride = Object.prototype.hasOwnProperty.call(overrides, key);
+              const effective = hasOverride ? overrides[key] : defaults[key];
+              lines.push(`${hasOverride ? '*' : ' '} ${key} = ${effective}${hasOverride ? '  (team override)' : ''}`);
             }
-
+            const configTxt = "Effective config for this team (`*` = team override, others = server default):\n```" +
+                lines.join('\n') + "```\n" +
+                `Change: \`/${slackCommand} config write [key] [value]\` - Revert: \`/${slackCommand} config reset [key|all]\``;
 
             let mRequestBody = {
               token: context.botToken,
@@ -2586,10 +2896,34 @@ async function processCommand(ack, body, client, command, context, say, respond)
             };
             await postChat(body.response_url, 'ephemeral', mRequestBody);
             return;
+          } else if (cmdBody.startsWith("reset")) {
+            cmdBody = cmdBody.substring(5).trim();
+            const resetKey = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
+            const resettableKeys = [...validTeamOverrideConfigTF, ...validTeamOverrideConfigInt, 'app_lang', 'display_poller_name'];
+            let resetTxt;
+            if (resetKey === 'all') {
+              await orgCol.updateOne(teamFilter, { $unset: { openPollConfig: "" } });
+              resetTxt = `All team overrides removed - every setting now follows the server default.`;
+            } else if (resettableKeys.includes(resetKey)) {
+              await orgCol.updateOne(teamFilter, { $unset: { [`openPollConfig.${resetKey}`]: "" } });
+              resetTxt = `[${resetKey}] override removed - effective value is now [${serverDefaultsForConfig()[resetKey]}] (server default).`;
+            } else {
+              resetTxt = `Usage:\n/${slackCommand} config reset [key]\n/${slackCommand} config reset all`;
+            }
+            let mRequestBody = {
+              token: context.botToken,
+              channel: channel,
+              user: userId,
+              text: resetTxt,
+            };
+            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            return;
           } else if (cmdBody.startsWith("write")) {
             cmdBody = cmdBody.substring(5).trim();
 
-            let inputPara = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+            // Whole remainder counts as the key when no value follows, so the
+            // error can name what the user actually typed (was '[]' before).
+            let inputPara = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
             let isWriteValid = false;
 
             if (validTeamOverrideConfigTF.includes(inputPara)) {
@@ -2622,11 +2956,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
                   return;
                 }
               } else if (inputPara === "display_poller_name") {
+                // Only tag/none are implemented in the render switch -
+                // name/real_name used to be accepted and silently ignored.
                 switch (inputVal) {
                   case "tag":
                   case "none":
-                  case "name":
-                  case "real_name":
                     break;
                   default:
                     let mRequestBody = {
@@ -2634,7 +2968,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
                       channel: channel,
                       user: userId,
                       //blocks: blocks,
-                      text: `Usage: display_poller_name [tag/none/name/real_name]`,
+                      text: `Usage: display_poller_name [tag/none]`,
                     };
                     await postChat(body.response_url, 'ephemeral', mRequestBody);
                     return;
@@ -2655,11 +2989,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 inputVal = parsed;
               }
               else {
-                if (cmdBody.startsWith("true")) {
-                  inputVal = true;
-                } else if (cmdBody.startsWith("false")) {
-                  inputVal = false;
-                } else {
+                // Strict whole-token boolean (true/yes/1, false/no/0, any
+                // case). 'True' used to be rejected while 'truefoo' was
+                // silently accepted as true.
+                const parsedBool = parseBooleanToken(cmdBody);
+                if (parsedBool === undefined) {
                   let mRequestBody = {
                     token: context.botToken,
                     channel: channel,
@@ -2670,21 +3004,15 @@ async function processCommand(ack, body, client, command, context, say, respond)
                   await postChat(body.response_url, 'ephemeral', mRequestBody);
                   return;
                 }
+                inputVal = parsedBool;
               }
-              if (!team.hasOwnProperty("openPollConfig")) team.openPollConfig = {};
-              team.openPollConfig.isset = true;
-              team.openPollConfig[inputPara] = inputVal;
-              //logger.info(team);
               try {
-                //await orgCol.replaceOne({'team.id': getTeamOrEnterpriseId(body)}, team);
-                await orgCol.replaceOne(
-                    {
-                      $or: [
-                        {'team.id': teamOrEntId},
-                        {'enterprise.id': teamOrEntId},
-                      ]
-                    }
-                    , team);
+                // Field-scoped atomic $set: a whole-document replaceOne here
+                // could clobber a concurrent OAuth re-install of this team.
+                await orgCol.updateOne(
+                    teamFilter,
+                    { $set: { 'openPollConfig.isset': true, ['openPollConfig.' + inputPara]: inputVal } }
+                );
               } catch (e) {
                 logger.error(e);
                 let mRequestBody = {
@@ -2729,6 +3057,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
               user: userId,
               //blocks: blocks,
               text: `Usage:\n/${slackCommand} config read` +
+                  `\n/${slackCommand} config reset [key/all]` +
                   `\n${validWritePara}`
               ,
             };
@@ -2736,7 +3065,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
             return;
           }
 
-        } else if (cmdBody.startsWith('user_config')) {
+        } else if (cmdLower.startsWith('user_config')) {
           await respond(`/${slackCommand} ${command.text}`);
           fetchArgs = false;
           cmdBody = cmdBody.substring(11).trim();
@@ -2762,16 +3091,19 @@ async function processCommand(ack, body, client, command, context, say, respond)
             if (cmdBody.startsWith('true')) {
               configTxt = "Reset user_config to default stage.";
 
-              uConfig.flag = {
-                reset_ts: new Date()
-              };
               try {
-                await userCol.replaceOne({
+                // Atomic: stamp the reset flag and drop the config overrides
+                // without replacing the whole document (a replaceOne raced
+                // against the welcome-flag writer).
+                await userCol.updateOne({
                       team_id: teamOrEntId,
                       user_id: userId,
                     },
-                    uConfig
-                    , {
+                    {
+                      $set: { flag: { reset_ts: new Date() } },
+                      $unset: { config: "" },
+                    },
+                    {
                       upsert: true,
                     }
                 );
@@ -2815,7 +3147,9 @@ async function processCommand(ack, body, client, command, context, say, respond)
           } else if (cmdBody.startsWith("write")) {
             cmdBody = cmdBody.substring(5).trim();
 
-            let inputPara = (cmdBody.substring(0, cmdBody.indexOf(' ')));
+            // Whole remainder counts as the key when no value follows (the
+            // error used to render as '[]').
+            let inputPara = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
             let isWriteValid = false;
 
             if (validUserOverrideConfigTF.includes(inputPara)) {
@@ -2826,11 +3160,9 @@ async function processCommand(ack, body, client, command, context, say, respond)
             if (isWriteValid) {
               let inputVal = cmdBody.trim();
 
-              if (cmdBody.startsWith("true")) {
-                inputVal = true;
-              } else if (cmdBody.startsWith("false")) {
-                inputVal = false;
-              } else {
+              // Strict whole-token boolean - same vocabulary as team config.
+              const parsedBool = parseBooleanToken(cmdBody);
+              if (parsedBool === undefined) {
                 let mRequestBody = {
                   token: context.botToken,
                   channel: channel,
@@ -2841,22 +3173,17 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 await postChat(body.response_url, 'ephemeral', mRequestBody);
                 return;
               }
+              inputVal = parsedBool;
 
-              if (!uConfig.hasOwnProperty("config")) uConfig.config = {};
-
-              uConfig.config.isset = true;
-              uConfig.config[inputPara] = inputVal;
-              //logger.info(team);
               try {
-                //await orgCol.replaceOne({'team.id': getTeamOrEnterpriseId(body)}, team);
-                await userCol.replaceOne(
+                // Field-scoped atomic $set - a whole-document replaceOne here
+                // could clobber the concurrently-written welcome flag.
+                await userCol.updateOne(
                     {
                       team_id: teamOrEntId,
                       user_id: userId,
-                    }
-                    ,
-                    uConfig
-                    ,
+                    },
+                    { $set: { 'config.isset': true, ['config.' + inputPara]: inputVal } },
                     {
                       upsert: true,
                     });
@@ -2904,7 +3231,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
                 //blocks: blocks,
                 text: `Usage:\n/${slackCommand} user_config read` +
                     `${validWritePara}` +
-                    `\n/${slackCommand} user_config reset`,
+                    `\n/${slackCommand} user_config reset true`,
               };
               await postChat(body.response_url, 'ephemeral', mRequestBody);
               return;
@@ -2943,6 +3270,28 @@ async function processCommand(ack, body, client, command, context, say, respond)
             }
           }
         }
+
+        // Anything left after removing the quoted segments is unparsed text.
+        // A known flag word there means the user put options AFTER the
+        // question - reject loudly instead of silently ignoring them (a
+        // dropped `anonymous` is a privacy problem). 'on'/'end' are excluded:
+        // too common as plain English words to flag safely.
+        const residue = cmdBody.replace(regexp, ' ');
+        const misplacedFlagWords = ['anonymous', 'hidden', 'limit', 'add-choice', 'lang'];
+        const misplacedFlag = residue.split(/\s+/).find(w => misplacedFlagWords.includes(w.toLowerCase()));
+        if (misplacedFlag !== undefined) {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_flag_after_question'), {
+              flag: misplacedFlag,
+              slack_command: slackCommand
+            })
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
       } catch (e) {
         let mRequestBody = {
           token: context.botToken,
@@ -2968,14 +3317,59 @@ async function processCommand(ack, body, client, command, context, say, respond)
           await postChat(body.response_url, 'ephemeral', mRequestBody);
         } catch (e) {
           //not able to dm user
-          console.log(e);
+          logger.warn(`Not able to DM user: ${e.message}`);
         }
         return;
       }
 
+      // Times typed without a UTC offset are interpreted in the user's Slack
+      // timezone (legacy behavior was server-local time). Fetched once.
+      let cmdUserTz = null;
+      if (endDateTime !== null || postDateTime !== null) {
+        cmdUserTz = await getUserTz(context.botToken, userId);
+      }
+
       let endTs = null;
       if(endDateTime !== null) {
-        endTs = new Date(endDateTime);
+        endTs = parseISOInUserTz(endDateTime, cmdUserTz);
+        if (endTs <= new Date()) {
+          // A past auto-close time would post the poll and instantly close it
+          // within the next cron minute (the modal already rejects this).
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_close_before_post')
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
+      }
+
+      let postTsParsed = null;
+      if (postDateTime !== null) {
+        postTsParsed = parseISOInUserTz(postDateTime, cmdUserTz);
+        if (postTsParsed <= new Date()) {
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_time_in_past'), { value: postDateTime })
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
+        if (endTs !== null && postTsParsed >= endTs) {
+          // 'on' must come before 'end'.
+          let mRequestBody = {
+            token: context.botToken,
+            channel: channel,
+            user: userId,
+            text: "```" + fullCmd + "```\n" + stri18n(userLang, 'err_close_before_post')
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
       }
 
       if(reqBotInCh) {
@@ -2999,8 +3393,6 @@ async function processCommand(ack, body, client, command, context, say, respond)
           } else {
             //ignore it!
             logger.debug(`Error on client.conversations.info (CH:${channel}) :` + e.message);
-            console.log(e);
-            console.trace();
           }
         }
       }
@@ -3009,12 +3401,36 @@ async function processCommand(ack, body, client, command, context, say, respond)
       const blocks = pollView?.blocks;
       const pollID = pollView?.poll_id;
       if (null === pollView || null === blocks) {
+        // Branch the most common beginner mistakes into specific, actionable
+        // errors instead of the generic err_invalid_command.
+        let failText;
+        if (question === null && options.length === 0) {
+          failText = parameterizedString(stri18n(userLang, 'err_question_not_quoted'), {slack_command: slackCommand});
+        } else if (options.length === 0) {
+          failText = parameterizedString(stri18n(userLang, 'err_no_choices'), {slack_command: slackCommand});
+        } else {
+          failText = stri18n(userLang, 'err_invalid_command');
+        }
         let mRequestBody = {
           token: context.botToken,
           channel: channel,
           user: userId,
           //blocks: blocks,
-          text: `\`${fullCmd}\`\n` + stri18n(userLang, 'err_invalid_command')
+          text: `\`${fullCmd}\`\n` + failText
+        };
+        await postChat(body.response_url, 'ephemeral', mRequestBody);
+        return;
+      }
+
+      if (blocks.length > 50) {
+        // Slack hard-rejects chat messages with more than 50 blocks - reject
+        // with advice instead of a cryptic post failure (verbose team configs
+        // can hit this within the configured choice cap).
+        let mRequestBody = {
+          token: context.botToken,
+          channel: channel,
+          user: userId,
+          text: "```" + fullCmd + "```\n" + parameterizedString(stri18n(userLang, 'err_too_many_blocks'), { count: blocks.length }),
         };
         await postChat(body.response_url, 'ephemeral', mRequestBody);
         return;
@@ -3031,7 +3447,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
         if (postRes.status === false) {
           try {
             logger.debug("Block count:" + blocks?.length);
-            console.log(postRes);
+            logger.debug(postRes);
             let mRequestBody = {
               token: context.botToken,
               channel: channel,
@@ -3041,7 +3457,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
             await postChat(body.response_url, 'ephemeral', mRequestBody);
           } catch (e) {
             //not able to dm user
-            console.log(e);
+            logger.warn(`Not able to DM user: ${e.message}`);
           }
         } else {
           //update slack_ts
@@ -3052,7 +3468,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
         }
       } else {
         try {
-          const schTs = new Date(postDateTime);
+          const schTs = postTsParsed ?? new Date(postDateTime);
 
           // The poll record we just created is a TEMPLATE (a recipe for the
           // future post), not a posted poll. Clear schedule_end_active so the
@@ -3108,8 +3524,6 @@ async function processCommand(ack, body, client, command, context, say, respond)
 
           logger.error(`[Schedule] New simple task create from CMD (PollID:${pollID}) ERROR`);
           logger.error(e.toString() + "\n" + e.stack);
-          console.log(e);
-          console.trace();
           let mRequestBody = {
             token: context.botToken,
             channel: channel,
@@ -3125,8 +3539,16 @@ async function processCommand(ack, body, client, command, context, say, respond)
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in /command processing :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
+    // Best-effort user feedback - the command was acked, so without this the
+    // user sees nothing at all when e.g. Mongo blips mid-command.
+    try {
+      await postChat(body?.response_url, 'ephemeral', {
+        token: context?.botToken,
+        channel: body?.channel_id,
+        user: body?.user_id,
+        text: stri18n(gAppLang, 'err_process_command'),
+      });
+    } catch (e2) { /* nothing more we can do */ }
   }
 }
 
@@ -3293,6 +3715,11 @@ async function applyPollEdit({ pollData, newQuestion, newOptions, editorUserId, 
 // a comma, quote, or newline; double internal double-quotes.
 function csvField(s) {
   s = String(s ?? '');
+  // Formula-injection hardening: spreadsheet apps execute cells that start
+  // with = + - @ (or tab/CR). Prefix a single quote so they import as text.
+  if (/^[=+\-@\t\r]/.test(s)) {
+    s = "'" + s;
+  }
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return '"' + s.replace(/"/g, '""') + '"';
   }
@@ -3441,12 +3868,17 @@ async function sendCsvExport(channel, user, context, client, pollData, voteData,
   }
 
   const csv = buildPollCsv(pollData, voteData, nameMap);
+  // A ``` inside the CSV (reachable via rich-text code blocks in question /
+  // choices) would terminate the fence and garble the whole message. Break
+  // every backtick PAIR with a zero-width space - visually identical, and
+  // no run of any length can leave three adjacent backticks standing.
+  const csvSafe = csv.replaceAll('``', '`​`');
   let payload;
-  if (csv.length > POLL_EXPORT_MAX_CHARS) {
-    payload = '```' + csv.substring(0, POLL_EXPORT_MAX_CHARS) + '\n[truncated]```\n' +
+  if (csvSafe.length > POLL_EXPORT_MAX_CHARS) {
+    payload = '```' + csvSafe.substring(0, POLL_EXPORT_MAX_CHARS) + '\n' + stri18n(userLang, 'poll_export_truncated_marker') + '```\n' +
       parameterizedString(stri18n(userLang, 'poll_export_truncated'), { max: POLL_EXPORT_MAX_CHARS });
   } else {
-    payload = '```' + csv + '```';
+    payload = '```' + csvSafe + '```';
   }
   const header = parameterizedString(stri18n(userLang, 'poll_export_header'), {
     poll_id: pollData?._id?.toString() || '',
@@ -3487,15 +3919,7 @@ async function exportPoll(body, client, context, value) {
   if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
   const userLang = value?.user_lang || appLang;
 
-  const ephemeralReject = async (msgKey) => {
-    if (!body.channel?.id) return;
-    await postChat('', 'ephemeral', {
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      text: stri18n(userLang, msgKey),
-    });
-  };
+  const ephemeralReject = makeEphemeralReject(body, context, userLang);
 
   let pollData = null;
   try {
@@ -3612,12 +4036,13 @@ const createModalBlockInputDelete = (userLang)  => {
   // cron-parser version before the minute scheduler starts firing.
   await auditSchedules({ scheduleCol, logger });
   // Schedule the task checker to run every minute
-  cron.schedule('* * * * *', checkAndExecuteTasks);
+  cron.schedule('* * * * *', checkAndExecuteTasks, { noOverlap: true });
   // Cleanup every day
   cron.schedule('0 22 * * *', autoCleanupTask);
 
-  // Start the task checker immediately
-  checkAndExecuteTasks();
+  // Start the task checker immediately (awaited so the startup run can never
+  // overlap the first cron tick).
+  await checkAndExecuteTasks();
   autoCleanupTask();
 
 })();
@@ -3658,6 +4083,47 @@ app.action('btn_add_choice', async ({ action, ack, body, client, context }) => {
 
   let blocks = body.view.blocks;
   const hash = body.view.hash;
+
+  // Same caps as edit_add_choice: stop at the configured choice limit (the
+  // submit handler would reject the extra rows anyway) and never cross
+  // Slack's 100-block view ceiling - views.update would 400 silently and
+  // the button would just appear dead.
+  const choiceRows = blocks.filter(b => b.block_id?.startsWith('choice_') && !b.block_id.endsWith('_del')).length;
+  if (choiceRows >= gSlackLimitChoices || blocks.length + 2 > SLACK_MODAL_MAX_BLOCKS) {
+    if (blocks.some(b => b.block_id === 'btn_add_choice_warn')) return; // already warned
+    if (blocks.length + 1 > SLACK_MODAL_MAX_BLOCKS) return; // even the warning wouldn't fit
+    const warnText = choiceRows >= gSlackLimitChoices
+        ? parameterizedString(stri18n(appLang, 'err_slack_limit_choices_max'), { slack_limit_choices: gSlackLimitChoices })
+        : parameterizedString(stri18n(appLang, 'modal_edit_poll_max_blocks'), { max: SLACK_MODAL_MAX_BLOCKS });
+    const warnBlocks = blocks.slice(0, blocks.length - 1).concat([{
+      type: 'context',
+      block_id: 'btn_add_choice_warn',
+      elements: [{ type: 'mrkdwn', text: warnText }],
+    }]).concat(blocks.slice(-1));
+    try {
+      await client.views.update({
+        token: context.botToken,
+        hash: hash,
+        view_id: body.view.id,
+        view: {
+          type: body.view.type,
+          private_metadata: body.view.private_metadata,
+          callback_id: 'modal_poll_submit',
+          title: body.view.title,
+          submit: body.view.submit,
+          close: body.view.close,
+          blocks: warnBlocks,
+          external_id: body.view.id,
+        },
+      });
+    } catch (e) {
+      logger.debug('btn_add_choice warn views.update failed:', e?.data?.error || e?.message || e);
+    }
+    return;
+  }
+
+  // Back under the caps: clear any stale warning from an earlier overflow.
+  blocks = blocks.filter(b => b.block_id !== 'btn_add_choice_warn');
 
   let beginBlocks = blocks.slice(0, blocks.length - 1);
   let endBlocks = blocks.slice(-1);
@@ -3727,8 +4193,11 @@ app.action('btn_del_choice', async ({ action, ack, body, client, context }) => {
 
   logger.debug("DEL:"+action.value);
 
-  // Filter out the block that has a block_id starting with action.value
+  // Filter out the block that has a block_id starting with action.value.
+  // Also clear the cap warning (if present) - deleting a row puts the modal
+  // back under the limit, so the warning would otherwise be stale forever.
   blocks = blocks.filter(block => {
+    if (block.block_id === 'btn_add_choice_warn') return false;
     if (!block.block_id || !block.block_id.startsWith(action.value)) {
       return true;
     }
@@ -3934,7 +4403,9 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           removeVote = true;
         }
 
-        if (value.limited && value.limit) {
+        // limit > 0 (not just truthy): legacy polls stored with limit 0 or
+        // negative must not brick voting or silently mean "unlimited".
+        if (value.limited && value.limit > 0) {
           let voteCount = 0;
           if (0 !== Object.keys(poll).length) {
             for (const p in poll) {
@@ -4031,8 +4502,6 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in btn_vote :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 app.action('add_choice_after_post', async ({ ack, body, action, context,client }) => {
@@ -4195,7 +4664,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
             await postChat(body.response_url, 'ephemeral', mRequestBody);
           } catch (e) {
             //not able to dm user
-            console.log(e);
+            logger.warn(`Not able to DM user: ${e.message}`);
           }
           return;
         }
@@ -4223,6 +4692,20 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
           });
         }
 
+        if (blocks.length + 1 > 50) {
+          // +1 for the re-added add-choice section below. Slack rejects
+          // messages over 50 blocks - stop cleanly instead of corrupting
+          // the post with a failed update.
+          let mRequestBody = {
+            token: context.botToken,
+            channel: body.channel.id,
+            user: body.user.id,
+            text: parameterizedString(stri18n(userLang, 'err_too_many_blocks'), { count: blocks.length + 1 }),
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
+
         let mRequestBody2 = {
           token: context.botToken,
           channel: channel,
@@ -4230,7 +4713,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
           blocks: blocks,
           text: message.text
         };
-        await postChat(body.response_url, 'update', mRequestBody2);
+        const firstUpdateRes = await postChat(body.response_url, 'update', mRequestBody2);
 
         //re-add add-choice section
         blocks.splice(newChoiceIndex + 1 + divSpace, 0, tempAddBlock);
@@ -4242,11 +4725,33 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
           blocks: blocks,
           text: message.text
         };
-        await postChat(body.response_url, 'update', mRequestBody2);
+        const secondUpdateRes = await postChat(body.response_url, 'update', mRequestBody2);
 
-        //update polldata
+        if (firstUpdateRes?.status === false && secondUpdateRes?.status !== false) {
+          // First render failed but the second (which sends the FULL final
+          // blocks) healed it - the message is correct, just log it.
+          logger.warn(`add_choice_after_post: first update failed but second healed it (CH:${channel} ts:${message.ts}): ${firstUpdateRes?.message ?? ''}`);
+        }
+        if (secondUpdateRes?.status === false) {
+          // The FINAL render failed - do NOT persist the option, or the DB
+          // and the visible poll would disagree (and a later rebuild would
+          // resurrect a choice nobody can see today).
+          logger.warn(`add_choice_after_post: message update failed (CH:${channel} ts:${message.ts}): ${firstUpdateRes?.message ?? ''} ${secondUpdateRes?.message ?? ''}`);
+          let mRequestBody = {
+            token: context.botToken,
+            channel: body.channel.id,
+            user: body.user.id,
+            attachments: [],
+            text: stri18n(userLang, 'err_add_choice_exception'),
+          };
+          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          return;
+        }
+
+        //update polldata (awaited - a dropped write would silently lose the
+        //choice from the DB while it shows on the live message)
         if (poll_id != null) {
-          pollCol.updateOne(
+          await pollCol.updateOne(
               {_id: new ObjectId(poll_id)},
               {$push: {options: value}}
           );
@@ -4271,8 +4776,6 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in add_choice_after_post :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 
 });
@@ -4284,8 +4787,6 @@ app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in open_modal_new :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -4416,21 +4917,32 @@ async function createModal(context, client, trigger_id,response_url,channel) {
       if(isUseResponseUrl) warnStr = "modal_ch_warn_with_response_url";
       blocks = blocks.concat([
         {
-          type: 'actions',
+          // Input (not actions) so submit errors can anchor to 'channel'
+          // right next to the selector; dispatch_action keeps the
+          // modal_poll_channel action firing on selection as before.
+          type: 'input',
+          dispatch_action: true,
+          // optional: Slack would otherwise hard-require a fresh selection at
+          // submit even when the channel was already captured into
+          // private_metadata; our own err_channel_missing check covers the
+          // genuinely-missing case.
+          optional: true,
           block_id: 'channel',
-          elements: [
-            {
-              type: 'conversations_select',
-              filter: {
-                include: ['private','public']
-              },
-              action_id: 'modal_poll_channel',
-              placeholder: {
-                type: 'plain_text',
-                text: stri18n(appLang,'modal_ch_select'),
-              },
+          label: {
+            type: 'plain_text',
+            text: stri18n(appLang,'modal_ch_select'),
+          },
+          element: {
+            type: 'conversations_select',
+            filter: {
+              include: ['private','public']
             },
-          ],
+            action_id: 'modal_poll_channel',
+            placeholder: {
+              type: 'plain_text',
+              text: stri18n(appLang,'modal_ch_select'),
+            },
+          },
         },
         {
           type: 'context',
@@ -4765,10 +5277,7 @@ app.action('modal_select_when', async ({ action, ack, body, client, context }) =
 
     //console.log(action);
     //console.log(body);
-    if (
-        !action
-        || !action.selected_option.value
-    ) {
+    if (!action?.selected_option?.value) {
       return;
     }
 
@@ -4919,8 +5428,6 @@ app.action('modal_select_when', async ({ action, ack, body, client, context }) =
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_select_when :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -5004,8 +5511,6 @@ app.action('modal_select_poll_end', async ({ action, ack, body, client, context 
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_select_poll_end :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -5013,10 +5518,7 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   try {
     await ack();
 
-    if (
-        !action
-        && !action.selected_channel
-    ) {
+    if (!action || (!action.selected_channel && !action.selected_conversation)) {
       return;
     }
     const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(body));
@@ -5099,8 +5601,6 @@ app.action('modal_poll_channel', async ({ action, ack, body, client, context }) 
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_poll_channel :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -5156,8 +5656,6 @@ app.action('modal_poll_options', async ({ action, ack, body, client, context }) 
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_poll_options :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -5201,11 +5699,14 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
     // (option.value) and rich_text_input (option.rich_text_value). Flag is in
     // private_metadata.is_rich_text_input but the reader doesn't need it — the
     // input element decides which field is populated.
+    const optionBlockIds = [];
     if (state.values) {
       for (const optionName in state.values) {
         const option = state.values[optionName][Object.keys(state.values[optionName])[0]];
         if ('question' === optionName) {
-          question = readInputAsMrkdwn(option);
+          // Trim to match edit_poll_submit - rich-text inputs make trailing
+          // newlines easy to produce accidentally.
+          question = (readInputAsMrkdwn(option) ?? '').trim();
         } else if ('user_lang' === optionName) {
           if (langList.hasOwnProperty(option.selected_option.value)) {
             userLang = option.selected_option.value;
@@ -5213,7 +5714,11 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
         } else if ('limit' === optionName) {
           limit = parseInt(option.value, 10);
         } else if (optionName.startsWith('choice_')) {
-          options.push(readInputAsMrkdwn(option));
+          const choiceVal = (readInputAsMrkdwn(option) ?? '').trim();
+          if (choiceVal !== '') {
+            options.push(choiceVal);
+            optionBlockIds.push(optionName);
+          }
           elementToAlert = optionName;
         } else if ('options' === optionName) {
           const checkedbox = state.values[optionName]['modal_poll_options']['selected_options'];
@@ -5258,17 +5763,38 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
     }
 
     if(privateMetadata.poll_end==="schedule" && endDateTime==null) {
+      // Anchor to poll_end_ts only when that block actually exists in the
+      // view - otherwise Slack silently drops the error and the modal looks
+      // stuck (the picker block appears asynchronously after re-select).
+      const endErrTarget = view.blocks?.some(b => b.block_id === 'poll_end_ts') ? 'poll_end_ts' : 'poll_end';
       let ackErr = {
         response_action: 'errors',
-        errors: {
-          poll_end_ts: parameterizedString(stri18n(appLang, 'task_scheduled_time_missing'),{task_scheduled_later:stri18n(appLang, 'task_scheduled_later')}),
-        },
+        errors: {},
       };
+      // The re-select hint must name the AUTO-CLOSE dropdown's option label
+      // (task_scheduled_close_at), not the Post-on one - they only happen to
+      // both read "Schedule" in English.
+      ackErr.errors[endErrTarget] = parameterizedString(stri18n(appLang, 'task_scheduled_time_missing'),{task_scheduled_later:stri18n(appLang, 'task_scheduled_close_at')});
       await ack(ackErr);
       return;
     }
 
-    if (isNaN(limit)) limit = 1;
+    // Duplicate choices would render as indistinguishable vote buttons -
+    // reject with the error anchored to the duplicated row.
+    const seenChoices = new Set();
+    for (let ci = 0; ci < options.length; ci++) {
+      if (seenChoices.has(options[ci])) {
+        let ackErr = { response_action: 'errors', errors: {} };
+        ackErr.errors[optionBlockIds[ci]] = stri18n(appLang, 'err_duplicate_choice');
+        await ack(ackErr);
+        return;
+      }
+      seenChoices.add(options[ci]);
+    }
+
+    // 0/negative limits either brick voting or silently mean "unlimited"
+    // while the header claims a limit - clamp to a sane floor.
+    if (isNaN(limit) || limit < 1) limit = 1;
     privateMetadata.user_lang = userLang;
     const isAnonymous = privateMetadata.anonymous;
     const isLimited = privateMetadata.limited;
@@ -5281,7 +5807,7 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       let ackErr = {
         response_action: 'errors',
         errors: {
-          task_when: parameterizedString(stri18n(appLang, 'err_para_missing'), {parameter: "Channel to post"}),
+          channel: stri18n(appLang, 'err_channel_missing'),
         },
       };
       await ack(ackErr);
@@ -5300,6 +5826,17 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       posttimestamp = parseInt(postDateTime, 10);
       schTs = new Date(posttimestamp * 1000); // multiply by 1000 to convert seconds to milliseconds
       isoStr = schTs.toISOString();
+
+      // Reject a past post time (60s grace for "post right now" picks) - it
+      // would fire within the next cron minute while the confirmation claims
+      // it was scheduled for the chosen past date.
+      if (schTs.getTime() < Date.now() - 60 * 1000) {
+        const whenErrTarget = view.blocks?.some(b => b.block_id === 'task_when_ts') ? 'task_when_ts' : 'task_when';
+        let ackErr = { response_action: 'errors', errors: {} };
+        ackErr.errors[whenErrTarget] = parameterizedString(stri18n(appLang, 'err_time_in_past'), { value: schTs.toISOString() });
+        await ack(ackErr);
+        return;
+      }
     }
 
     let endtimestamp = null;
@@ -5350,8 +5887,6 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
           //ignore it!
           logger.debug(`Error on client.conversations.info (CH:${channel}) :` + e.message);
           logger.debug(e.toString() + "\n" + e.stack);
-          console.log(e);
-          console.trace();
         }
       }
       //await ack();
@@ -5420,15 +5955,11 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
     if (privateMetadata.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = privateMetadata.add_number_emoji_to_choice_btn;
     else if (teamConfig.hasOwnProperty("add_number_emoji_to_choice_btn")) isShowNumberInChoiceBtn = teamConfig.add_number_emoji_to_choice_btn;
 
-    let isUserAllowDM = isAppAllowDM;
-    let uConfig = await getUserConfig(teamOrEntId,userId);
-    if(uConfig?.config?.hasOwnProperty('user_allow_dm')) {
-      isUserAllowDM = uConfig.config.user_allow_dm;
-    }
-
     let cmd_via;
     if (response_url !== undefined && response_url !== "") cmd_via = "modal_auto"
     else cmd_via = "modal_manual";
+
+    let isUserAllowDM = isAppAllowDM;
 
     if (options.length > gSlackLimitChoices) {
 
@@ -5440,6 +5971,10 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       ackErr.errors[elementToAlert] = parameterizedString(stri18n(appLang, 'err_slack_limit_choices_max'), {slack_limit_choices: gSlackLimitChoices});
       await ack(ackErr);
 
+      const uConfigReject = await getUserConfig(teamOrEntId,userId);
+      if(uConfigReject?.config?.hasOwnProperty('user_allow_dm')) {
+        isUserAllowDM = uConfigReject.config.user_allow_dm;
+      }
       if(isUserAllowDM) {
         try {
           let mRequestBody = {
@@ -5450,25 +5985,52 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
           await postChat("", 'post', mRequestBody);
         } catch (e) {
           //not able to dm user
-          console.log(e);
+          logger.warn(`Not able to DM user: ${e.message}`);
         }
       }
 
       return;
     }
 
-    const pollView = await createPollView(teamOrEntId, channel, teamConfig, question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isTrueAnonymous, isShowNumberInChoice, isShowNumberInChoiceBtn, endTs, userLang, userId, cmd, cmd_via, null, null,false,null);
-    const blocks = pollView.blocks;
-    const pollID = pollView.poll_id;
+    // All validations passed - close the modal NOW. The Mongo + Slack I/O
+    // below can exceed Slack's 3-second view_submission window; a late ack
+    // shows the user "We had some trouble connecting" while the poll WAS
+    // posted, and resubmitting then creates a duplicate.
+    await ack();
+    isAck = true;
 
-    if (null === pollView || null === blocks) {
-      let ackErr = {
-        response_action: 'errors',
-        errors: {
-        },
+    let uConfig = await getUserConfig(teamOrEntId,userId);
+    if(uConfig?.config?.hasOwnProperty('user_allow_dm')) {
+      isUserAllowDM = uConfig.config.user_allow_dm;
+    }
+
+    const pollView = await createPollView(teamOrEntId, channel, teamConfig, question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, isMenuAtTheEnd, isCompactUI, isShowDivider, isShowHelpLink, isShowCommandInfo, isTrueAnonymous, isShowNumberInChoice, isShowNumberInChoiceBtn, endTs, userLang, userId, cmd, cmd_via, null, null,false,null);
+    const blocks = pollView?.blocks;
+    const pollID = pollView?.poll_id;
+
+    if (null == pollView || null == blocks) {
+      // Post-ack: the modal is already closed, so failures report via
+      // ephemeral instead of response_action errors.
+      let mRequestBody = {
+        token: context.botToken,
+        channel: channel,
+        user: userId,
+        text: stri18n(appLang, 'err_process_command'),
       };
-      ackErr.errors[elementToAlert] = `Error while create poll: Invalid input data`;
-      await ack(ackErr);
+      await postChat(response_url, 'ephemeral', mRequestBody);
+      return;
+    }
+
+    if (blocks.length > 50) {
+      // Slack hard-rejects chat messages with more than 50 blocks. Reject
+      // with advice instead of letting the post fail with a cryptic error.
+      let mRequestBody = {
+        token: context.botToken,
+        channel: channel,
+        user: userId,
+        text: parameterizedString(stri18n(appLang, 'err_too_many_blocks'), { count: blocks.length }),
+      };
+      await postChat(response_url, 'ephemeral', mRequestBody);
       return;
     }
 
@@ -5482,28 +6044,29 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
       const postRes = await postChat((forceNotUsingResponseURL?"":response_url), 'post', mRequestBody);
       //console.log(postRes.slack_response);
       if (postRes.status === false) {
-        let ackErr = {
-          response_action: 'errors',
-          errors: {
-          },
+        const failText = parameterizedString(stri18n(appLang, 'err_poll_create_failed'), { error: postRes.message ?? '' });
+        let mRequestBody = {
+          token: context.botToken,
+          channel: channel,
+          user: userId,
+          text: failText,
         };
-        ackErr.errors[elementToAlert] = `Error while create poll:${postRes.message}`;
-        await ack(ackErr);
+        await postChat(response_url, 'ephemeral', mRequestBody);
 
         if(isUserAllowDM) {
           try {
-            let mRequestBody = {
+            // url "" forces the Web API path so this is a real DM (the old
+            // response_url variant posted into the channel instead).
+            let dmRequestBody = {
               token: context.botToken,
               channel: userId,
-              text: `Error while create poll: \`\`\`${cmd}\`\`\` \nERROR:${postRes.message}`
+              text: `\`\`\`${cmd}\`\`\`\n` + failText
             };
-            await postChat(response_url, 'post', mRequestBody);
+            await postChat("", 'post', dmRequestBody);
           } catch (e) {
             //not able to dm user
-            console.log("not able to dm user");
-            console.log(postRes);
-            console.trace();
-            console.log(e);
+            logger.warn(`Not able to DM user: ${e.message}`);
+            logger.debug(postRes);
           }
         }
 
@@ -5564,9 +6127,6 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
           run_max: 1
         });
 
-        if (!isAck) await ack();
-        isAck = true;
-
         let mRequestBody = {
           token: context.botToken,
           channel: channel,
@@ -5577,21 +6137,14 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
         const postRes = await postChat(response_url, 'ephemeral', mRequestBody);
         logger.verbose(`[Schedule] New task create from UI (PollID:${pollID})`);
       } catch (e) {
-
-        await ack({
-          response_action: 'errors',
-          errors: {
-            task_when: `[Schedule] Scheduled Error`,
-          },
-        });
-
+        // Already acked - report via ephemeral only.
         logger.error(`[Schedule] New task create from UI (PollID:${pollID}) ERROR`);
         logger.error(e);
         let mRequestBody = {
           token: context.botToken,
           channel: channel,
           user: userId,
-          text: "[Schedule] Scheduled Error"
+          text: stri18n(appLang, 'err_schedule_create_failed')
         };
         await postChat(response_url, 'ephemeral', mRequestBody);
         return;
@@ -5607,8 +6160,6 @@ app.view('modal_poll_submit', async ({ ack, body, view, context,client }) => {
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_poll_submit :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 
@@ -5616,12 +6167,10 @@ app.view('modal_delete_confirm', async ({ ack, body, view, context }) => {
   try {
     await ack();
     const privateMetadata = JSON.parse(view.private_metadata);
-    deletePollConfirm(body, context, privateMetadata);
+    await deletePollConfirm(body, context, privateMetadata);
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in modal_delete_confirm :` + e.message);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
   }
 });
 function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, isHidden, isAllowUserAddChoice, userLang, postDateTime, endisoStr) {
@@ -5630,10 +6179,9 @@ function createCmdFromInfos(question, options, isAnonymous, isLimited, limit, is
     cmd += ` anonymous`
   }
   if (isLimited) {
-    cmd += ` limit`
-  }
-  if (limit > 1) {
-    cmd += ` ${limit}`
+    // Always emit the number: a bare `limit` followed by another flag word
+    // is ambiguous to read and relies on parser fall-through.
+    cmd += ` limit ${limit > 1 ? limit : 1}`
   }
   if (isHidden) {
     cmd += ` hidden`
@@ -5873,7 +6421,7 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
       },
       accessory: {
         type: 'static_select',
-        placeholder: { type: 'plain_text', text: 'Menu' },
+        placeholder: { type: 'plain_text', text: stri18n(userLang, 'info_menu_placeholder') },
         action_id: 'static_select_menu',
         option_groups: staticSelectElements,
       },
@@ -6181,15 +6729,7 @@ async function editPollOpenModal(body, client, context, value) {
   let isRichTextInput = gIsRichTextInput;
   if (teamConfig.hasOwnProperty('enable_rich_text_input')) isRichTextInput = teamConfig.enable_rich_text_input;
 
-  const ephemeralReject = async (msgKey) => {
-    if (!body.channel?.id) return;
-    await postChat('', 'ephemeral', {
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      text: stri18n(userLang, msgKey),
-    });
-  };
+  const ephemeralReject = makeEphemeralReject(body, context, userLang);
 
   if (!isPollEditEnabled(teamConfig)) { await ephemeralReject('poll_edit_disabled'); return; }
   if (!pollData) { await ephemeralReject('poll_edit_not_found'); return; }
@@ -6456,6 +6996,9 @@ app.action('edit_del_choice', async ({ ack, action, body, client, context }) => 
 
   const blocks = body.view.blocks.filter(b => {
     if (!b.block_id) return true;
+    // Deleting a row brings the modal back under the cap, so drop the stale
+    // max-blocks warning too (same lifecycle as btn_del_choice).
+    if (b.block_id === 'edit_add_choice_warn') return false;
     return b.block_id !== targetId && b.block_id !== targetId + '_del';
   });
 
@@ -6591,25 +7134,52 @@ app.view('edit_poll_submit', async ({ ack, body, view, context }) => {
     responseUrl: pmResponseUrl,
   });
 
-  // Best-effort DM the editor with success/warning. We've already acked the
-  // view; if the DM fails the edit still went through.
+  // Result feedback. Failures go as an ephemeral in the poll's channel (not
+  // DM-gated - the editor must know the edit didn't land); the success note
+  // is a DM and honors the app_allow_dm / user_allow_dm opt-outs.
   try {
-    const teamInfo = await getTeamInfo(pollData.team);
-    const dmToken = teamInfo?.bot?.token;
-    if (dmToken) {
-      let text;
-      if (!editResult.ok) {
-        text = stri18n(userLang, 'err_invalid_command') + (editResult.error ? `: ${editResult.error}` : '');
-      } else {
-        text = parameterizedString(stri18n(userLang, 'poll_edit_success'), { poll_id: pollData._id.toString() });
+    if (!editResult.ok) {
+      // Human-readable failure only - raw internal error tokens go to the
+      // log, not to the user.
+      logger.warn('[Edit] applyPollEdit failed: ' + (editResult.error ?? 'unknown'));
+      const noticeRes = await postChat(pmResponseUrl ?? '', 'ephemeral', {
+        token: context.botToken,
+        channel: pmChannel,
+        user: body.user.id,
+        text: stri18n(userLang, 'poll_edit_failed'),
+      });
+      if (noticeRes?.status === false && pmChannel) {
+        // The expired/failed response_url may be the very reason the edit
+        // failed - retry once via the Web API with a fresh body (postChat
+        // mutates the request body on the response_url path).
+        await postChat('', 'ephemeral', {
+          token: context.botToken,
+          channel: pmChannel,
+          user: body.user.id,
+          text: stri18n(userLang, 'poll_edit_failed'),
+        });
+      }
+    } else {
+      const teamInfo = await getTeamInfo(pollData.team);
+      const dmToken = teamInfo?.bot?.token;
+      const teamConfigDm = await getTeamOverride(pollData.team);
+      let isAppAllowDM = gAppAllowDM;
+      if (teamConfigDm?.hasOwnProperty('app_allow_dm')) isAppAllowDM = teamConfigDm.app_allow_dm;
+      let isUserAllowDM = isAppAllowDM;
+      const uConfigDm = await getUserConfig(pollData.team, body.user.id);
+      if (uConfigDm?.config?.hasOwnProperty('user_allow_dm')) {
+        isUserAllowDM = uConfigDm.config.user_allow_dm;
+      }
+      if (dmToken && isUserAllowDM) {
+        let text = parameterizedString(stri18n(userLang, 'poll_edit_success'), { poll_id: pollData._id.toString() });
         if (editResult.droppedCount > 0) {
           text += "\n" + parameterizedString(stri18n(userLang, 'poll_edit_warn_votes'), { dropped_count: editResult.droppedCount });
         }
+        await postChat('', 'post', { token: dmToken, channel: body.user.id, text: text });
       }
-      await postChat('', 'post', { token: dmToken, channel: body.user.id, text: text });
     }
   } catch (e) {
-    logger.debug('[Edit] DM after view submit failed: ' + (e?.message || e));
+    logger.debug('[Edit] post-submit notification failed: ' + (e?.message || e));
   }
 });
 
@@ -6681,6 +7251,50 @@ async function supportAction(body, client, context) {
 
 }
 
+// Owner-gate / precondition rejection helper for button-click handlers.
+// Goes through the click's response_url so the reply still arrives when the
+// bot is not a member of the channel (Web API postEphemeral would fail).
+const makeEphemeralReject = (body, context, userLang) => async (msgKey) => {
+  if (!body.channel?.id && !body.response_url) return;
+  await postChat(body.response_url ?? '', 'ephemeral', {
+    token: context.botToken,
+    channel: body.channel?.id,
+    user: body.user.id,
+    text: stri18n(userLang, msgKey),
+  });
+};
+
+// Open a modal; on failure (content too large, expired trigger_id, ...) tell
+// the user via an ephemeral instead of failing silently. The poll-menu modals
+// (Command info / My votes / All user votes) funnel through here.
+async function openModalOrWarn(client, context, body, view, userLang) {
+  try {
+    await client.views.open({
+      token: context.botToken,
+      trigger_id: body.trigger_id,
+      view: view,
+    });
+  } catch (e) {
+    logger.error(`views.open failed: ${e?.data?.error || e?.message || e}`);
+    try {
+      await postChat(body.response_url, 'ephemeral', {
+        token: context.botToken,
+        channel: body.channel?.id,
+        user: body.user?.id,
+        text: stri18n(userLang ?? gAppLang, 'err_modal_open_failed'),
+      });
+    } catch (e2) {
+      logger.warn(`Not able to send modal-failure ephemeral: ${e2.message}`);
+    }
+  }
+}
+
+// Slack caps a section block's text at 3000 chars; keep a margin.
+function truncateForSection(text, max = 2900) {
+  if (typeof text !== 'string' || text.length <= max) return text;
+  return text.slice(0, max) + ' …';
+}
+
 async function commandInfo(body, client, context, value) {
   const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
   let appLang= gAppLang;
@@ -6698,8 +7312,8 @@ async function commandInfo(body, client, context, value) {
       }
     }
     createdVia = pollData.cmd_via ?? "N/A";
-    if(pollData.cmd_via_ref!=null) createdVia += `\nSource ID: ${pollData.cmd_via_ref}`
-    if(pollData.cmd_via_note!=null) createdVia += `\nNote: ${pollData.cmd_via_note}`
+    if(pollData.cmd_via_ref!=null) createdVia += "\n" + parameterizedString(stri18n(appLang, 'info_source_id_label'), {value: pollData.cmd_via_ref})
+    if(pollData.cmd_via_note!=null) createdVia += "\n" + parameterizedString(stri18n(appLang, 'info_note_label'), {value: pollData.cmd_via_note})
     if(pollData.cmd_via_ref!=null) createdVia += "\n"+parameterizedString(stri18n(appLang,'task_usage_stop_poll'),{slack_command:slackCommand, poll_id: pollData.cmd_via_ref } );
   }
   let blocks = [
@@ -6717,7 +7331,7 @@ async function commandInfo(body, client, context, value) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: pollCmd
+        text: truncateForSection(pollCmd)
       },
     },
     {
@@ -6727,7 +7341,7 @@ async function commandInfo(body, client, context, value) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: "Poll ID: "+poll_id
+        text: parameterizedString(stri18n(appLang, 'info_poll_id_label'), {value: poll_id})
       },
     },
     {
@@ -6737,34 +7351,23 @@ async function commandInfo(body, client, context, value) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: "Created via: "+createdVia
+        text: truncateForSection(parameterizedString(stri18n(appLang, 'info_created_via_label'), {value: createdVia}))
       },
     }
   ];
 
-  try {
-    const result = await client.views.open({
-      token: context.botToken,
-      trigger_id: body.trigger_id,
-      view: {
-        type: 'modal',
-        title: {
-          type: 'plain_text',
-          text: stri18n(appLang,'menu_command_info'),
-        },
-        close: {
-          type: 'plain_text',
-          text: stri18n(appLang,'btn_close'),
-        },
-        blocks: blocks,
-      }
-    });
-  }
-  catch (e) {
-    logger.error("Failed to create commandInfo")
-    logger.error(e)
-    logger.error(e.toString()+"\n"+e.stack);
-  }
+  await openModalOrWarn(client, context, body, {
+    type: 'modal',
+    title: {
+      type: 'plain_text',
+      text: stri18n(appLang,'menu_command_info'),
+    },
+    close: {
+      type: 'plain_text',
+      text: stri18n(appLang,'btn_close'),
+    },
+    blocks: blocks,
+  }, appLang);
 
   return;
 
@@ -6830,26 +7433,18 @@ async function myVotes(body, client, context) {
     votes.pop();
   }
 
-  try {
-    await client.views.open({
-      token: context.botToken,
-      trigger_id: body.trigger_id,
-      view: {
-        type: 'modal',
-        title: {
-          type: 'plain_text',
-          text: stri18n(userLang,'info_your_vote'),
-        },
-        close: {
-          type: 'plain_text',
-          text: stri18n(userLang,'info_close'),
-        },
-        blocks: votes,
-      }
-    });
-  } catch (e) {
-    logger.error(e);
-  }
+  await openModalOrWarn(client, context, body, {
+    type: 'modal',
+    title: {
+      type: 'plain_text',
+      text: stri18n(userLang,'info_your_vote'),
+    },
+    close: {
+      type: 'plain_text',
+      text: stri18n(userLang,'info_close'),
+    },
+    blocks: votes,
+  }, userLang);
 }
 
 async function usersVotes(body, client, context, value) {
@@ -6964,40 +7559,43 @@ async function usersVotes(body, client, context, value) {
           text: block.text.text,
         },
       });
+      // A context element's mrkdwn caps at 3000 chars (~190-200 voters of
+      // <@U...> mentions) - truncate with a "+N more" tail instead of
+      // letting views.open reject the whole modal.
+      let votersText = stri18n(userLang,'info_no_vote');
+      if (voters.length) {
+        votersText = '';
+        let shown = 0;
+        for (const el of voters) {
+          const mention = (shown === 0 ? '' : ', ') + `<@${el}>`;
+          if (votersText.length + mention.length > 2900) break;
+          votersText += mention;
+          shown++;
+        }
+        if (shown < voters.length) votersText += ` +${voters.length - shown}`;
+      }
       votes.push({
         type: 'context',
         elements: [{
           type: 'mrkdwn',
-          text: !voters.length
-            ? stri18n(userLang,'info_no_vote')
-            : voters.map(el => {
-                return `<@${el}>`;
-              }).join(', '),
+          text: votersText,
         }],
       });
     }
   }
 
-  try {
-    await client.views.open({
-      token: context.botToken,
-      trigger_id: body.trigger_id,
-      view: {
-        type: 'modal',
-        title: {
-          type: 'plain_text',
-          text: stri18n(userLang,'info_all_user_vote'),
-        },
-        close: {
-          type: 'plain_text',
-          text: stri18n(userLang,'info_close'),
-        },
-        blocks: votes,
-      },
-    });
-  } catch (e) {
-    logger.error(e);
-  }
+  await openModalOrWarn(client, context, body, {
+    type: 'modal',
+    title: {
+      type: 'plain_text',
+      text: stri18n(userLang,'info_all_user_vote'),
+    },
+    close: {
+      type: 'plain_text',
+      text: stri18n(userLang,'info_close'),
+    },
+    blocks: votes,
+  }, userLang);
 }
 
 async function revealOrHideVotes(body, context, value) {
@@ -7186,7 +7784,7 @@ async function revealOrHideVotes(body, context, value) {
               }
 
               const vLength = poll[val.id].length;
-              newVoters += `${poll[val.id].length} vote${vLength === 1 ? '' : 's'}`;
+              newVoters += parameterizedString(stri18n(userLang, vLength === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: vLength });
             }
           }
 
@@ -7220,16 +7818,21 @@ async function revealOrHideVotes(body, context, value) {
         },userLang,isMenuAtTheEnd);
       }
 
+      // Guard: minimal-UI team configs can render a poll with NO context
+      // block at all - findIndex then returns -1 and blocks[-1] throws,
+      // breaking the action entirely. Skip the badge refresh in that case.
       const infosIndex = blocks.findIndex(el => el.type === 'context' && el.elements)
-      blocks[infosIndex].elements = await buildInfosBlocks(
-        blocks,
-        {
-          team: message.team,
-          channel,
-          ts: message.ts,
-        },
-        userLang
-      );
+      if (infosIndex !== -1) {
+        blocks[infosIndex].elements = await buildInfosBlocks(
+          blocks,
+          {
+            team: message.team,
+            channel,
+            ts: message.ts,
+          },
+          userLang
+        );
+      }
 
       let mRequestBody = {
         token: context.botToken,
@@ -7338,7 +7941,7 @@ async function deletePoll(body, client, context, value) {
       }
     });
   } catch (error) {
-    console.error(error);
+    logger.error(`deletePoll views.open failed: ${error?.stack || error}`);
   }
 
 }
@@ -7377,24 +7980,47 @@ async function deletePollConfirm(body, context, value) {
     channel: value.channel.id,
     ts: value.message.ts,
   };
-  await postChat(value.response_url,'delete',mRequestBody);
+  const delRes = await postChat(value.response_url,'delete',mRequestBody);
+
+  if (delRes?.status === false) {
+    // The Slack message is still live - do NOT wipe the DB rows, or every
+    // button on the surviving message stops resolving. Tell the user; the
+    // failed/expired response_url may be the very thing that broke the
+    // delete, so fall back to the Web API with a fresh body if it fails too.
+    const failNoticeRes = await postChat(value.response_url, 'ephemeral', {
+      token: context.botToken,
+      channel: value.channel.id,
+      user: body.user.id,
+      text: stri18n(appLang, 'err_delete_failed'),
+    });
+    if (failNoticeRes?.status === false) {
+      await postChat('', 'ephemeral', {
+        token: context.botToken,
+        channel: value.channel.id,
+        user: body.user.id,
+        text: stri18n(appLang, 'err_delete_failed'),
+      });
+    }
+    return;
+  }
 
   if(gIsDeleteDataOnRequest) {
     if(value.hasOwnProperty('p_id')) {
-      //delete from database
-      pollCol.deleteOne(
+      //delete from database (awaited so failures surface in the caller's
+      //try/catch instead of dying as unhandled rejections)
+      await pollCol.deleteOne(
           { _id: new ObjectId(value.p_id) }
       );
-      votesCol.deleteOne(
+      await votesCol.deleteOne(
           { channel: value.channel.id, ts: value.message.ts }
       );
-      closedCol.deleteOne(
+      await closedCol.deleteOne(
           { channel: value.channel.id, ts: value.message.ts }
       );
-      hiddenCol.deleteOne(
+      await hiddenCol.deleteOne(
           { channel: value.channel.id, ts: value.message.ts }
       );
-      scheduleCol.deleteMany(
+      await scheduleCol.deleteMany(
           { poll_id: new ObjectId(value.p_id) }
       );
     }
@@ -7410,7 +8036,9 @@ async function closePollById(poll_id) {
   // Silently no-ops if we lack the bare minimum (team + user_id + bot token)
   // or if the user opted out of DMs. Never throws — DM failure must not
   // mask the underlying close failure in the logs.
-  const sendCloseFailedDM = async (reason) => {
+  // reason is an i18n KEY (+ optional vars) so the whole DM - template AND
+  // reason - renders in the poll's language, not hardcoded English.
+  const sendCloseFailedDM = async (reasonKey, reasonVars = {}) => {
     try {
       if (!pollData?.team || !pollData?.user_id) return;
       const teamInfo = await getTeamInfo(pollData.team);
@@ -7437,7 +8065,7 @@ async function closePollById(poll_id) {
       const text = parameterizedString(stri18n(userLang, 'info_schedule_close_failed'), {
         question: pollData.question || '(no question)',
         poll_id: String(pollData._id || poll_id),
-        reason: reason,
+        reason: parameterizedString(stri18n(userLang, reasonKey), reasonVars),
       });
       await postChat("", 'post', {
         token: dmToken,
@@ -7471,10 +8099,11 @@ async function closePollById(poll_id) {
             {_id: pollData._id},
             {$set: {schedule_end_active: false}}
         );
-        const humanReason = (issues === 'ts=<null/empty>')
-            ? "Nobody voted or clicked any button on the poll before its scheduled close time. For polls created via the `/poll` menu (GUI), the app needs at least one interaction so it can find the message in Slack to close."
-            : `The poll record is missing required information (\`${issues}\`). This is unusual — please contact your admin.`;
-        await sendCloseFailedDM(humanReason);
+        if (issues === 'ts=<null/empty>') {
+          await sendCloseFailedDM('close_fail_reason_no_interaction');
+        } else {
+          await sendCloseFailedDM('close_fail_reason_bad_record', { issues });
+        }
         return false;
       }
 
@@ -7533,7 +8162,7 @@ async function closePollById(poll_id) {
                 {_id: pollData._id},
                 {$set: {schedule_end_active: false}}
             );
-            await sendCloseFailedDM("Couldn't access this workspace's bot token. The app may need to be reinstalled.");
+            await sendCloseFailedDM('close_fail_reason_no_token');
             return false;
           }
 
@@ -7550,7 +8179,7 @@ async function closePollById(poll_id) {
                 {_id: pollData._id},
                 {$set: {schedule_end_active: false}}
             );
-            await sendCloseFailedDM("Couldn't rebuild the poll's display. Please contact your admin if this keeps happening.");
+            await sendCloseFailedDM('close_fail_reason_render');
             return false;
           }
 
@@ -7610,7 +8239,7 @@ async function closePollById(poll_id) {
           if (postRes.status === false) {
             logger.warn("[Schedule_close] Failed to update poll data.");
             logger.warn(postRes);
-            await sendCloseFailedDM("Couldn't update the poll message in Slack — it may have been deleted, or Slack had a temporary issue.");
+            await sendCloseFailedDM('close_fail_reason_update');
             //continue;
           }
 
@@ -7618,7 +8247,7 @@ async function closePollById(poll_id) {
           logger.warn(`Cannot close poll_id ${poll_id}  `);
           logger.warn(e);
           logger.warn(e.toString() + "\n" + e.stack);
-          await sendCloseFailedDM('Something unexpected went wrong while closing the poll. Please contact your admin if this keeps happening.');
+          await sendCloseFailedDM('close_fail_reason_unexpected');
           return false;
         } finally {
           release();
@@ -7635,18 +8264,17 @@ async function closePollById(poll_id) {
           {_id: pollData._id},
           {$set: {schedule_end_active: false}}
       );
-      const humanReason = (issues === 'ts=<missing>' || issues === 'ts=<null/empty>')
-          ? "Nobody voted or clicked any button on the poll before its scheduled close time. For polls created via the `/poll` menu (GUI), the app needs at least one interaction so it can find the message in Slack to close."
-          : `The poll record is missing required information (\`${issues}\`). This is unusual — please contact your admin.`;
-      await sendCloseFailedDM(humanReason);
+      if (issues === 'ts=<missing>' || issues === 'ts=<null/empty>') {
+        await sendCloseFailedDM('close_fail_reason_no_interaction');
+      } else {
+        await sendCloseFailedDM('close_fail_reason_bad_record', { issues });
+      }
     }
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in closePollById`);
     logger.error(e);
     logger.error(e.toString() + "\n" + e.stack);
-    console.log(e);
-    console.trace();
-    await sendCloseFailedDM('Something unexpected went wrong while closing the poll. Please contact your admin if this keeps happening.');
+    await sendCloseFailedDM('close_fail_reason_unexpected');
     return false;
   }
 
@@ -7787,17 +8415,21 @@ async function closePoll(body, client, context, value) {
           },userLang,isMenuAtTheEnd);
       }
 
+      // Guard: see closePoll - a poll can legitimately have no context block
+      // under minimal-UI team configs; blocks[-1] would throw.
       const infosIndex =
         blocks.findIndex(el => el.type === 'context' && el.elements);
-      blocks[infosIndex].elements = await buildInfosBlocks(
-        blocks,
-        {
-          team: message.team,
-          channel,
-          ts: message.ts,
-        },
-        userLang
-      );
+      if (infosIndex !== -1) {
+        blocks[infosIndex].elements = await buildInfosBlocks(
+          blocks,
+          {
+            team: message.team,
+            channel,
+            ts: message.ts,
+          },
+          userLang
+        );
+      }
 
       let mRequestBody = {
         token: context.botToken,
@@ -7814,7 +8446,9 @@ async function closePoll(body, client, context, value) {
         channel: body.channel.id,
         user: body.user.id,
         attachments: [],
-        text: stri18n(userLang,'err_close_other'),
+        // Internal failure - NOT an ownership problem; err_close_other here
+        // used to gaslight the actual owner.
+        text: stri18n(userLang,'err_close_exception'),
       };
       await postChat(body.response_url,'ephemeral',mRequestBody);
     } finally {
@@ -7826,7 +8460,8 @@ async function closePoll(body, client, context, value) {
       channel: body.channel.id,
       user: body.user.id,
       attachments: [],
-      text: stri18n(userLang,'err_close_other'),
+      // Mutex acquisition failed - an internal error, not an ownership one.
+      text: stri18n(userLang,'err_close_exception'),
     };
     await postChat(body.response_url,'ephemeral',mRequestBody);
   }
@@ -7988,7 +8623,11 @@ async function buildInfosBlocks(blocks, pollInfos,userLang) {
       text: stri18n(userLang,'info_closed'),
     });
   }
-  infosBlocks.push(blocks[infosIndex].elements.pop());
+  // Carry over the trailing addon element (info_addon / poller name) when a
+  // context block exists - guarded so a missing block can't blocks[-1]-throw.
+  if (infosIndex !== -1 && blocks[infosIndex].elements.length > 0) {
+    infosBlocks.push(blocks[infosIndex].elements.pop());
+  }
   return infosBlocks;
 }
 
@@ -8101,12 +8740,8 @@ async function updateVoteBlock(team,channel,ts,blocks,poll,userLang,isHidden,isC
           }
         }
 
-        newVoters += poll[val.id].length + ' ';
-        if (poll[val.id].length === 1) {
-          newVoters += 'vote';
-        } else {
-          newVoters += 'votes';
-        }
+        const vCount = poll[val.id].length;
+        newVoters += parameterizedString(stri18n(userLang, vCount === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: vCount });
       }
 
       blocks[i].accessory.value = JSON.stringify(val);
@@ -8124,16 +8759,19 @@ async function updateVoteBlock(team,channel,ts,blocks,poll,userLang,isHidden,isC
     }
   }
 
+  // Guard: see closePoll - minimal-UI configs can render no context block.
   const infosIndex = blocks.findIndex(el => el.type === 'context' && el.elements)
-  blocks[infosIndex].elements = await buildInfosBlocks(
-      blocks,
-      {
-        team: team,
-        channel,
-        ts: ts,
-      },
-      userLang
-  );
+  if (infosIndex !== -1) {
+    blocks[infosIndex].elements = await buildInfosBlocks(
+        blocks,
+        {
+          team: team,
+          channel,
+          ts: ts,
+        },
+        userLang
+    );
+  }
   blocks[menuAtIndex].accessory.option_groups[0].options =
       await buildMenu(blocks, {
         team: team,
@@ -8144,22 +8782,40 @@ async function updateVoteBlock(team,channel,ts,blocks,poll,userLang,isHidden,isC
   return blocks;
 }
 
-async function getAndlocalizeTimeStamp(botToken, userId, mongoDateObject) {
-  //const timeFormat = 'ddd MMM DD YYYY HH:mm:ss [GMT]ZZ';
-  //const iso8601Format = 'YYYY-MM-DDTHH:mm:ssZ'; // ISO 8601 format
-  const timeFormat = gAppDatetimeFormat;
-  if (botToken == null || botToken === "" || userId == null || userId === "") return moment(mongoDateObject).format(timeFormat);
+// Parse an ISO-8601 string. When it carries no UTC offset, interpret it in
+// the user's Slack timezone (the legacy behavior - server-local time -
+// surprised users whenever the server ran in a different zone).
+function parseISOInUserTz(isoText, userTz) {
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})\s*$/i.test(isoText);
+  if (!hasOffset && userTz) {
+    const m = moment.tz(isoText, userTz);
+    if (m.isValid()) return m.toDate();
+  }
+  return new Date(isoText);
+}
+
+// Resolve a user's Slack IANA timezone via users.info; null when unavailable.
+async function getUserTz(botToken, userId) {
+  if (botToken == null || botToken === "" || userId == null || userId === "") return null;
   try {
     const userInfo = await app.client.users.info({
       token: botToken,
       user: userId
     });
-
     //`Your time zone is: ${userInfo?.user?.tz} (${userInfo?.user?.tz_label}, Offset: ${userInfo?.user?.tz_offset} seconds)`
-    return localizeTimeStamp(userInfo?.user?.tz,  mongoDateObject);
+    return userInfo?.user?.tz ?? null;
   } catch (e) {
-    return moment(mongoDateObject).format(timeFormat);
+    return null;
   }
+}
+
+async function getAndlocalizeTimeStamp(botToken, userId, mongoDateObject) {
+  //const timeFormat = 'ddd MMM DD YYYY HH:mm:ss [GMT]ZZ';
+  //const iso8601Format = 'YYYY-MM-DDTHH:mm:ssZ'; // ISO 8601 format
+  const timeFormat = gAppDatetimeFormat;
+  const tz = await getUserTz(botToken, userId);
+  if (tz == null) return moment(mongoDateObject).format(timeFormat);
+  return localizeTimeStamp(tz, mongoDateObject);
 }
 
 function localizeTimeStamp(tz,  mongoDateObject) {
