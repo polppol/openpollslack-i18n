@@ -105,16 +105,6 @@ Just type `/poll` (without any options) in the channel that you want to post!
 /poll lang th "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
 ```
 
-### Allow choices add by others
-```
-/poll add-choice "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
-```
-
-### Change poll language for current poll only
-```
-/poll lang th "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
-```
-
 ### Simple Schedule Poll
 Schedule post
 ```
@@ -126,7 +116,7 @@ Schedule post and close
 ```
 - Time stamp should be in ISO8601 format `YYYY-MM-DDTHH:mm:ss.sssZ`
 - If an end time is set, it will attempt to close the poll at that time once. If the owner re-opens it, the scheduled close will not run again.
-- **Heads-up for polls created via the `/poll` GUI menu (modal):** Auto-close only works if at least one person votes or clicks any button on the poll *before* the scheduled close time. This is a Slack API limitation — when a poll is created through the modal, Slack doesn't give us a reference to the posted message, so we rely on the first user interaction to capture it. We *could* recover the reference automatically by reading channel message history, but that would require granting the app permission to read everyone's messages in the channel — we chose not to ask for that broader access just to handle this edge case. If nobody interacts before the close time, the poll won't auto-close and you'll need to close it manually.
+- **Heads-up for polls created via the `/poll` GUI menu (modal):** Auto-close only works if at least one person votes or clicks any button on the poll *before* the scheduled close time. This is a Slack API limitation — when a poll is created through the modal, Slack doesn't give us a reference to the posted message, so we rely on the first user interaction to capture it. We *could* recover the reference automatically by reading channel message history, but that would require granting the app permission to read everyone's messages in the channel — we chose not to ask for that broader access just to handle this edge case. If nobody interacts before the close time, the poll won't auto-close and you'll need to close it manually. When a scheduled close fails, the poll owner receives a DM explaining why (unless DMs are disabled via `app_allow_dm` / `user_allow_dm`).
 
 #### Modal / GUI: post-time and auto-close
 The same scheduling shown above is also available from the `/poll` modal — no need to remember the ISO8601 syntax:
@@ -163,10 +153,10 @@ Schedule poll that create by others in your team
 - `TS` = Time stamp of first run (ISO8601 format `YYYY-MM-DDTHH:mm:ss.sssZ`, eg. `2023-11-17T21:54:00+07:00`).
 - `CH_ID` = (Optional) Channel ID to post the poll, set to `-` to post to orginal channel that poll was created (eg. `A0123456`).
   - To get channel ID: go to your channel, Click down arrow next to channel name, channel ID will be at the very bottom.
-- `CRON_EXP` = (Optional) Do not set to run once, or put [cron expression](https://github.com/polppol/openpollslack-i18n#supported-cron-expression-format) in UTC Timezone (with `"`Double Quote`"`) here (eg. `"30 12 15 * *"` , Post poll 12:30 PM on the 15th day of every month in UTC).
+- `CRON_EXP` = (Optional) Do not set to run once, or put [cron expression](https://github.com/polppol/openpollslack-i18n#supported-cron-expression-format) (with `"`Double Quote`"`) here (eg. `"30 12 15 * *"` , Post poll 12:30 PM on the 15th day of every month). New schedules are evaluated in the creator's Slack timezone; schedules created before this feature keep running in UTC.
 - `MAX_RUN` = (Optional) Do not set to run maximum time that server allows (`schedule_max_run` times), After Run Counter greater than this number; schedule will disable itself.
 - To prevent double post of first Recurring poll [TS] for first schedule should a bit after time that you put in [CRON_EXP]
-  - eg. You want poll every day 12:30AM (`"30 12 * * *"`) starting from 2024-12-12 UTC, your [TS] shoud be like `2024-12-12T12:31:00+00:00` (1 minute after)
+  - eg. You want poll every day 12:30AM in your timezone (`"30 12 * * *"`) starting from 2024-12-12, your [TS] shoud be like `2024-12-12T12:31:00` (1 minute after). A `TS` without a UTC offset is interpreted in your Slack timezone.
 
 NOTE: If a cron expression results in having more than 1 job within `schedule_limit_hrs` hours, the Poll will post once, and then the job will get disabled.
 
@@ -184,7 +174,7 @@ NOTE: If a cron expression results in having more than 1 job within `schedule_li
 
 ##### Example
 - `30 8 * * *` -> at 8:30 AM, Every day
-- `10 * * 1,3,5` -> at 10:00 AM on every Monday, Wednesday, and Friday.
+- `0 10 * * 1,3,5` -> at 10:00 AM on every Monday, Wednesday, and Friday.
 - `45 13 * * 1-5` -> at 1:45 PM on every Monday to Friday.
 - `15 9 * * 5L` -> at 9:15 AM on last Friday of every month.
 
@@ -271,6 +261,9 @@ Notes:
 - Voter / creator / editor names are looked up via Slack's `users.info` (capped at 100 lookups per export to keep latency bounded). Beyond the cap, the Real Name and Display Name columns stay blank.
 - "Real Name" is the user's full name from their Slack profile; "Display Name" is the `@handle` they go by in chat. Either may be empty depending on what each user has filled in.
 - Same export, same format, regardless of how the poll was created (CLI / modal / scheduled).
+- CSV headers and section labels are English by design (not localized), so exports parse the same way regardless of the team's UI language.
+- Values that start with `=` `+` `-` `@` (or tab/CR) are prefixed with a single quote (`'`) for spreadsheet formula-injection safety. Spreadsheet apps hide the quote; plain CSV parsers see it as part of the value — strip a leading `'` before exact-match processing.
+- Where the text contains adjacent backtick pairs, an invisible zero-width space (U+200B) is inserted between them so the in-Slack code fence survives. Strip U+200B before exact-match processing.
 
 # Override configuration 
 
@@ -289,8 +282,10 @@ Usage:
 /poll user_config read
 /poll user_config write [config_name]
 /poll user_config write user_allow_dm [true/false]
-/poll user_config reset
+/poll user_config reset true
 ```
+- `user_allow_dm` `[true/false]` — whether the bot may send you direct messages (error notices, schedule and auto-close failure notices). Overrides the team/server `app_allow_dm` setting for your account only.
+- `reset true` — deletes all your user overrides and goes back to the team/server settings (the explicit `true` is required to confirm).
 
 ## Team configuration (Override Server configuration)
 
@@ -301,6 +296,8 @@ If some of your team would like to using different config than what is on defaul
 Usage:
 ```
 /poll config read
+/poll config reset [config_name]
+/poll config reset all
 /poll config write app_lang [zh_tw/zh_cn/th/ru/kr/jp/fr/es/en/de/(or language file)]
 /poll config write app_lang_user_selectable [true/false]
 /poll config write app_allow_dm [true/false]
@@ -320,12 +317,17 @@ Usage:
 /poll config write enable_poll_edit_keep_votes [true/false]
 /poll config write enable_rich_text_input [true/false]
 ```
+- `read` (alias `list`) shows every setting with its **effective value** and whether it comes from a team override or the server default.
+- `reset [config_name]` removes one team override (the setting falls back to the server default); `reset all` removes every override.
 
 ## Self-host: Server configuration (config/default.json)
+- `port`: HTTP port the app listens on (default `5000`, can be overridden with the `PORT` environment variable) — point your reverse proxy at it
 - `command`: Slash command
 - `command2`: Slash command
 - `bot_name`: Bot name
+- `mongo_url`: MongoDB connection string (default `mongodb://localhost:27017`)
 - `mongo_db_name`: your mongo database name (Main DB)
+- `slack_limit_choices`: maximum number of choices per poll (default `15`)
 - `app_lang` for translation (Please put language file in language folder), Translate some text to Thai (th-ภาษาไทย)
 - `app_lang_user_selectable` if set to `true`; Let user who create poll (Via Modal) select language of poll UI 
 - `app_allow_dm` Allow app to send direct message to user (When error or schedule occure) 
@@ -335,12 +337,20 @@ Usage:
 - `create_via_cmd_only`  if set to `true` (available only if `use_response_url` is enabled) ; User will NOT able to create Poll using Shortcut; it will show `modal_ch_via_cmd_only` string to ask user to create poll via /command instead.
 - `menu_at_the_end` if set to `true`; Rearrange Menu to the end of poll so no more big menu button between question and answer when using smartphone
 - `add_number_emoji_to_choice` and `add_number_emoji_to_choice_btn`  if set to `true`; Number emoji (customizeable) will show in the vote option text / button
+- `help_link`: link substituted into the help footer of polls and help messages (`info_need_help` string of a language file)
+- `help_email`: contact (email or URL) substituted into the same help footer
 - `compact_ui` if set to `true`; Choice text will compact to voter name
 - `show_divider` if set to `false`; Poll will be more compact (divider between choice will be removed)
 - `show_help_link` if set to `false`; help link will be removed from poll
 - `show_command_info` if set to `false`; command that use to create poll will be removed (You still can see command in Menu)
 - `true_anonymous` if set to `true`; Poller will no longer see who voted which options if poll is anonymous, If this mode is disabled; `info_anonymous_notice` will show to let users know that poller can still see there votes
 - `delete_data_on_poll_delete` if set to `true`; When poller request to delete the poll, all data in database that refer to that poll will be deleted(schedule poll that refer to deleted poll also stop working). If you want to disable it please make sure if compliance with your policy.
+- `client_id`: Slack app Client ID, from your app's **Basic Information** page (required)
+- `client_secret`: Slack app Client Secret, from **Basic Information** (required)
+- `signing_secret`: Slack app Signing Secret, from **Basic Information** — used to verify that incoming requests really come from Slack (required)
+- `state_secret`: random string used to protect the OAuth install flow — change it from `CHANGE ME`
+- `oauth_success` / `oauth_failure`: URLs the user's browser is redirected to after a successful / failed install via `/slack/install`
+- `support_url`: if set, adds a support/donate entry to the poll menu
 - `log_level_app` Log level of app(console); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_app_file` Log level of app(file); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_bolt` Log level of Bolt(console); valid options are: `debug` `verbose` `info` `warn` `error`
@@ -350,11 +360,11 @@ Usage:
 - `schedule_limit_hrs` schedule will deny to re-run if schedule jobs is shorter than this number (hours)
 - `schedule_max_run` Maximum/Default run count for single schedule that can be set.
 - `schedule_auto_delete_invalid_day` Schedules that already finished, done, no longer valid, disabled will be automatically delete after this value(days)
-- `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` `name`(not impliment yet) `real_name`(not impliment yet)
+- `display_poller_name` How app display poller name (`<@{{user_id}}>` in `info_by` of a language file) valid options are: `tag`(default) `none` (`name` and `real_name` are not implemented)
 - `enable_poll_edit` if set to `true`(default); poll owners can edit the question and options of a posted poll via the menu **Edit the poll** action and via `/poll edit POLL_ID "..." "..."`. Set to `false` to hide the menu entry and reject the command. Can also be overridden per team via `/poll config write enable_poll_edit true/false`.
 - `enable_poll_edit_max_mins` (default `60`); how many minutes after a poll is **posted** the owner is still allowed to edit it. Set to `0` to allow editing forever. After this window the menu entry still appears but the modal/CLI rejects with a message telling the user the limit. Can also be overridden per team via `/poll config write enable_poll_edit_max_mins [number]`.
 - `enable_poll_edit_keep_votes` (default `true`); how the edit feature handles votes when an option's wording changes at the same position. With `true`, votes are kept (a typo fix doesn't reset the tally). With `false`, votes for any position whose text changed are cleared. Either way, options whose text matches across the edit (even if reordered or shifted by an inserted/removed neighbour) keep their votes via text-matching. Can also be overridden per team via `/poll config write enable_poll_edit_keep_votes [true/false]`.
-- `enable_rich_text_input` (default `false`, **experimental**); when `true`, the `/poll` create modal and the **Edit the poll** modal render Slack's native rich-text editor (`rich_text_input`) for the question and each choice instead of a plain text field. Users get an emoji picker, formatting toolbar (bold/italic/strike/code/lists/links), and inline mention rendering. Storage stays a mrkdwn string in MongoDB — old polls and CLI-created polls keep working unchanged; only the input element flips. To kill the experiment for a team, run `/poll config write enable_rich_text_input false` and re-open the modal — it falls back to `plain_text_input` immediately, no restart needed. Can also be overridden per team via `/poll config write enable_rich_text_input [true/false]`.
+- `enable_rich_text_input` (default `true`); when `true`, the `/poll` create modal and the **Edit the poll** modal render Slack's native rich-text editor (`rich_text_input`) for the question and each choice instead of a plain text field. Users get an emoji picker, formatting toolbar (bold/italic/strike/code/lists/links), and inline mention rendering. Storage stays a mrkdwn string in MongoDB — old polls and CLI-created polls keep working unchanged; only the input element flips. To turn it off for a team, run `/poll config write enable_rich_text_input false` and re-open the modal — it falls back to `plain_text_input` immediately, no restart needed. Can also be overridden per team via `/poll config write enable_rich_text_input [true/false]`. **Upgrading self-hosters note:** if the key is missing from your `config/default.json`, the self-heal described below auto-adds it as `true` on startup — set it to `false` in the config (or per team) if you want to keep the legacy plain-text inputs.
 
 ### Self-heal of missing keys
 
@@ -392,7 +402,14 @@ When the app starts and `config/default.json` is missing keys that exist in `con
 
 ## Additional Permissions
 
-`channels:read`,`groups:read`,`mpim:read` : to check if bot in selected channel (if not using `response_url`)
+The OAuth install flow (`/slack/install`) requests these bot scopes:
+
+- `commands` : slash commands (`/poll`, `/openpoll`) and the global shortcut
+- `chat:write` : post and update poll messages
+- `chat:write.public` : post in public channels without adding the bot first
+- `groups:write` : write access in private channels the bot is a member of
+- `channels:read`,`groups:read`,`mpim:read` : to check if bot in selected channel (if not using `response_url`)
+- `users:read` : to read user time zone, and to resolve real/display names for CSV export (`users.info`)
 
 
 ## License

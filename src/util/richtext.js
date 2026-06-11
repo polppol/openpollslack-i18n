@@ -35,6 +35,13 @@ function escapeForMrkdwn(text) {
 
 function styleWrap(text, style) {
   if (!style) return text;
+  // Slack mrkdwn markers don't span newlines — a styled element whose text
+  // contains \n must be wrapped per line, or the delimiters render literally.
+  if (text.includes('\n')) {
+    return text.split('\n').map((line) => styleWrap(line, style)).join('\n');
+  }
+  // Empty lines get no markers (a bare `**` / '``' would render literally).
+  if (text.length === 0) return text;
   // Code is mutually exclusive — Slack's parser doesn't apply other styles
   // inside a code span, so we wrap and stop.
   if (style.code) return '`' + text + '`';
@@ -45,6 +52,16 @@ function styleWrap(text, style) {
   return out;
 }
 
+function escapeLinkUrl(url) {
+  // Inside a <url|text> token, `>` terminates the token and `|` splits url
+  // from label — percent-encode them (plus `<` for symmetry). Percent-encoding
+  // is lossless for URLs, so the link stays clickable and round-trips as-is.
+  return url
+    .replace(/</g, '%3C')
+    .replace(/>/g, '%3E')
+    .replace(/\|/g, '%7C');
+}
+
 function leafToMrkdwn(el) {
   if (!el || typeof el.type !== 'string') return '';
   switch (el.type) {
@@ -53,8 +70,12 @@ function leafToMrkdwn(el) {
     case 'emoji':
       return ':' + (el.name || '') + ':';
     case 'link':
-      if (el.text && el.text.length > 0) return '<' + (el.url || '') + '|' + el.text + '>';
-      return '<' + (el.url || '') + '>';
+      // Label is entity-escaped (a raw `>` would terminate the token early);
+      // parseAngleBracket mirrors with unescapeFromMrkdwn so edits round-trip.
+      if (el.text && el.text.length > 0) {
+        return '<' + escapeLinkUrl(el.url || '') + '|' + escapeForMrkdwn(el.text) + '>';
+      }
+      return '<' + escapeLinkUrl(el.url || '') + '>';
     case 'user':
       return '<@' + (el.user_id || '') + '>';
     case 'channel':
@@ -122,8 +143,12 @@ function richTextToMrkdwn(rt) {
 // ─────────────────────────────────────────────────────────────────
 
 const ANGLE_RE = /^<([^>]+)>/;
-const EMOJI_RE = /^:([a-z0-9_+-]+):/i;
+const EMOJI_RE = /^:([a-z0-9_+-]+):/;
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+// Letters, digits, and combining marks (Thai vowels/tone marks, decomposed
+// accents) all count as word chars — a delimiter glued to any of them is
+// mid-word and stays plain.
+const WORD_CHAR_RE = /[\p{L}\p{N}\p{M}]/u;
 
 function unescapeFromMrkdwn(text) {
   return text
@@ -172,10 +197,40 @@ function parseAngleBracket(content) {
   const pipe = content.indexOf('|');
   const url = pipe > 0 ? content.substring(0, pipe) : content;
   if (URL_SCHEME_RE.test(url)) {
-    if (pipe > 0) return { type: 'link', url, text: content.substring(pipe + 1) };
+    // Label was entity-escaped by leafToMrkdwn — unescape so the editor shows
+    // the literal text and the next forward pass re-escapes identically.
+    if (pipe > 0) return { type: 'link', url, text: unescapeFromMrkdwn(content.substring(pipe + 1)) };
     return { type: 'link', url };
   }
   return null;
+}
+
+// Word-boundary rules, mirroring Slack's renderer CONSERVATIVELY: when
+// ambiguous, leave text plain — a missed style just shows markers literally
+// (harmless), a phantom style mis-renders the edit-modal pre-fill (e.g.
+// snake_case_name showing "case" italicized, or 12:30:45 sprouting an emoji).
+const isWordChar = (ch) => WORD_CHAR_RE.test(ch);
+const isWhitespaceChar = (ch) => /\s/.test(ch);
+
+// An opening delimiter only counts at start-of-line or after a non-word char
+// (whitespace/punctuation), and must be immediately followed by non-whitespace.
+function isOpeningDelim(text, i) {
+  if (i > 0 && isWordChar(text[i - 1])) return false;
+  return i + 1 < text.length && !isWhitespaceChar(text[i + 1]);
+}
+
+// The matching closing delimiter must be immediately preceded by
+// non-whitespace and followed by end-of-line or a non-word char. Scans past
+// invalid candidates (e.g. the mid-word `_` in `_foo_bar_`); returns -1 when
+// no valid closer exists so the caller falls through to plain text.
+function findClosingDelim(text, delim, i) {
+  for (let j = i + 2; j < text.length; j++) {
+    if (text[j] !== delim) continue;
+    if (isWhitespaceChar(text[j - 1])) continue;
+    if (j + 1 < text.length && isWordChar(text[j + 1])) continue;
+    return j;
+  }
+  return -1;
 }
 
 function tokenizeInline(text, baseStyle) {
@@ -209,8 +264,9 @@ function tokenizeInline(text, baseStyle) {
       }
     }
 
-    // 2. Emoji shortcode :name:
-    if (ch === ':') {
+    // 2. Emoji shortcode :name: — only at a word boundary, so timestamps like
+    //    12:30:45 don't sprout phantom emoji.
+    if (ch === ':' && (i === 0 || !isWordChar(text[i - 1]))) {
       const m = EMOJI_RE.exec(text.substring(i));
       if (m) {
         flushPlain();
@@ -221,8 +277,8 @@ function tokenizeInline(text, baseStyle) {
     }
 
     // 3. Code span (highest precedence among inline styles) — `code`
-    if (ch === '`') {
-      const end = text.indexOf('`', i + 1);
+    if (ch === '`' && isOpeningDelim(text, i)) {
+      const end = findClosingDelim(text, '`', i);
       if (end > i) {
         flushPlain();
         const inner = text.substring(i + 1, end);
@@ -240,8 +296,8 @@ function tokenizeInline(text, baseStyle) {
     let matched = false;
     const pairs = [['*', 'bold'], ['_', 'italic'], ['~', 'strike']];
     for (const [delim, key] of pairs) {
-      if (ch === delim) {
-        const end = text.indexOf(delim, i + 1);
+      if (ch === delim && isOpeningDelim(text, i)) {
+        const end = findClosingDelim(text, delim, i);
         if (end > i) {
           flushPlain();
           const inner = text.substring(i + 1, end);

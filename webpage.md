@@ -3,10 +3,10 @@
 On this same repository, we can found the app (index.js) and a web page to present your application.
 
 ## Structure
-We can found an index.html that is the home page. You also have a privacy folder with another index.html that present the privacy policy of the app. Be careful to respect it when update the app or update it.
+We can found an `index_plus.html` that is the current home page (serve it as the directory index, or copy/rename it to `index.html` on your web server). `index_orginal.html` is the legacy page from the original upstream project. You also have a privacy folder with an `index.html` that present the privacy policy of the app. Be careful to respect it when update the app or update it.
 
-## Contact mail address
-Also change, in index.html, the contact mail that is harcoded in the bottom of home page. I'm not responsible of your application.
+## Contact links
+Also change, in `index_plus.html`, the contact links that are hardcoded in the footer of home page. I'm not responsible of your application.
 
 ## Web server configuration
 You can use apache, nginx or any other web server to serve the root directory.

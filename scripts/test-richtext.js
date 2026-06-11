@@ -154,6 +154,99 @@ test(
   })
 );
 
+// C44 — mrkdwn style markers don't span newlines: a styled element whose text
+// contains \n must be wrapped per line (empty lines get no markers).
+test(
+  'bold spanning newline wraps each line (C44)',
+  '*line1*\n*line2*',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'line1\nline2', style: { bold: true } }] }],
+  })
+);
+
+test(
+  'italic spanning newline wraps each line (C44)',
+  '_line1_\n_line2_',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'line1\nline2', style: { italic: true } }] }],
+  })
+);
+
+test(
+  'strike spanning newline wraps each line (C44)',
+  '~line1~\n~line2~',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'line1\nline2', style: { strike: true } }] }],
+  })
+);
+
+test(
+  'code spanning newline wraps each line (C44)',
+  '`line1`\n`line2`',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'line1\nline2', style: { code: true } }] }],
+  })
+);
+
+test(
+  'bold with empty middle line gets no markers on the empty line (C44)',
+  '*a*\n\n*b*',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'a\n\nb', style: { bold: true } }] }],
+  })
+);
+
+// C45 — link display text is entity-escaped; URL must not contain raw | or >.
+test(
+  'link text with > and & is entity-escaped (C45)',
+  '<https://example.com|a &gt; b &amp; c>',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com', text: 'a > b & c' }] }],
+  })
+);
+
+test(
+  'link text with < is entity-escaped (C45)',
+  '<https://example.com|&lt;tag&gt;>',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com', text: '<tag>' }] }],
+  })
+);
+
+test(
+  'link text with | is safe (label starts after the FIRST pipe) (C45)',
+  '<https://example.com|a|b>',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com', text: 'a|b' }] }],
+  })
+);
+
+test(
+  'link URL with | is percent-encoded (C45)',
+  '<https://example.com/a%7Cb|click>',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com/a|b', text: 'click' }] }],
+  })
+);
+
+test(
+  'link URL with > is percent-encoded (C45)',
+  '<https://example.com/a%3Eb>',
+  richTextToMrkdwn({
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com/a>b' }] }],
+  })
+);
+
 test(
   'bullet list',
   '• first\n• second',
@@ -256,6 +349,84 @@ test(
   mrkdwnToRichText('&lt;')
 );
 
+test(
+  'link text entity-unescapes (mirror of C45 forward escaping)',
+  {
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'link', url: 'https://example.com', text: 'a > b' }] }],
+  },
+  mrkdwnToRichText('<https://example.com|a &gt; b>')
+);
+
+// C16 — word-boundary rules: mid-word _ * ~ ` and : must NOT produce phantom
+// styles/emoji in the edit-modal pre-fill. Ambiguous → plain.
+const plainOnly = (text) => ({
+  type: 'rich_text',
+  elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text }] }],
+});
+
+test('snake_case_name stays plain (C16)', plainOnly('snake_case_name'), mrkdwnToRichText('snake_case_name'));
+test('file_name_v2 stays plain (C16)', plainOnly('file_name_v2'), mrkdwnToRichText('file_name_v2'));
+test('5*3*2 stays plain (C16)', plainOnly('5*3*2'), mrkdwnToRichText('5*3*2'));
+test('12:30:45 stays plain (C16)', plainOnly('12:30:45'), mrkdwnToRichText('12:30:45'));
+test('mid-word backtick a`b`c stays plain (C16)', plainOnly('a`b`c'), mrkdwnToRichText('a`b`c'));
+// Thai combining vowel mark (ี) before the delimiter is still mid-word.
+test('delimiter glued to Thai text stays plain (C16)', plainOnly('สวัสดี*ครับ*'), mrkdwnToRichText('สวัสดี*ครับ*'));
+test('mid-word strike a~b~c stays plain (C16)', plainOnly('a~b~c'), mrkdwnToRichText('a~b~c'));
+test('opening delimiter followed by whitespace stays plain (C16)', plainOnly('* not bold *x'), mrkdwnToRichText('* not bold *x'));
+
+test(
+  '*real bold* still converts (C16)',
+  {
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'real bold', style: { bold: true } }] }],
+  },
+  mrkdwnToRichText('*real bold*')
+);
+
+test(
+  '_real italic_ still converts (C16)',
+  {
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'real italic', style: { italic: true } }] }],
+  },
+  mrkdwnToRichText('_real italic_')
+);
+
+test(
+  '~real strike~ still converts (C16)',
+  {
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'real strike', style: { strike: true } }] }],
+  },
+  mrkdwnToRichText('~real strike~')
+);
+
+test(
+  ':smile: still converts at word boundary (C16)',
+  {
+    type: 'rich_text',
+    elements: [{ type: 'rich_text_section', elements: [{ type: 'emoji', name: 'smile' }] }],
+  },
+  mrkdwnToRichText(':smile:')
+);
+
+test(
+  'styled word mid-sentence still converts (C16)',
+  {
+    type: 'rich_text',
+    elements: [{
+      type: 'rich_text_section',
+      elements: [
+        { type: 'text', text: 'the ' },
+        { type: 'text', text: 'price', style: { bold: true } },
+        { type: 'text', text: ' is right' },
+      ],
+    }],
+  },
+  mrkdwnToRichText('the *price* is right')
+);
+
 // ─── Stable round-trip (canonical mrkdwn in → rich_text → same mrkdwn out) ──
 console.log('\nStable round-trip (canonical mrkdwn → rich_text → same mrkdwn):');
 const stableCases = [
@@ -277,6 +448,17 @@ const stableCases = [
   '*hello* and _italic_',
   'multi\nline\ntext',
   '&lt;literal brackets&gt;',
+  // C16 — boundary-rule plains must round-trip byte-for-byte
+  'snake_case_name',
+  'file_name_v2',
+  '5*3*2',
+  '12:30:45',
+  'vote_for_app_name',
+  // C44 — per-line styled output must round-trip
+  '*line1*\n*line2*',
+  '`line1`\n`line2`',
+  // C45 — escaped link label must round-trip
+  '<https://example.com|a &gt; b &amp; c>',
 ];
 for (const c of stableCases) {
   const rt = mrkdwnToRichText(c);
