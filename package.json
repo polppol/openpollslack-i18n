@@ -35,7 +35,7 @@
     "glob": "^13.0.6",
     "helmet": "^8.1.0",
     "moment-timezone": "^0.6.2",
-    "mongodb": "^7.2.0",
+    "mongodb": "^7.3.0",
     "node-cron": "^4.2.1",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
