@@ -23,7 +23,7 @@
   },
   "homepage": "https://github.com/polppol/openpollslack-i18n#readme",
   "dependencies": {
-    "@slack/bolt": "4.7.2",
+    "@slack/bolt": "4.7.3",
     "@types/express": "^5.0.6",
     "async-mutex": "^0.5.0",
     "body-parser": "^2.2.2",
