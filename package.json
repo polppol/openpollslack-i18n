@@ -33,7 +33,7 @@
     "cron-parser": "^5.5.0",
     "cronstrue": "^3.14.0",
     "glob": "^13.0.6",
-    "helmet": "^8.1.0",
+    "helmet": "^8.2.0",
     "moment-timezone": "^0.6.2",
     "mongodb": "^7.2.0",
     "node-cron": "^4.2.1",
