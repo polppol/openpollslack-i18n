@@ -1,0 +1,13 @@
+# /etc/systemd/system/mongo-backup.service
+# Oneshot unit run by mongo-backup.timer. See backup-mongo.sh for install steps.
+[Unit]
+Description=Logical backup (mongodump) of the open_poll database
+After=mongod.service
+Wants=mongod.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-mongo.sh
+# Don't hold the boot/critical chain if a backup is slow.
+Nice=10
+IOSchedulingClass=idle

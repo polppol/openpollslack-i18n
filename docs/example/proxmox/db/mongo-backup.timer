@@ -1,0 +1,17 @@
+# /etc/systemd/system/mongo-backup.timer
+# Runs the mongodump backup daily at 03:30. Enable with:
+#   systemctl enable --now mongo-backup.timer
+#   systemctl list-timers mongo-backup.timer    # verify next run
+[Unit]
+Description=Daily open_poll database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Persistent: if the host was off at 03:30, run the missed backup on next boot.
+# (systemd does NOT support end-of-line comments — keep this on its own line,
+#  or the whole "true   # ..." string is parsed as the value and ignored.)
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,38 @@
+# /etc/systemd/system/openpoll.service
+#
+# systemd keeps the Node app running: starts it on boot, restarts it if it
+# crashes. Install:
+#   pct push 5000 app/openpoll.service /etc/systemd/system/openpoll.service
+#   systemctl daemon-reload
+#   systemctl enable --now openpoll
+#   systemctl status openpoll
+#   journalctl -u openpoll -f          # live logs
+[Unit]
+Description=Open Poll Plus (Slack poll app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openpoll
+Group=openpoll
+WorkingDirectory=/opt/openpollslack-i18n
+# The app reads config/default.json relative to WorkingDirectory (node-config).
+ExecStart=/usr/bin/node index.js
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5
+
+# Logs: stdout/stderr -> journald. The app ALSO writes its own rotated files
+# under logs/ (controlled by log_dir / log_max_files in default.json).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openpoll
+
+# Light hardening (safe for this app).
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
