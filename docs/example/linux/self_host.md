@@ -16,7 +16,7 @@ To use the app you will configure, you need:
 - a server (this can be a raspberry at your home or a dedicated server in any provider you want) with internet access
 - a domain name with HTTPS certificate. (Free certs via [Let's Encrypt](https://letsencrypt.org/), or use a [No-IP Hostname](https://www.noip.com/support/knowledgebase/how-to-configure-your-no-ip-hostname/).)
 - [Node.js](https://nodejs.org/) **>= 20.19** (LTS recommended; tested on 24.x)
-- [Corepack](https://nodejs.org/api/corepack.html) — bundled with Node.js 16.10+; just needs to be enabled once (see below)
+- [Corepack](https://nodejs.org/api/corepack.html) (provides Yarn) — bundled with Node.js 16.10–24; on Node **25+** it was unbundled, so install it first with `npm install -g corepack`. Either way it just needs enabling once (see below).
 - [MongoDB](https://www.mongodb.com/) server **4.2 or newer** (the app uses the MongoDB Node.js driver 7.x) — a local `mongod` or a hosted instance such as MongoDB Atlas
 
 ### Get the code
@@ -29,6 +29,7 @@ The package manager is **Yarn 4** (pinned via the `packageManager` field in `pac
 
 ```bash
 # One-time on the server (and dev machine):
+# (Node 25+ unbundled Corepack — if `corepack` is missing first run: npm install -g corepack)
 corepack enable
 # (On Linux you may need sudo if Node was installed system-wide.)
 
