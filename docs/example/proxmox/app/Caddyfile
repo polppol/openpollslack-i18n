@@ -1,0 +1,43 @@
+# /etc/caddy/Caddyfile — HTTPS + routing for Open Poll Plus, running INSIDE the
+# App container. This is the app's front door: Caddy terminates TLS on :443 and
+# reverse-proxies the Node app on localhost:5000. There is NO separate proxy box
+# to run or maintain.
+#
+# Requests arrive under the /node/5000/ path prefix; handle_path (below) strips
+# it so the Node app sees plain /slack/... . The prefix is just an example label
+# — set it to whatever path you register in Slack.
+#
+# Replace poll.example.com with your domain. The certificate comes from the
+# Cloudflare DNS-01 challenge — no inbound port 80 needed (see
+# tls-cloudflare-dns.md). CF_API_TOKEN is read from Caddy's environment
+# (set in /etc/caddy/cloudflare.env by install-caddy.in-ct.sh).
+
+poll.example.com {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	# handle_path STRIPS the /node/5000/ prefix, so the
+	# app sees plain /slack/... . Only the app's real paths are forwarded; any
+	# other path under /node/5000/ gets a 403. Do NOT add request-body rewriting
+	# (compression/charset) here — Slack verifies its signature on the raw body.
+	handle_path /node/5000/* {
+		handle /slack/* { reverse_proxy 127.0.0.1:5000 }
+		handle /healthz { reverse_proxy 127.0.0.1:5000 }
+		handle /ping    { reverse_proxy 127.0.0.1:5000 }
+		handle          { respond 403 }
+	}
+
+	# Everything outside /node/5000/ (incl. your oauth_success / oauth_failure
+	# landing). Replace with a redirect or static page if you prefer.
+	handle {
+		respond "Open Poll Plus is running." 200
+	}
+}
+
+# Slack request URLs to register (under the /node/5000/ prefix):
+#   events         : https://poll.example.com/node/5000/slack/events
+#   commands       : https://poll.example.com/node/5000/slack/commands
+#   actions        : https://poll.example.com/node/5000/slack/actions
+#   oauth_redirect : https://poll.example.com/node/5000/slack/oauth_redirect
+#   install        : https://poll.example.com/node/5000/slack/install

@@ -396,9 +396,11 @@ When the app starts and `config/default.json` is missing keys that exist in `con
 
 ## Self hosted installation
 
-- [self_host.md](self_host.md)
-- [webpage.md](webpage.md)
-- [apache-ssl.md](apache-ssl.md)
+See the **[self‑hosting examples index](docs/example/README.md)**:
+- **Generic Linux / VM / VPS / Pi** → [docs/example/linux/self_host.md](docs/example/linux/self_host.md)
+- **Proxmox cluster with HA** → [docs/example/proxmox/README.md](docs/example/proxmox/README.md)
+- Reverse proxy / HTTPS → [apache-ssl.md](docs/example/apache/apache-ssl.md) (or Caddy + Cloudflare DNS in the Proxmox kit)
+- Public webpage / install button → [webpage.md](webpage.md)
 
 ## Additional Permissions
 

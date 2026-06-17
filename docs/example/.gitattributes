@@ -1,0 +1,5 @@
+# These self-host examples target Debian/Linux — keep every file LF so a Windows
+# checkout never flips line endings (shell scripts especially: a CRLF shebang
+# breaks with "bad interpreter" on the server). Applies to all subfolders
+# (proxmox/, apache/, linux/).
+* text eol=lf

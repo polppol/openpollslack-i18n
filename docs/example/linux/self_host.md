@@ -1,4 +1,14 @@
-# Self hosted installation (v4)
+# Self‑hosting on a generic Linux server (v4)
+
+> **Shortcut — reuse the Proxmox kit's scripts.** Those in‑CT setup scripts are
+> plain Debian 12 + systemd and run on any non‑Proxmox Debian box/VM/LXC too.
+> Instead of the manual steps below you can run
+> [`setup-db.in-ct.sh`](../proxmox/db/setup-db.in-ct.sh),
+> [`setup-app.in-ct.sh`](../proxmox/app/setup-app.in-ct.sh) and
+> [`install-caddy.in-ct.sh`](../proxmox/app/install-caddy.in-ct.sh) **directly** on
+> your server — skip the `pct` wrappers + `create-containers.sh` / `ha-setup.sh`.
+> Needs systemd (not a plain Docker container); MongoDB needs an x86‑64 CPU with AVX.
+
 ## Self hosted installation guide
 ### Requirements
 To use the app you will configure, you need:
@@ -79,16 +89,16 @@ You have many way to run the app. Basically, you can use `node index.js`. But if
 - pm2 del ID to delete your app from pm2
 
 ### Health check & logs
-- `GET /ping` returns a static `pong` (process up). `GET /healthz` additionally pings MongoDB and returns `200 {ok:true, mongo:"up", version, uptime_s}` or `503 {ok:false, mongo:"down"}` — point your uptime monitor at `/healthz`. Note: if you only proxy `/slack/*` (as in [apache-ssl.md](apache-ssl.md)), probe the app port directly (`http://127.0.0.1:5000/healthz`) or add `/healthz` to the proxy rules.
+- `GET /ping` returns a static `pong` (process up). `GET /healthz` additionally pings MongoDB and returns `200 {ok:true, mongo:"up", version, uptime_s}` or `503 {ok:false, mongo:"down"}` — point your uptime monitor at `/healthz`. Note: if you only proxy `/slack/*` (as in [apache-ssl.md](../apache/apache-ssl.md)), probe the app port directly (`http://127.0.0.1:5000/healthz`) or add `/healthz` to the proxy rules.
 - Logs are written to the `log_dir` folder (default `logs/`) with daily rotation (`YYYY-MM-DD_app.log` / `_bolt.log`). Old files are pruned per `log_max_files` (default `30d`). Log levels default to `info`; set the `log_level_*` keys to `debug` only when diagnosing.
 
 ### Database
 The app stores polls, votes, schedules and per-team config in MongoDB. Install and start a local `mongod` (or use a hosted instance such as MongoDB Atlas), then set `mongo_url` and `mongo_db_name` in `config/default.json` (defaults: `mongodb://localhost:27017` / `open_poll`). Collections are created automatically — no schema setup is needed. Without a reachable MongoDB the app logs "Failed to connect to MongoDB" and exits at startup.
 
 ### Configuration
-Inside the `config` folder, you have a `default.json.dist`. Copy it into `config/default.json`. Then, you need to edit the config values (see [README.md](README.md#self-host-server-configuration-configdefaultjson) )
+Inside the `config` folder, you have a `default.json.dist`. Copy it into `config/default.json`. Then, you need to edit the config values (see [README.md](../../../README.md#self-host-server-configuration-configdefaultjson) )
 
-The app listens on the `port` key from `config/default.json` (default `5000`); your HTTPS reverse proxy must forward the `/slack/*` paths to it — see [apache-ssl.md](apache-ssl.md) for an Apache example.
+The app listens on the `port` key from `config/default.json` (default `5000`); your HTTPS reverse proxy must forward the `/slack/*` paths to it — see [apache-ssl.md](../apache/apache-ssl.md) for an Apache example.
 
 
 ### Create an app into slack
@@ -124,9 +134,9 @@ In this page, click on "Create New Command" Fill the next fields:
 
 - Command: The name of the command inside slack. First "/poll", then repeat for "/openpoll" (or whatever you set in `command` / `command2`)
 - Request URL: Fill with `https://YOURHOSTNAME/slack/commands` and replace `YOURHOSTNAME` with yours.
-- Short Description: Describe the command here. Mine is simply "Create a poll"
-- Usage Hint: Give hint to user. Mine is `"What is you favourite color ?" "Red" "Green" "Blue" "Yellow"`
-- Escape channels, users, and links sent to your app: I've not ticked the box. No usage required in the app.
+- Short Description: describe the command, e.g. "Create a poll".
+- Usage Hint: a usage example, e.g. `"What is your favourite color?" "Red" "Green" "Blue" "Yellow"`.
+- Escape channels, users, and links sent to your app: leave it unchecked — not used by the app.
 
 #### Event Subscriptions
 Activate it with the On/Off button. Fill the `Request URL` with `https://YOURHOSTNAME/slack/events`. Replace `YOURHOSTNAME` with yours. Keep `/slack/events` at the end !
@@ -137,8 +147,8 @@ and add the `app_home_opened` event under "Subscribe to bot events".
 #### Shortcut (optional, but useful to your users)
 Create a new shortcut by clicking on `Create New Shortcut`, select `Global` and click on `Next` button. Fill the next fields:
 
-- Name: what you want, but this will appear in Slack's shortcut. Mine is "Create new poll"
-- Short Description: what you to describe your shortcut. Mine is "Create a new poll from modal"
+- Name: anything you like; it appears in Slack's shortcut menu, e.g. "Create new poll".
+- Short Description: describe the shortcut, e.g. "Create a new poll from modal".
 - Callback ID: fill with `open_modal_new`. Keep the same, this is use into the app's code.
 Now, click on "Create". Once your shortcut created, click on "Save Changes" and go back to "Basic Information"
 
@@ -147,7 +157,7 @@ This step is required to activate "Slash Commands".
 
 Inside the "Basic Information" page, click on "Bots" under "Add features and functionality".
 
-In this step, I have deactivated "Messages Tab". Nothing to use it are really implemented in this app.
+Leave the "Messages Tab" disabled — nothing in the app uses it.
 
 
 #### Permissions

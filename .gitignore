@@ -45,3 +45,6 @@ desktop.ini
 CLAUDE.md
 auth.json
 .mcp.json
+# Proxmox deploy kit — local secret/config files the deploy wrapper pushes (never commit)
+docs/example/proxmox/app/default.json
+docs/example/proxmox/app/cloudflare.env

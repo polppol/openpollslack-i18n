@@ -1,0 +1,10 @@
+# Shell scripts and Linux config/units MUST stay LF: a CRLF "#!/usr/bin/env bash"
+# becomes "bad interpreter: /usr/bin/env bash^M" on Debian/Proxmox, and CRLF can
+# trip systemd/Caddy/mongod configs. Pin them so a Windows checkout can't flip
+# them to CRLF (overrides core.autocrlf).
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.service   text eol=lf
+*.timer     text eol=lf
+*.conf      text eol=lf
+Caddyfile   text eol=lf
