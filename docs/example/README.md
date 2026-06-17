@@ -36,6 +36,12 @@ edit the variables/config for your setup.
   - Caddy (automatic HTTPS) — [`proxmox/app/Caddyfile`](proxmox/app/Caddyfile) +
     [`proxmox/app/tls-cloudflare-dns.md`](proxmox/app/tls-cloudflare-dns.md) (DNS‑01 cert)
 
+- **Automatic HTTPS cert renewal on Windows** (existing Windows server, any web
+  server) → [`windows/auto-cert-renew.md`](windows/auto-cert-renew.md)
+  win-acme + Cloudflare DNS‑01: issues + auto‑renews the cert via a Scheduled Task,
+  then writes your `.crt`/`.key` and restarts your service on each renewal. Cert
+  automation only — does not touch the web‑server config.
+
 ## Common to every method
 
 - **Create the Slack app** (scopes, slash commands, OAuth redirect) — see the

@@ -1,5 +1,9 @@
 # These self-host examples target Debian/Linux — keep every file LF so a Windows
 # checkout never flips line endings (shell scripts especially: a CRLF shebang
 # breaks with "bad interpreter" on the server). Applies to all subfolders
-# (proxmox/, apache/, linux/).
+# (proxmox/, apache/, linux/, windows/).
 * text eol=lf
+
+# Windows batch files are the exception: classic cmd.exe is happiest with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
