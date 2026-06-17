@@ -1,0 +1,63 @@
+# /etc/caddy/Caddyfile — SPLIT setup: one reverse-proxy CT fronting SEVERAL
+# independent Open Poll Plus instances by path prefix. Caddy terminates TLS on
+# :443 here and reverse-proxies each /node/<port>/ prefix to a different app CT
+# on the LAN. (For the simple single-CT setup, use app/Caddyfile instead.)
+#
+# IMPORTANT — each /node/<port>/ prefix is a SEPARATE Open Poll Plus instance
+# with its OWN Slack app (its own signing_secret / client_id / oauth_redirect)
+# AND its own database (its own mongo_url / mongo_db_name in that instance's
+# default.json). This proxy ONLY routes by path — it cannot share Slack
+# credentials or data across backends. The shipped example is two fully
+# independent sets: a "production" and a "dev" deployment.
+#
+# Edit before deploying:
+#   - replace REPLACE_WITH_YOUR_DOMAIN with your real domain (deploy refuses while it remains)
+#   - set each backend's LAN address (IP:PORT) to your app CTs
+# The __TLS_DIRECTIVE__ line is filled in by rproxy/deploy-rproxy-to-ct.sh from
+# TLS_MODE (cloudflare DNS-01, or a manual cert). If you deploy by hand, replace
+# __TLS_DIRECTIVE__ with either:
+#   tls { dns cloudflare {env.CF_API_TOKEN} }      # DNS-01 (see app/tls-cloudflare-dns.md)
+#   tls /etc/caddy/cert.pem /etc/caddy/key.pem     # a cert you install yourself
+
+# Reusable per-backend block: forward ONLY the app's real paths, 403 everything
+# else (same allowlist as the bundled app/Caddyfile). {args[0]} is the backend's
+# LAN address, passed by `import app_backend <ip:port>`. Do NOT add body/charset
+# rewriting — Slack verifies its signature on the raw body.
+(app_backend) {
+	handle /slack/* { reverse_proxy {args[0]} }
+	handle /healthz { reverse_proxy {args[0]} }
+	handle /ping    { reverse_proxy {args[0]} }
+	handle          { respond 403 }
+}
+
+REPLACE_WITH_YOUR_DOMAIN {
+	__TLS_DIRECTIVE__
+
+	# One line per instance. handle_path STRIPS the /node/<port>/ prefix so each
+	# app sees plain /slack/... . The label is arbitrary; reusing the backend
+	# port number just makes the mapping easy to read.
+	handle_path /node/5000/* { import app_backend 10.100.51.61:5000 }   # PRODUCTION instance
+	handle_path /node/5001/* { import app_backend 10.100.51.63:5001 }   # DEV instance
+	# add more instances the same way:
+	# handle_path /node/<port>/* { import app_backend <app-ct-ip>:<port> }
+
+	# Root + OAuth landing. Each instance's oauth_success / oauth_failure must
+	# point OUTSIDE any /node/<port>/ prefix (e.g. https://your.domain/?oauth=success),
+	# or the per-backend 403 allowlist above would block the redirect.
+	handle {
+		respond "Open Poll Plus reverse proxy." 200
+	}
+}
+
+# Slack request URLs to register — PER INSTANCE, each under its own prefix and in
+# its own Slack app config (https://api.slack.com/apps):
+#   production : https://your.domain/node/5000/slack/{events,commands,actions,oauth_redirect,install}
+#   dev        : https://your.domain/node/5001/slack/{events,commands,actions,oauth_redirect,install}
+#
+# --- Host-based alternative (subdomain per instance, instead of path prefixes) ---
+# If path prefixes are awkward, give each instance its own subdomain. Caddy
+# issues a separate DNS-01 cert per host automatically (or use a *.example.com
+# wildcard). Use the snippet WITHOUT handle_path — there is no prefix to strip:
+#   prod.example.com { tls { dns cloudflare {env.CF_API_TOKEN} }  import app_backend 10.100.51.61:5000 }
+#   dev.example.com  { tls { dns cloudflare {env.CF_API_TOKEN} }  import app_backend 10.100.51.63:5001 }
+# Then register each instance's Slack URLs under its own host (no /node/<port>/ prefix).

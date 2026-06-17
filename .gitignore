@@ -48,3 +48,4 @@ auth.json
 # Proxmox deploy kit — local secret/config files the deploy wrapper pushes (never commit)
 docs/example/proxmox/app/default.json
 docs/example/proxmox/app/cloudflare.env
+docs/example/proxmox/rproxy/cloudflare.env

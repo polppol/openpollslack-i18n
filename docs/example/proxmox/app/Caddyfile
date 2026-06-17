@@ -1,21 +1,21 @@
-# /etc/caddy/Caddyfile — HTTPS + routing for Open Poll Plus, running INSIDE the
-# App container. This is the app's front door: Caddy terminates TLS on :443 and
-# reverse-proxies the Node app on localhost:5000. There is NO separate proxy box
-# to run or maintain.
+# /etc/caddy/Caddyfile — HTTPS + routing for Open Poll Plus in the BUNDLED setup
+# (Caddy runs INSIDE the App container). This is the app's front door: Caddy
+# terminates TLS on :443 and reverse-proxies the Node app on localhost:5000.
+# There is NO separate proxy box in this setup. (For the SPLIT setup — one
+# reverse-proxy CT fronting several app CTs — see rproxy/Caddyfile.multi instead.)
 #
 # Requests arrive under the /node/5000/ path prefix; handle_path (below) strips
 # it so the Node app sees plain /slack/... . The prefix is just an example label
 # — set it to whatever path you register in Slack.
 #
-# Replace poll.example.com with your domain. The certificate comes from the
-# Cloudflare DNS-01 challenge — no inbound port 80 needed (see
-# tls-cloudflare-dns.md). CF_API_TOKEN is read from Caddy's environment
-# (set in /etc/caddy/cloudflare.env by install-caddy.in-ct.sh).
+# Replace poll.example.com with your domain. The __TLS_DIRECTIVE__ line is filled
+# in by the deploy wrapper (app/deploy-app-to-ct.sh) based on TLS_MODE:
+#   cloudflare -> tls { dns cloudflare {env.CF_API_TOKEN} }   (DNS-01, see tls-cloudflare-dns.md)
+#   manual     -> tls /etc/caddy/cert.pem /etc/caddy/key.pem  (you install the cert)
+# If you edit/deploy this file by hand, replace __TLS_DIRECTIVE__ with one of those.
 
 poll.example.com {
-	tls {
-		dns cloudflare {env.CF_API_TOKEN}
-	}
+	__TLS_DIRECTIVE__
 
 	# handle_path STRIPS the /node/5000/ prefix, so the
 	# app sees plain /slack/... . Only the app's real paths are forwarded; any

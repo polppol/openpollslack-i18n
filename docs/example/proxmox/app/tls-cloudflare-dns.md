@@ -1,10 +1,16 @@
 # HTTPS certificate via the Cloudflare DNS‑01 challenge
 
-Whatever terminates HTTPS needs a certificate. In the default setup that's
-**Caddy inside the App container** (the separate Apache box is the alternative).
+Whatever terminates HTTPS needs a certificate. That is **Caddy** — inside the
+**App container** in the bundled setup, or inside the **reverse‑proxy container**
+in the split setup. (A separate external Apache box is another alternative.)
 The **DNS‑01 challenge** proves you own the domain by writing a temporary
 `_acme-challenge` TXT record through your DNS provider's API — instead of the
 default HTTP‑01 challenge that needs Let's Encrypt to reach you on **port 80**.
+
+> **Want to skip auto‑certs entirely?** Run the deploy wrapper with
+> `TLS_MODE=manual`: it installs Caddy + the routing but issues **no** certificate
+> and needs **no Cloudflare token** — you install/renew the cert yourself. See
+> **Option D — Manual cert (TLS_MODE=manual)** at the bottom.
 
 Use DNS‑01 when you want to:
 - **not open port 80** to the App container at all (smaller attack surface), or
@@ -25,7 +31,7 @@ one zone:
 2. Use the **"Edit zone DNS"** template (or Custom token) with:
    - **Permissions:** `Zone` → `DNS` → `Edit`
    - **Zone Resources:** `Include` → `Specific zone` → `example.com`
-   - (optional) **Client IP Address Filtering:** the App container's public/outbound IP (whatever runs Caddy)
+   - (optional) **Client IP Address Filtering:** the public/outbound IP of whatever CT runs Caddy — the **App CT** in the bundled setup, the **reverse‑proxy CT** in the split setup (scope it to the box that actually issues the cert, or issuance gets a 403)
    - (optional) **TTL:** an expiry date
 3. **Continue → Create Token** and copy the token — it is shown only once.
 
@@ -164,14 +170,45 @@ acme.sh installs its own cron entry for renewal.
 
 ---
 
+## Option D — Manual cert (TLS_MODE=manual, no automation)
+
+Use this when you don't want Caddy issuing certificates at all — you already have
+a cert (corporate CA, an existing wildcard, your own certbot/acme.sh elsewhere),
+or you simply prefer to manage it by hand. Run the deploy wrapper with
+`TLS_MODE=manual`:
+
+```bash
+bash app/deploy-app-to-ct.sh                 # then answer: TLS mode -> manual
+# or non-interactively:
+TLS_MODE=manual bash app/deploy-app-to-ct.sh
+#   (split: TLS_MODE=manual bash rproxy/deploy-rproxy-to-ct.sh)
+```
+
+`install-caddy.in-ct.sh` then installs the **stock** Caddy (no Cloudflare module,
+no token, no `apt-mark hold`) and the wrapper writes a `tls <cert> <key>` line
+into the Caddyfile (default paths `/etc/caddy/cert.pem` and `/etc/caddy/key.pem`).
+Put your fullchain + private key there inside the CT, then reload:
+
+```bash
+pct push <CT ID> fullchain.pem /etc/caddy/cert.pem
+pct push <CT ID> privkey.pem   /etc/caddy/key.pem
+pct exec <CT ID> -- systemctl restart caddy
+```
+
+Renewal is yours to wire (Caddy will not do it in this mode): run certbot/acme.sh
+on a schedule and drop the renewed files at those paths, reloading Caddy after.
+
+---
+
 ## Notes
 
 - **Least privilege:** the token only needs `Zone:DNS:Edit` on the single zone.
   Never put the Global API Key in a file on the server.
 - **Permissions:** keep `cloudflare.ini` / `cloudflare.env` `chmod 600`,
   root‑owned. Back them up with your other secrets (see README Step 3).
-- **Where this runs:** on whatever terminates TLS. In the default setup that's
-  **Caddy inside the App container**, so the token/cert live there. Only if you
-  use the external‑Apache alternative does it run on that separate box instead.
+- **Where this runs:** on whatever terminates TLS, so the token + cert live
+  there. Bundled setup → **Caddy in the App CT**. Split setup → **Caddy in the
+  reverse‑proxy CT** (the app‑only CTs hold **no** Cloudflare token — keep it that
+  way; smaller blast radius). External‑Apache alternative → that separate box.
 - **DNS‑01 vs HTTP‑01:** with DNS‑01 you don't forward port 80 at all; only 443
   needs to reach the App container. HTTP‑01 (the default) instead needs port 80 open.

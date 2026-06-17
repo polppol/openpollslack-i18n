@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Install the Open Poll Plus app. This runs INSIDE the App container (CT 5000) —
+# Install the Open Poll Plus app. This runs INSIDE the App container —
 # you normally do NOT run it by hand. On the Proxmox node run
 # app/deploy-app-to-ct.sh , which pushes this in and runs it, then pushes your
-# config and installs Caddy. (To run it manually: pct enter 5000, then bash this.)
+# config and (unless --app-only) installs Caddy. (To run it manually: pct enter
+# <App CT ID>, then bash this.)
 #
 # It installs Node.js, enables Corepack/Yarn 4, clones the repo, installs
 # dependencies, creates a dedicated service user, and prepares config/logs.
@@ -11,13 +12,13 @@
 # (see app/default.json.example) and install the systemd unit.
 set -euo pipefail
 
-# ── Safety: run INSIDE the App container (CT 5000), NOT on a Proxmox node. ────
+# ── Safety: run INSIDE the App container, NOT on a Proxmox node. ─────────────
 # This installs Node.js and clones the repo; on a node that would pollute the
 # hypervisor. A Proxmox host has /etc/pve + pct/pveversion; a container does
 # not — so bail out if we detect a host.
 if [ -d /etc/pve ] || command -v pct >/dev/null 2>&1 || command -v pveversion >/dev/null 2>&1; then
-  echo "ERROR: this looks like a Proxmox HOST, not the App container (CT 5000)." >&2
-  echo "       Run it inside the CT:  pct enter 5000   then  bash setup-app.in-ct.sh" >&2
+  echo "ERROR: this looks like a Proxmox HOST, not the App container." >&2
+  echo "       Run it inside the CT:  pct enter <App CT ID>   then  bash setup-app.in-ct.sh" >&2
   exit 1
 fi
 

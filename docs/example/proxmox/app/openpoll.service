@@ -2,7 +2,7 @@
 #
 # systemd keeps the Node app running: starts it on boot, restarts it if it
 # crashes. Install:
-#   pct push 5000 app/openpoll.service /etc/systemd/system/openpoll.service
+#   pct push <App CT ID> app/openpoll.service /etc/systemd/system/openpoll.service
 #   systemctl daemon-reload
 #   systemctl enable --now openpoll
 #   systemctl status openpoll

@@ -1,34 +1,46 @@
-// Manual user creation for MongoDB (alternative to setup-db.in-ct.sh doing it).
+// create-app-user.js — add an application database + scoped user to an EXISTING
+// MongoDB. Use this to give a SECOND, independent instance (e.g. a "dev" app
+// alongside "production") its own database + least-privilege user WITHOUT
+// reinstalling MongoDB or touching the first instance's data.
 //
-// Use this only if you are setting MongoDB up by hand. Run it over the
-// localhost exception on the DB container BEFORE any users exist:
+// The admin (root) user already exists — db/setup-db.in-ct.sh created it during
+// the first setup, so you do NOT need this for the very first database (that one
+// is created for you). Run this inside the DB CT, authenticating as admin, with
+// the new instance's values in the environment:
 //
-//   mongosh "mongodb://127.0.0.1:27017/admin" --file create-app-user.js
+//   ADMIN_DB_PASS=... APP_DB_USER=devuser APP_DB_NAME=open_poll_dev APP_DB_PASS=... \
+//     mongosh "mongodb://127.0.0.1:27017/admin" --file create-app-user.js
 //
-// Change BOTH passwords below first. The app password must match the one in
-// the application's mongo_url (app/default.json.example).
+// Then point that instance's app config (mongo_url / mongo_db_name) at the new
+// database. Passwords come from the environment so none are written into this file.
 
-const ADMIN_PASS = 'REPLACE_WITH_ADMIN_PASSWORD';
-const APP_PASS   = 'REPLACE_WITH_APP_DB_PASSWORD';
+const adminPass = process.env.ADMIN_DB_PASS;
+const appUser   = process.env.APP_DB_USER;
+const appName   = process.env.APP_DB_NAME;
+const appPass   = process.env.APP_DB_PASS;
 
-// 1) Cluster admin (root) — used for backups and maintenance.
-db = db.getSiblingDB('admin');
-db.createUser({
-  user: 'admin',
-  pwd:  ADMIN_PASS,
-  roles: [{ role: 'root', db: 'admin' }],
-});
+if (!adminPass || !appUser || !appName || !appPass) {
+  print('FATAL: set ADMIN_DB_PASS, APP_DB_USER, APP_DB_NAME and APP_DB_PASS in the environment.');
+  quit(1);
+}
 
-// The localhost exception only allows the FIRST user, so authenticate now.
-db.auth('admin', ADMIN_PASS);
+try {
+  db = db.getSiblingDB('admin');
+  if (!db.auth('admin', adminPass)) { throw new Error('admin authentication failed'); }
 
-// 2) Application user — least privilege, scoped to the open_poll database.
-db.getSiblingDB('open_poll').createUser({
-  user: 'openpoll',
-  pwd:  APP_PASS,
-  roles: [{ role: 'readWrite', db: 'open_poll' }],
-});
+  // Least-privilege application user, scoped to its own database.
+  const target = db.getSiblingDB(appName);
+  target.createUser({
+    user: appUser,
+    pwd:  appPass,
+    roles: [{ role: 'readWrite', db: appName }],
+  });
+  if (!target.getUser(appUser)) { throw new Error('app user missing after creation'); }
 
-print('Created users: admin (root) and openpoll (readWrite on open_poll).');
-print('App connection string:');
-print('  mongodb://openpoll:<password>@<DB_CT_IP>:27017/open_poll?authSource=open_poll');
+  print('OK: created user ' + appUser + ' on database ' + appName + '.');
+  print('App connection string (set this instance\'s mongo_url):');
+  print('  mongodb://' + appUser + ':<password>@<DB_CT_IP>:27017/' + appName + '?authSource=' + appName);
+} catch (e) {
+  print('FATAL: ' + e);
+  quit(1);
+}

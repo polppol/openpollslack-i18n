@@ -7,6 +7,10 @@ Wants=mongod.service
 
 [Service]
 Type=oneshot
+# Credentials (APP_DB_USER / APP_DB_NAME / APP_DB_PASS) are written here by
+# db/deploy-db-to-ct.sh (root 600). The leading '-' makes it optional, so a
+# manual install that instead edits backup-mongo.sh directly still works.
+EnvironmentFile=-/etc/openpoll/mongo-backup.env
 ExecStart=/usr/local/bin/backup-mongo.sh
 # Don't hold the boot/critical chain if a backup is slow.
 Nice=10

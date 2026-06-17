@@ -1,15 +1,30 @@
-# Migrating Open Poll Plus to Proxmox (LXC + Ceph, with HA)
+# Deploying Open Poll Plus on Proxmox (LXC + Ceph, with HA)
 
-This is a complete, copy‑paste example for moving the app off a single Windows
-machine onto a **Proxmox cluster with Ceph**, so a node going down for
-maintenance (or crashing) no longer takes the app offline.
+This is a complete, copy‑paste example for running Open Poll Plus on a **Proxmox
+cluster with Ceph**, so a node going down for maintenance (or crashing) no longer
+takes the app offline. It works for a **brand‑new install** *and* for **moving an
+existing server** (e.g. off a single Windows box) onto Proxmox — the setup is
+identical either way; migrating just adds **one optional step** at the end to
+restore your data ([Step 6](#step-6--go-live-optionally-restore-from-an-existing-install)).
 
 It targets the common, simple case: **two lightweight LXC containers** — one for
 the Node.js app, one for MongoDB — both registered as **Proxmox HA resources**,
 fronted by **Caddy running inside the App container** for HTTPS, serving the app
-under a `/node/5000/` path prefix. No separate
-proxy box, no paid cloud, no load balancers, no database clustering — everything
-here is free and open source.
+under a `/node/5000/` path prefix. No paid cloud, no load balancers, no database
+clustering — everything here is free and open source.
+
+That bundled shape is the **default**. If you want to run **several independent
+Open Poll Plus deployments** (e.g. production + dev, or several workspaces)
+behind one front door, there is also a **split** topology: a dedicated
+reverse‑proxy container fronting many app‑only containers — see
+[Bundled vs Split](#bundled-vs-split--which-do-i-want) below.
+
+> **The deploy scripts are interactive.** Every value shown in this guide
+> (CT ids `5000`/`5010`, IPs, storage names, …) is just an **example default** —
+> each `bash …/deploy-*.sh` / `create-containers.sh` **prompts** you for it,
+> Enter keeps the default, a typed value overrides. Run with `NONINTERACTIVE=1`
+> (or `--yes`) to accept all defaults. **HTTPS is optional too** — pick Cloudflare
+> auto‑certs *or* a manual cert you install yourself (see [TLS](#step-4--how-https-works-caddy-set-up-by-step-3)).
 
 > **This example targets** a brief (~1–2 min) auto‑restart if a node dies, with
 > zero/near‑zero downtime for *planned* maintenance. If you want true
@@ -18,6 +33,9 @@ here is free and open source.
 ---
 
 ## How it works
+
+**Bundled topology (the default).** Caddy lives in the App CT. (The CT ids below
+are example defaults — the scripts prompt you for them.)
 
 ```
    Internet ─ HTTPS :443 ─▶ App container (CT 5000)
@@ -37,10 +55,11 @@ here is free and open source.
      Disk/OSD dies    → Ceph keeps 3 copies; no downtime, no data loss.
 ```
 
-**No separate proxy box.** The App container is self‑contained: **Caddy**
-terminates HTTPS on `:443` and reverse‑proxies the **Node app on
-`localhost:5000`**. There is no separate reverse‑proxy box to stand up or
-maintain.
+**No separate proxy box (in the bundled topology).** The App container is
+self‑contained: **Caddy** terminates HTTPS on `:443` and reverse‑proxies the
+**Node app on `localhost:5000`**. There is no separate reverse‑proxy box to stand
+up or maintain. (The split topology trades this for one shared rproxy CT — see
+[Bundled vs Split](#bundled-vs-split--which-do-i-want).)
 
 **The `/node/5000/` path prefix.** Slack calls the app at
 `https://poll.example.com/node/5000/slack/...`; Caddy **strips** the prefix
@@ -57,48 +76,108 @@ migration "just work."
 
 ---
 
+## Bundled vs Split — which do I want?
+
+| | **Bundled** (default) | **Split** |
+|---|---|---|
+| Layout | Caddy + Node app in ONE App CT | One **reverse‑proxy CT** + N **app‑only CTs** |
+| Good for | a single deployment | **several independent** deployments behind one domain |
+| HTTPS | terminated in the App CT | terminated once in the rproxy CT |
+| Deploy | `deploy-app-to-ct.sh` | `deploy-app-to-ct.sh --app-only` (×N) + `deploy-rproxy-to-ct.sh` |
+
+**Most people want bundled.** Choose **split** when you run **more than one
+independent Open Poll Plus instance** — e.g. a *production* app and a *dev* app,
+or one per customer — and want a single front door. Each instance is a **separate
+Slack app** (its own `signing_secret`/`client_id`/OAuth) with **its own database**
+(its own `mongo_url`/`mongo_db_name`). The reverse proxy only routes by path — it
+cannot share Slack credentials or data across backends.
+
+```
+                         ┌───────────────────────────────────────────┐
+   Internet ─HTTPS:443─▶ │ Reverse‑proxy CT (example 5030)            │
+   (router → rproxy CT)  │  • Caddy :443 — TLS once for your domain   │
+                         │  • /node/5000/* ─▶ 10.100.51.61:5000  (prod)│
+                         │  • /node/5001/* ─▶ 10.100.51.63:5001  (dev) │
+                         └───────────────────────────────────────────┘
+                              │ http (LAN)            │ http (LAN)
+                              ▼                        ▼
+                  App CT "prod" (5000)        App CT "dev" (5001)
+                   • Node app only             • Node app only
+                   • own Slack app             • own Slack app
+                          │                           │
+                          ▼                           ▼
+                   db open_poll_prod          db open_poll_dev   (one DB CT, or several)
+```
+
+- **Each `/node/<port>/` is a different Slack app.** Register that instance's
+  Request URLs in its **own** Slack app config (Step 5), under its own prefix.
+  Pointing one Slack app at two prefixes will not work — only one backend's
+  `signing_secret` matches, the other 401s every request.
+- **Each instance gets its own database.** Use a distinct `mongo_db_name`
+  (e.g. `open_poll_prod`, `open_poll_dev`); add the extra DB + user with
+  `db/create-app-user.js` (no MongoDB reinstall). Two *different* Slack apps must
+  **not** share one database — their per‑team documents collide.
+- **The rproxy is a single point of failure** for everything behind it (see
+  [Step 7](#step-7--turn-on-proxmox-ha) — register it as an HA resource).
+
+Split‑topology steps are flagged **“(split)”** inline in the steps below.
+
+---
+
 ## What's in this folder
 
 ```
 docs/example/proxmox/
 ├── README.md                      ← you are here (the runbook)
+├── lib/                           # shared helpers the node-run wrappers source
+│   ├── ask.sh                     #   interactive prompts (ask / ask_secret / confirm)
+│   ├── caddy.sh                   #   fill the Caddyfile TLS line from TLS_MODE
+│   └── secrets.sh                 #   xtrace-safe token fill (default.json secrets)
 ├── proxmox/
-│   ├── create-containers.sh       # pct create both LXC CTs on Ceph
-│   └── ha-setup.sh                # register both CTs as HA resources
+│   ├── create-containers.sh       # pct create the LXC CTs on Ceph (DB + App, optional rproxy)
+│   └── ha-setup.sh                # register the CTs as HA resources
 ├── db/
 │   ├── deploy-db-to-ct.sh         # RUN ON THE NODE → sets up the whole DB CT  ← use this
-│   ├── setup-db.in-ct.sh          # (runs inside CT 5010 — the wrapper runs it)
+│   ├── setup-db.in-ct.sh          # (runs inside the DB CT — the wrapper runs it)
 │   ├── mongod.conf                # reference config (auth + bind + cache)
-│   ├── create-app-user.js         # manual user creation (alternative)
+│   ├── create-app-user.js         # add ANOTHER db + user (a 2nd instance), no reinstall
 │   ├── backup-mongo.sh            # mongodump with rotation (pushed into the CT)
 │   ├── mongo-backup.service       # systemd oneshot for the backup
 │   └── mongo-backup.timer         # daily backup schedule
 ├── app/
-│   ├── deploy-app-to-ct.sh        # RUN ON THE NODE → sets up the whole app CT  ← use this
-│   ├── setup-app.in-ct.sh         # (runs inside CT 5000 — the wrapper runs it)
+│   ├── deploy-app-to-ct.sh        # RUN ON THE NODE → sets up an app CT (bundled, or --app-only)  ← use this
+│   ├── setup-app.in-ct.sh         # (runs inside the App CT — the wrapper runs it)
+│   ├── update-app-to-ct.sh        # RUN ON THE NODE → snapshot + update an app CT to a new version  ← use this
+│   ├── update-app.in-ct.sh        # (runs inside the App CT — the update wrapper runs it)
 │   ├── default.json.example       # copy → default.json, fill in; the wrapper pushes it
 │   ├── openpoll.service           # systemd unit for the Node app
-│   ├── install-caddy.in-ct.sh     # (runs inside CT 5000 — the wrapper runs it)
-│   ├── Caddyfile                  # Caddy config: TLS + /node/5000/ → localhost:5000
-│   ├── tls-cloudflare-dns.md      # the Cloudflare DNS-01 cert setup Caddy uses
-│   └── apache-vhost.conf          # ALTERNATIVE: only if a SEPARATE external proxy fronts it
+│   ├── install-caddy.in-ct.sh     # (runs inside the CT that terminates TLS — App or rproxy)
+│   ├── Caddyfile                  # BUNDLED Caddy config: TLS + /node/5000/ → localhost:5000
+│   ├── tls-cloudflare-dns.md      # TLS options: Cloudflare DNS-01, certbot, acme.sh, or manual
+│   └── apache-vhost.conf          # ALTERNATIVE: only if a SEPARATE external Apache fronts it
+├── rproxy/                        # SPLIT topology — a standalone reverse-proxy CT
+│   ├── deploy-rproxy-to-ct.sh     # RUN ON THE NODE → sets up the rproxy CT  ← use this (split)
+│   └── Caddyfile.multi            # multi-backend Caddy config: /node/<port>/ → each app CT
 └── migration/
     ├── dump-from-windows.ps1      # mongodump on the old Windows box
     └── restore-to-ct.sh           # mongorestore into the new DB CT
 ```
 
-Every script has its settings (IPs, passwords, storage names) as variables at
-the top. **Read and edit those before running.** The examples use:
+Each node‑run script has its settings (IPs, ids, storage names) as variables at
+the top **and prompts you for them** (Enter keeps the default). Passwords + the
+Cloudflare token are prompted **hidden**. The example defaults:
 
 | Thing            | Example value                          |
 |------------------|----------------------------------------|
 | App container    | ID `5000`, IP `10.100.51.41`, app on `:5000` |
 | DB container     | ID `5010`, IP `10.100.51.42`              |
+| Rproxy container | ID `5030`, IP `10.100.51.40` (**split** only) |
 | Ceph storage     | `ceph-ct` (check `pvesm status`)       |
 | Bridge / gateway | `vmbr0` / `10.100.51.254`                    |
-| HTTPS front door | **Caddy inside the App CT** (`:443`) — no separate proxy box |
-| Public host      | `poll.example.com` (your domain → the App CT's `:443`) |
-| DB user          | `openpoll` on db `open_poll`           |
+| HTTPS front door | **Caddy** — in the App CT (bundled) or the rproxy CT (split), `:443` |
+| TLS              | Cloudflare DNS‑01 auto‑cert (default), or a manual cert you install |
+| Public host      | `poll.example.com` (your domain → whatever terminates `:443`) |
+| DB user / db     | `openpoll` on db `open_poll` (per instance, e.g. `open_poll_dev`) |
 
 > This example assumes the CTs sit on **VLAN 51** (`10.100.51.0/24`, gateway
 > `.254`). Change the IPs, gateway, and `VLAN_TAG` in `create-containers.sh` to
@@ -111,16 +190,20 @@ the top. **Read and edit those before running.** The examples use:
 - A working Proxmox **cluster with quorum** and a healthy **Ceph** pool
   (`ceph -s` is `HEALTH_OK`, pool `size=3/min_size=2`). With 4 nodes you keep
   quorum and full Ceph availability with one node offline.
-- A **domain name** for the app (e.g. `poll.example.com`) and a **Cloudflare API
-  token** for its zone. Caddy — installed *inside the App container* in Step 4 —
-  uses the token to get the TLS cert via the DNS-01 challenge, so you only forward
-  **port 443** from your router to the App container (no port 80, no separate
-  proxy box; the old Windows Apache is fully replaced).
-- Your **Slack app credentials** (`client_id`, `client_secret`,
-  `signing_secret`) — already in your current Windows `config/default.json`.
+- A **domain name** for the app (e.g. `poll.example.com`). For the default TLS
+  mode, a **Cloudflare API token** for its zone — Caddy uses it to get the cert via
+  the DNS-01 challenge, so you only forward **port 443** from your router (no port
+  80). (Or pick `TLS_MODE=manual` and install your own cert — no token needed.)
+- Your **Slack app credentials** (`client_id`, `client_secret`, `signing_secret`)
+  — from your Slack app at <https://api.slack.com/apps> (create one if this is a
+  new install). **Migrating?** They're already in your existing
+  `config/default.json`.
 
-> The whole migration is done **in parallel**: build the new stack while Windows
-> keeps serving. The only downtime is a short cutover window at the very end.
+> **Migrating from an existing server?** You can build the whole new stack **in
+> parallel** while the old box keeps serving, then do the optional data restore +
+> cutover ([Step 6](#step-6--go-live-optionally-restore-from-an-existing-install))
+> last — the only downtime is a short cutover window. A fresh install has no
+> cutover at all.
 
 ---
 
@@ -128,15 +211,19 @@ the top. **Read and edit those before running.** The examples use:
 
 Get this kit onto a Proxmox node (clone the repo or copy `docs/example/proxmox/`)
 and `cd` into it — every `bash …/…` and `pct push …/…` command below uses paths
-relative to that folder. Then edit the variables in `proxmox/create-containers.sh`
-(storage name, template, IPs) and run:
+relative to that folder. Then run:
 
 ```bash
 bash proxmox/create-containers.sh
 ```
 
-This creates CT `5000` (app) and CT `5010` (db) on Ceph, unprivileged, set to
-start on boot. **No root password is set** — you administer the containers from
+It **prompts** for the storage name, template, bridge/VLAN/gateway and each CT's
+id/host/IP/size (Enter keeps the shown default), and asks whether to also create a
+**reverse‑proxy CT** (answer yes for the **split** topology). This creates CT
+`5000` (app) and CT `5010` (db) — plus the rproxy CT if you enabled it — on Ceph,
+unprivileged, set to start on boot. To add **another** app instance later, re‑run
+it with a different App id/host/IP (existing CTs are skipped; a clashing IP is
+rejected). **No root password is set** — you administer the containers from
 the Proxmox host with `pct enter 5010` (drops you into a root shell, no login
 needed) and copy files in with `pct push 5010 localfile /root/localfile`. Set a
 password with `pct exec 5010 -- passwd` only if you want console/SSH login.
@@ -144,48 +231,67 @@ password with `pct exec 5010 -- passwd` only if you want console/SSH login.
 > The root filesystem **must** be on Ceph (shared storage). A container on local
 > storage cannot be made highly available or migrated.
 
-## Step 2 — Set up MongoDB (CT 5010)
+## Step 2 — Set up MongoDB (the DB CT)
 
-Set `DB_BIND_IP` (the DB CT's IP from `create-containers.sh`) and the two
-passwords, then run the deploy wrapper **on the Proxmox node** — it pushes the
-scripts into CT 5010 and runs them there for you:
+Run the deploy wrapper **on the Proxmox node** — it prompts for the DB CT id,
+bind IP, app user/database name, and the two MongoDB passwords (**hidden**), then
+pushes the scripts into the DB CT and runs them there for you:
 
 ```bash
-nano db/setup-db.in-ct.sh    # set DB_BIND_IP + the two passwords
-nano db/backup-mongo.sh      # set the same openpoll password
-bash db/deploy-db-to-ct.sh   # pushes + runs everything inside CT 5010
+bash db/deploy-db-to-ct.sh   # prompts, then sets up everything inside the DB CT
 ```
 
-`deploy-db-to-ct.sh` installs MongoDB 8.0, writes a hardened `/etc/mongod.conf`
+> Prefer to type nothing? Pass values as env:
+> `NONINTERACTIVE=1 ADMIN_DB_PASS=… APP_DB_PASS=… bash db/deploy-db-to-ct.sh`.
+> Secrets are never written into the kit's tracked files — the passwords go
+> straight into the CT (the backup credential lands in a root‑only
+> `/etc/openpoll/mongo-backup.env` the timer reads). Use a **URI‑safe** password
+> (it goes into a `mongodb://…` string) or URL‑encode reserved characters.
+
+`deploy-db-to-ct.sh` installs MongoDB (**7.0 by default** — safe on every current
+kernel, incl. ≥ 6.19; pick 8.0 at the prompt only on a host kernel ≤ 6.18), writes a hardened `/etc/mongod.conf`
 (auth on, bound to loopback + the CT's LAN IP only — never the internet),
-creates an `admin` user and an `openpoll` app user scoped to `open_poll`, and
-enables the daily `mongodump` backup timer. It fails fast (clear message) if the
-CPU lacks AVX or a user can't be created, so a green run means success.
+creates an `admin` user and your app user scoped to its database, and enables the
+daily `mongodump` backup timer. It fails fast (clear message) if the CPU lacks
+AVX or a user can't be created, so a green run means success.
 
-## Step 3 — Set up the app + HTTPS (CT 5000)
+> **(split)** For a second independent instance sharing this DB CT, give it its
+> own database + user (e.g. `open_poll_dev`) **without** reinstalling MongoDB —
+> see `db/create-app-user.js`.
 
-Prepare three files in the `app/` folder **on the node**, then run one wrapper:
+## Step 3 — Set up the app + HTTPS (the App CT)
+
+Copy the config template and set the values that aren't secrets, then run the
+wrapper — it **prompts** for the App CT id/port, whether to install Caddy here,
+the TLS mode, and (hidden) the Slack secrets + Cloudflare token:
 
 ```bash
 cp app/default.json.example app/default.json
-nano app/default.json        # mongo_url (10.100.51.42 + openpoll password),
-                             # client_id / client_secret / signing_secret,
-                             # state_secret, oauth_success / oauth_failure
-nano app/Caddyfile           # set your real domain (e.g. poll.example.com)
-printf 'CF_API_TOKEN=%s\n' 'YOUR_CLOUDFLARE_TOKEN' > app/cloudflare.env
+nano app/default.json        # mongo_url HOST (+ db name), oauth_success/oauth_failure,
+                             # your domain. The Slack secrets + mongo password can be
+                             # answered at the prompts instead (hidden) — or set here.
+nano app/Caddyfile           # BUNDLED only: set your real domain (poll.example.com)
 
-bash app/deploy-app-to-ct.sh  # pushes + sets up everything inside CT 5000
+bash app/deploy-app-to-ct.sh             # BUNDLED: app + Caddy in this CT
+# or, for the split topology (no Caddy here):
+bash app/deploy-app-to-ct.sh --app-only  # SPLIT: app only, fronted by the rproxy CT
 ```
 
 `deploy-app-to-ct.sh` installs Node 24 + Yarn 4 and the app under
 `/opt/openpollslack-i18n`, pushes your `default.json` (`chmod 600`), starts the
-`openpoll` systemd service, then installs Caddy and starts it on `:443` (see
-**Step 4** for what Caddy does and how the cert works). A healthy start logs
-`Bolt app is running!`. Verify:
+`openpoll` systemd service, and — unless `--app-only` — installs Caddy on `:443`
+(see **Step 4**). At the prompts it offers to fill the Slack secrets in
+`default.json` (hidden, never echoed); the **mongo password** you set by hand in
+the `mongo_url` line. A healthy start logs `Bolt app is running!`. Verify:
 
 ```bash
 pct exec 5000 -- curl -s http://127.0.0.1:5000/healthz   # {"ok":true,"mongo":"up",...}
 ```
+
+> **(split)** Run `deploy-app-to-ct.sh --app-only` **once per instance** (edit
+> `app/default.json` for each instance's Slack app + database before each run).
+> No Caddyfile or Cloudflare token is needed on app‑only CTs — those live on the
+> rproxy CT. After the app CTs are up, do **Step 3b**.
 
 > **Secrets:** `app/default.json` and `app/cloudflare.env` hold your secrets and
 > are git‑ignored. Back them up off‑box (NAS / Proxmox Backup Server) with the
@@ -193,17 +299,43 @@ pct exec 5000 -- curl -s http://127.0.0.1:5000/healthz   # {"ok":true,"mongo":"u
 > the Cloudflare token. Ceph protects against a dead disk, not an accidental
 > delete or a rebuilt container.
 
+## Step 3b — Set up the reverse proxy (split topology only)
+
+Skip this for the bundled setup. With your app‑only CTs running, point the proxy
+at them and bring up HTTPS in one place:
+
+```bash
+nano rproxy/Caddyfile.multi   # set your domain + one backend line per instance:
+                              #   handle_path /node/5000/* { import app_backend 10.100.51.61:5000 }
+                              #   handle_path /node/5001/* { import app_backend 10.100.51.63:5001 }
+bash rproxy/deploy-rproxy-to-ct.sh   # prompts rproxy CT id + TLS mode (+ CF token, hidden)
+```
+
+`deploy-rproxy-to-ct.sh` installs Caddy in the rproxy CT (reusing the same
+installer as the bundled path), finalizes the TLS line from your chosen mode,
+validates the config, and starts Caddy. Each `/node/<port>/` backend is a
+**separate Slack app + database** — register its URLs in its own Slack app
+(Step 5), and give it its own `mongo_db_name`.
+
 ## Step 4 — How HTTPS works (Caddy, set up by Step 3)
 
-`deploy-app-to-ct.sh` already installed and started Caddy inside CT 5000 — this
-section just explains it. Caddy terminates HTTPS on `:443`, serves the app under
-the **`/node/5000/`** prefix, strips it, and forwards only the app's real paths
-(`/slack/*`, `/healthz`, `/ping`) to `localhost:5000`; everything else returns
-403. The certificate comes from the **Cloudflare DNS‑01** challenge using the
-token from `app/cloudflare.env` — no inbound port 80 needed. Details + how to
-create the scoped token: [`app/tls-cloudflare-dns.md`](app/tls-cloudflare-dns.md).
+Step 3 already installed and started Caddy (in the App CT for bundled, the rproxy
+CT for split) — this section just explains it. Caddy terminates HTTPS on `:443`,
+serves the app under the **`/node/<port>/`** prefix, strips it, and forwards only
+the app's real paths (`/slack/*`, `/healthz`, `/ping`) to the app; everything else
+returns 403.
 
-Point your router's **443** forward at the App container (`10.100.51.41`), then:
+**TLS mode (you chose this at the prompt).**
+- **`cloudflare`** (default): the certificate comes from the **Cloudflare DNS‑01**
+  challenge using the token you entered — no inbound port 80 needed. Details + how
+  to create the scoped token: [`app/tls-cloudflare-dns.md`](app/tls-cloudflare-dns.md).
+- **`manual`**: Caddy is installed with **no** auto‑cert and needs **no** token —
+  the deploy writes a `tls <cert> <key>` line and you drop your own cert/key in
+  (or run your own certbot/acme.sh). See *Option D* in
+  [`app/tls-cloudflare-dns.md`](app/tls-cloudflare-dns.md).
+
+Point your router's **443** forward at the App CT's IP (whatever you set — the
+demo scripts use `10.100.51.41` as the example), then:
 
 ```bash
 pct exec 5000 -- journalctl -u caddy -n 20    # watch it obtain the cert via DNS-01
@@ -214,18 +346,23 @@ curl -s https://poll.example.com/node/5000/healthz
 > rewriting in the Caddyfile (it doesn't by default). The `/node/5000/` prefix
 > doesn't affect the signature (that covers the timestamp + body, not the URL).
 >
-> **Keep `:5000` off the LAN.** Only `:443` is forwarded from the internet, and
-> Caddy reaches the app over `localhost:5000`. But the Node app binds
-> `0.0.0.0:5000`, so other hosts on VLAN 51 could hit `http://10.100.51.41:5000`
-> directly — bypassing Caddy's TLS and the `/node/5000/` allowlist. Enable the
-> Proxmox firewall on CT 5000 and allow inbound only `:443` (drop `:5000`) — see
-> the firewall note under Gotchas.
+> **Keep `:5000` off the LAN (bundled).** Only `:443` is forwarded from the
+> internet, and Caddy reaches the app over `localhost:5000`. But the Node app
+> binds `0.0.0.0:5000`, so other hosts on VLAN 51 could hit the app directly at
+> `http://<App-CT-IP>:5000` (the demo's `10.100.51.41`) — bypassing Caddy's TLS
+> and the `/node/5000/` allowlist. Enable the Proxmox firewall on the App CT and allow
+> inbound only `:443` (drop `:5000`) — see the firewall note under Gotchas.
+>
+> **(split)** In the split topology the app CTs run **no Caddy** and the rproxy
+> CT reaches them over the LAN at `:5000`, so the rule is different: the app CT
+> ACCEPTs `:5000` **only from the rproxy CT's IP** (and has no `:443`); the rproxy
+> CT ACCEPTs `:443`. Exact per‑role rules are under Gotchas.
 >
 > **Already run a separate reverse proxy?** If you'd rather front the app from an
 > external Apache/Caddy box instead of Caddy‑in‑the‑CT, see
 > [`app/apache-vhost.conf`](app/apache-vhost.conf) (it proxies `/node/5000/` to
-> `http://10.100.51.41:5000`). For a clean migration *off* Windows, the
-> Caddy‑in‑the‑CT path above is the self‑contained option.
+> `http://10.100.51.41:5000`). If you don't already run one, the Caddy‑in‑the‑CT
+> path above is the self‑contained option (nothing external to maintain).
 
 ## Step 5 — Update your Slack app's URLs
 
@@ -250,6 +387,11 @@ Slack app config (<https://api.slack.com/apps> → your app):
   the app receives `/slack/oauth_redirect` and completes the install.
   (`stateVerification:false` is a separate setting — it skips the OAuth state‑param
   check — not what makes the prefix work.)
+- **(split)** Do this **per instance**, each in its **own** Slack app: production
+  under `/node/5000/`, dev under `/node/5001/`, etc. Each app's five URLs use its
+  own prefix and its own `signing_secret`/`client_id`. The reverse proxy routes by
+  path only — one Slack app pointed at two prefixes will fail signature checks on
+  the backend whose `signing_secret` doesn't match.
 
 ### Optional — running behind a non‑standard external port
 
@@ -273,63 +415,91 @@ hostname, not a port), with three adjustments:
   so you'll know immediately. OAuth still works because the app uses the redirect
   URL you *register* (port and all), not one it generates.
 
-## Step 6 — Migrate the data + cut over
+## Step 6 — Go live (optionally restore from an existing install)
 
-All Slack tokens live in MongoDB, so once the data and config are in place and
-your router forwards 443 to the App container (where Caddy terminates HTTPS), the
-app just keeps working.
+The stack is now running. **A fresh install has nothing to migrate** — just go
+live:
 
-**Dry run first** (Windows stays live):
+1. Point your router's **443** at whatever terminates TLS — the **App CT**
+   (bundled) or the **rproxy CT** (split), e.g. `10.100.51.41`.
+2. Confirm it's reachable: `curl -s https://poll.example.com/node/5000/healthz`.
+3. **Install it into Slack:** open the install URL in a browser —
+   `https://poll.example.com/node/5000/slack/install` — to add the app to your
+   workspace, then run `/poll`.
+
+That's it: the app starts with an empty database and fills as people use it. (No
+migration, no cutover.) Skip the rest of this step unless you're moving data from
+an existing server.
+
+### Optional — restore data from an existing Open Poll Plus server
+
+Do this **only if** you're moving from an existing install (a Windows box, or
+anywhere) and want your workspaces, polls and scheduled polls to carry over. All
+Slack tokens live in MongoDB, so restoring the database is all it takes — your
+domain and Slack URLs don't change, so Slack needs no reconfiguration.
+
+**Dry run first** (the old server stays live — build the new stack in parallel):
 
 ```powershell
-# on the Windows server (PowerShell, MongoDB Database Tools installed):
+# on the OLD server (PowerShell + MongoDB Database Tools; dump-from-windows.ps1 shown):
 .\dump-from-windows.ps1            # -> open_poll_<date>.archive.gz
 ```
 
 ```bash
-# copy the archive to the DB CT (WinSCP/scp), then:
+# copy the archive to the DB CT (scp/WinSCP), then on a Proxmox node:
 pct push 5010 open_poll_<date>.archive.gz /root/dump.archive.gz
 pct push 5010 migration/restore-to-ct.sh  /root/restore-to-ct.sh
-pct enter 5010
-nano /root/restore-to-ct.sh       # set the openpoll password
-bash /root/restore-to-ct.sh /root/dump.archive.gz
+# restore (pass the openpoll password as env — set APP_DB_NAME too for a non-default db):
+pct exec 5010 -- env APP_DB_PASS='your-openpoll-password' \
+  bash /root/restore-to-ct.sh /root/dump.archive.gz
 ```
 
-> **Do the App container's first start now, during the dry run — not in the
-> cutover window.** On first start the app runs its DB migrations *before* the
-> web server comes up (`migrations.migrate()` in `index.js`). If your Windows
-> data already migrated (it has, since it runs this same app version) this is a
-> quick no‑op; but if you ever import very old, pre‑migration data, the one‑time
-> votes‑collection rewrite can run long and must not be interrupted. Either way,
-> watch the logs for `End database migration.` followed by `Bolt app is
-> running!` before trusting it. Doing it here means the cutover re‑sync starts
-> from an already‑migrated database and comes up fast.
+> **Watch the first start.** On first start the app runs its DB migrations
+> *before* the web server comes up (`migrations.migrate()` in `index.js`). If your
+> existing data is already on this app version (likely — same app) it's a quick
+> no‑op; importing very old, pre‑migration data can run long and must not be
+> interrupted. Watch the logs for `End database migration.` then
+> `Bolt app is running!`. Doing the restore during the dry run means the final
+> cutover re‑sync starts from an already‑migrated DB and comes up fast.
 
 Confirm your real workspaces/polls are present (`/healthz` green, counts look
 right).
 
 **Cutover window** (the only downtime — a few minutes):
 
-1. **Stop** the old Windows app (so no new votes land mid‑copy).
-2. Re‑run `dump-from-windows.ps1` and `restore-to-ct.sh` to catch the last
-   changes (`--drop` makes the restore safe to repeat).
-3. **Repoint the firewall:** move your router's port‑443 forward from the
-   Windows box to the App container (`10.100.51.41`). Your domain and the
-   `/node/5000/` Slack URLs stay the same, so Slack needs no reconfiguration.
+1. **Stop** the old app (so no new votes land mid‑copy).
+2. Re‑run the dump + `restore-to-ct.sh` to catch the last changes (`--drop` makes
+   the restore safe to repeat).
+3. **Repoint the firewall:** move your router's port‑443 forward from the old box
+   to the new front door (your front-door CT's IP — `10.100.51.41` is just the
+   demo's example). Your domain and the `/node/5000/` Slack
+   URLs stay the same, so Slack needs no reconfiguration.
 4. Confirm `https://poll.example.com/node/5000/healthz` is green and run `/poll` in Slack.
 
-Leave Windows powered off for a day or two as a fallback, then decommission it.
+Leave the old server off for a day or two as a fallback, then decommission it.
 
 ## Step 7 — Turn on Proxmox HA
 
 ```bash
-# on any node, after both containers work:
-bash proxmox/ha-setup.sh
-ha-manager status        # both ct:5000 and ct:5010 should be "started"
+# on any node, after the containers work:
+bash proxmox/ha-setup.sh   # prompts for the DB id, app id(s), and rproxy id
+ha-manager status          # the registered ct:NNNN should be "started"
 ```
+
+It prompts for the DB CT id, the app CT id(s) (space‑separated — list them all in
+the split topology), and the reverse‑proxy CT id (blank for bundled). Re‑running
+is safe — already‑registered resources are skipped.
 
 Now if a node fails, the HA manager restarts the affected container on a
 surviving node automatically.
+
+> **(split) Register the rproxy CT.** It terminates TLS for **every** backend, so
+> it is a **single point of failure** — if it (or its node) goes down, all
+> instances are unreachable until it restarts. HA bounds that to a ~1–2 min
+> node‑failure restart; it does **not** prevent a bad Caddy reload / cert failure
+> from taking everything down at once. For true proxy redundancy you'd run two
+> proxies behind a VIP (keepalived) or DNS failover — out of scope here, but worth
+> knowing the rproxy concentrates risk that bundled per‑app CTs don't.
 
 ## Step 8 — Verify failover (recommended)
 
@@ -383,30 +553,37 @@ only if you really want desktop drag‑and‑drop.
 > `openpoll` user — it holds secrets.
 
 ### Updating the app to a new version
-The code is a git clone at `/opt/openpollslack-i18n`. **Snapshot first** so you
-can roll back instantly if a release misbehaves (Ceph snapshots are fast):
+The code is a git clone at `/opt/openpollslack-i18n`. One wrapper does the whole
+thing **on the node** — it takes a pre‑update Ceph snapshot (instant rollback),
+pulls/checks out the version, re‑syncs deps to that ref's `yarn.lock`, fixes
+ownership, restarts the service, and waits for a healthy start:
 
 ```bash
-# on a Proxmox node — safety net before any update:
-pct snapshot 5000 pre-update            # roll back with: pct rollback 5000 pre-update
-
-pct enter 5000
-cd /opt/openpollslack-i18n
-git pull                               # latest of the current branch (master by default)
-# — or deploy a specific version instead of tracking master:
-#   git fetch --tags --prune origin && git checkout 4.1.1.1   # a release tag (list: git tag)
-corepack yarn install --immutable      # sync deps to that ref's yarn.lock
-chown -R openpoll:openpoll .           # setup ran as root; keep ownership correct
-systemctl restart openpoll
-journalctl -u openpoll -f              # expect "Bolt app is running!"
+bash app/update-app-to-ct.sh                  # prompts: CT id, version (blank = pull latest), snapshot? (Y)
+# or non-interactively:
+APP_REF=4.1.1.1 NONINTERACTIVE=1 bash app/update-app-to-ct.sh   # deploy a specific release tag
 ```
 
+It prompts for the App CT id, the version to deploy (a **tag/branch**, or blank
+to pull the latest of the current branch), and whether to snapshot first
+(default yes). Roll back instantly if a release misbehaves:
+
+```bash
+pct rollback <APP_ID> pre-update
+```
+
+Works for **both** bundled and app‑only CTs (it only touches the Node app, never
+Caddy). Run it once per app CT in the split topology. Under the hood it runs
+`app/update-app.in-ct.sh` inside the CT (`git pull`/`checkout` →
+`corepack yarn install --immutable` → `chown` → `systemctl restart openpoll` →
+wait on `/healthz`).
+
 - The app runs any pending **DB migrations on startup**, before it serves
-  traffic — watch for `End database migration.` then `Bolt app is running!`
-  (same caveat as Step 6).
-- If a release bumps the **Node major version**, re‑run the Node install step
-  from `app/setup-app.in-ct.sh` first.
-- The **DB container** is updated separately: snapshot CT 5010, then
+  traffic — the wrapper waits for `/healthz`; watch for `End database migration.`
+  then `Bolt app is running!` (same caveat as Step 6).
+- If a release bumps the **Node major version**, re‑run `app/deploy-app-to-ct.sh`
+  (or the Node install step in `app/setup-app.in-ct.sh`) first, then update again.
+- The **DB container** is updated separately: snapshot the DB CT, then
   `apt-get update && apt-get upgrade` inside it, one MongoDB minor series at a
   time. Your nightly `mongodump` is the extra safety net.
 
@@ -427,22 +604,48 @@ journalctl -u openpoll -f              # expect "Bolt app is running!"
   that `authSource=open_poll` matches where the user was created, and that
   `bindIp` in `mongod.conf` includes the DB CT's IP. Test from CT 5000:
   `mongosh "mongodb://openpoll:<pw>@10.100.51.42:27017/open_poll?authSource=open_poll" --eval 'db.runCommand({ping:1})'`
-- **`mongod` dies immediately on start** → MongoDB 5.0+ needs a CPU with AVX
-  (`lscpu | grep -i avx`); `setup-db.in-ct.sh` now checks this up front. Also note
-  `vm.max_map_count` is set on the **host**, not inside the unprivileged CT.
+- **`mongod` dies immediately on start** → two common causes, both checked
+  up‑front by `setup-db.in-ct.sh`:
+  - **No AVX:** MongoDB 5.0+ needs a CPU with AVX (`lscpu | grep -i avx`). Run the
+    CT on an AVX‑capable node, or pin `MONGO_MAJOR=4.4`.
+  - **Host kernel ≥ 6.19** (log: *"Linux kernel versions 6.19 and newer has a known
+    incompatibility"*, MongoDB [SERVER‑121912](https://jira.mongodb.org/browse/SERVER-121912)):
+    MongoDB **8.0+** bundles a TCMalloc that crashes on kernel 6.19+. An LXC shares
+    the **host** kernel, so the CT inherits the node's. **The kit defaults to
+    MongoDB 7.0** (unaffected), so you only hit this if you *chose* 8.0 on a 6.19+
+    host. **Fixed entirely inside the CT — this kit never touches the host** (no
+    kernel pinning, no node reboot): re‑deploy with **MongoDB 7.0** — re‑run
+    `deploy-db` and keep/choose `7.0` (or pass `MONGO_MAJOR=7.0`). To switch an
+    already‑provisioned CT (apt won't downgrade 8.0→7.0 in place), re‑run with
+    **`--reset`**, which purges MongoDB + its data in the CT first, then reinstalls
+    (DESTRUCTIVE; confirmed before it runs):
+    `MONGO_MAJOR=7.0 bash db/deploy-db-to-ct.sh --reset`.
+    Return to 8.0 once SERVER‑121912 is fixed.
+  - Also note `vm.max_map_count` is set on the **host**, not inside the unprivileged CT.
 - **HA won't relocate a container** → its disk must be on shared storage (Ceph),
   not local. Check with `pct config 5000 | grep rootfs`.
 - **Lock MongoDB down further (defense in depth):** `bindIp` keeps Mongo off the
-  internet; also enable the Proxmox firewall on CT 5010 to accept `27017` only
-  from CT 5000's IP, and never port‑forward 27017.
-- **Lock down the App CT too:** the Node app binds `0.0.0.0:5000`, so on the LAN
-  it's reachable directly (bypassing Caddy + TLS). Enable the Proxmox firewall on
-  CT 5000 with inbound `ACCEPT tcp dport 443` (+ established/related) and drop the
-  rest — that exposes only HTTPS and hides `:5000` from VLAN 51.
+  internet; also enable the Proxmox firewall on the DB CT to accept `27017` only
+  from **each app CT's IP** (a list — in the split topology there are several),
+  and never port‑forward 27017.
+- **Firewall — per role (this matters; the bundled and split rules differ):**
+  the Node app binds `0.0.0.0:5000`, so on the LAN it's reachable directly
+  (bypassing TLS). Enable the Proxmox firewall and set inbound rules to match
+  your topology:
+  - **Bundled App CT:** `ACCEPT tcp dport 443` (+ established/related), **drop the
+    rest** — exposes only HTTPS, hides `:5000` from the LAN. (Caddy reaches the app
+    over `localhost`, so nothing on the LAN needs `:5000`.)
+  - **Split app‑only CT:** `ACCEPT tcp dport 5000` **only from the rproxy CT's IP**
+    (+ established/related), drop the rest, and **no `:443`** (no Caddy here). A
+    blanket "drop `:5000`" here would 502 every request — the rproxy must reach it.
+  - **Split rproxy CT:** `ACCEPT tcp dport 443` (+ established/related), drop the
+    rest; no inbound `:5000`.
 - **502 right after a reboot/failover is normal:** Caddy answers `:443` at once,
-  but `/node/5000/*` returns 502 until the app finishes its startup migrations and
-  logs `Bolt app is running!`. Point uptime checks at `/healthz` and treat a brief
-  startup 502 as expected.
+  but `/node/<port>/*` returns 502 until that app finishes its startup migrations
+  and logs `Bolt app is running!`. **(split)** a single app CT failing over 502s
+  **only its own** `/node/<port>/` while the others stay green; the rproxy CT
+  failing over takes **all** backends down for its restart window. Point uptime
+  checks at each `/node/<port>/healthz`.
 - **Quorum note:** 4 nodes tolerate **one** node down at a time for HA; don't
   take two down together, or the cluster loses quorum and HA pauses. (A corosync
   QDevice on a small always‑on box adds a tie‑breaker vote if you want to
@@ -467,6 +670,13 @@ copies never double‑post. If a ~1–2 min restart ever becomes unacceptable, y
 can later run **two App containers active‑active** behind the same proxy
 (load‑balanced) with a **MongoDB replica set**, and a node failure becomes ~0
 downtime. That's more moving parts — only do it if you actually need it.
+
+> Note this is **not** the [split topology](#bundled-vs-split--which-do-i-want):
+> active‑active runs **two copies of one** Slack app under **one** prefix
+> (load‑balanced, shared replica‑set DB) for redundancy. Split runs **several
+> different** Slack apps under **different** prefixes (each its own DB). Different
+> goals — don't confuse one prefix‑per‑instance (split) with two‑backends‑one‑prefix
+> (active‑active).
 
 ---
 
