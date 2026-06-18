@@ -305,9 +305,10 @@ Skip this for the bundled setup. With your app‑only CTs running, point the pro
 at them and bring up HTTPS in one place:
 
 ```bash
-nano rproxy/Caddyfile.multi   # set your domain + one backend line per instance:
-                              #   handle_path /node/5000/* { import app_backend 10.100.51.61:5000 }
-                              #   handle_path /node/5001/* { import app_backend 10.100.51.63:5001 }
+nano rproxy/Caddyfile.multi   # set your domain + one backend block per instance, e.g.:
+                              #   handle_path /node/5000/* {
+                              #       import app_backend 10.100.51.61:5000
+                              #   }
 bash rproxy/deploy-rproxy-to-ct.sh   # prompts rproxy CT id + TLS mode (+ CF token, hidden)
 ```
 

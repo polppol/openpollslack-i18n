@@ -144,9 +144,12 @@ if [ "${INSTALL_CADDY}" = true ]; then
   _FINAL="$(mktemp)"; trap 'rm -f "${_FINAL}"' EXIT
   caddy_finalize "${HERE}/Caddyfile" "${_FINAL}" "${TLS_MODE}" "${TLS_CERT_PATH}" "${TLS_KEY_PATH}"
   pct push "${APP_ID}" "${_FINAL}" /etc/caddy/Caddyfile
+  pct exec "${APP_ID}" -- caddy fmt --overwrite /etc/caddy/Caddyfile
 
   if [ "${TLS_MODE}" = cloudflare ]; then
-    pct exec "${APP_ID}" -- caddy validate --config /etc/caddy/Caddyfile
+    # validate provisions the cloudflare DNS module (needs the token); a bare
+    # `caddy validate` doesn't read the systemd EnvironmentFile, so load it first.
+    pct exec "${APP_ID}" -- bash -c 'set -ea; . /etc/caddy/cloudflare.env; caddy validate --config /etc/caddy/Caddyfile'
     pct exec "${APP_ID}" -- systemctl enable caddy
     pct exec "${APP_ID}" -- systemctl restart caddy
   else
@@ -169,6 +172,8 @@ if [ "${INSTALL_CADDY}" = true ]; then
     echo "  manual TLS: put your cert+key at ${TLS_CERT_PATH} / ${TLS_KEY_PATH}, then: pct exec ${APP_ID} -- systemctl restart caddy"
 else
   echo "  app-only: add this CT as a backend in your reverse-proxy CT's Caddyfile.multi:"
-  echo "      handle_path /node/${APP_PORT}/* { import app_backend <this-CT-IP>:${APP_PORT} }"
+  echo "      handle_path /node/${APP_PORT}/* {"
+  echo "          import app_backend <this-CT-IP>:${APP_PORT}"
+  echo "      }"
   echo "  then deploy/reload the rproxy:  bash rproxy/deploy-rproxy-to-ct.sh"
 fi

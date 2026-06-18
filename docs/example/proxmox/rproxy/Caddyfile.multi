@@ -15,8 +15,10 @@
 #   - set each backend's LAN address (IP:PORT) to your app CTs
 # The __TLS_DIRECTIVE__ line is filled in by rproxy/deploy-rproxy-to-ct.sh from
 # TLS_MODE (cloudflare DNS-01, or a manual cert). If you deploy by hand, replace
-# __TLS_DIRECTIVE__ with either:
-#   tls { dns cloudflare {env.CF_API_TOKEN} }      # DNS-01 (see app/tls-cloudflare-dns.md)
+# __TLS_DIRECTIVE__ with either (Caddy needs '{' at end of line, '}' on its own):
+#   tls {                                          # DNS-01 (see app/tls-cloudflare-dns.md)
+#       dns cloudflare {env.CF_API_TOKEN}
+#   }
 #   tls /etc/caddy/cert.pem /etc/caddy/key.pem     # a cert you install yourself
 
 # Reusable per-backend block: forward ONLY the app's real paths, 403 everything
@@ -24,10 +26,18 @@
 # LAN address, passed by `import app_backend <ip:port>`. Do NOT add body/charset
 # rewriting — Slack verifies its signature on the raw body.
 (app_backend) {
-	handle /slack/* { reverse_proxy {args[0]} }
-	handle /healthz { reverse_proxy {args[0]} }
-	handle /ping    { reverse_proxy {args[0]} }
-	handle          { respond 403 }
+	handle /slack/* {
+		reverse_proxy {args[0]}
+	}
+	handle /healthz {
+		reverse_proxy {args[0]}
+	}
+	handle /ping {
+		reverse_proxy {args[0]}
+	}
+	handle {
+		respond 403
+	}
 }
 
 REPLACE_WITH_YOUR_DOMAIN {
@@ -36,10 +46,16 @@ REPLACE_WITH_YOUR_DOMAIN {
 	# One line per instance. handle_path STRIPS the /node/<port>/ prefix so each
 	# app sees plain /slack/... . The label is arbitrary; reusing the backend
 	# port number just makes the mapping easy to read.
-	handle_path /node/5000/* { import app_backend 10.100.51.61:5000 }   # PRODUCTION instance
-	handle_path /node/5001/* { import app_backend 10.100.51.63:5001 }   # DEV instance
+	handle_path /node/5000/* {
+		import app_backend 10.100.51.61:5000   # PRODUCTION instance
+	}
+	handle_path /node/5001/* {
+		import app_backend 10.100.51.63:5001   # DEV instance
+	}
 	# add more instances the same way:
-	# handle_path /node/<port>/* { import app_backend <app-ct-ip>:<port> }
+	# handle_path /node/<port>/* {
+	#     import app_backend <app-ct-ip>:<port>
+	# }
 
 	# Root + OAuth landing. Each instance's oauth_success / oauth_failure must
 	# point OUTSIDE any /node/<port>/ prefix (e.g. https://your.domain/?oauth=success),
@@ -58,6 +74,16 @@ REPLACE_WITH_YOUR_DOMAIN {
 # If path prefixes are awkward, give each instance its own subdomain. Caddy
 # issues a separate DNS-01 cert per host automatically (or use a *.example.com
 # wildcard). Use the snippet WITHOUT handle_path — there is no prefix to strip:
-#   prod.example.com { tls { dns cloudflare {env.CF_API_TOKEN} }  import app_backend 10.100.51.61:5000 }
-#   dev.example.com  { tls { dns cloudflare {env.CF_API_TOKEN} }  import app_backend 10.100.51.63:5001 }
+#   prod.example.com {
+#       tls {
+#           dns cloudflare {env.CF_API_TOKEN}
+#       }
+#       import app_backend 10.100.51.61:5000
+#   }
+#   dev.example.com {
+#       tls {
+#           dns cloudflare {env.CF_API_TOKEN}
+#       }
+#       import app_backend 10.100.51.63:5001
+#   }
 # Then register each instance's Slack URLs under its own host (no /node/<port>/ prefix).

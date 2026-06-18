@@ -36,7 +36,7 @@ apt-get install -y debian-keyring debian-archive-keyring apt-transport-https cur
 
 # --- Caddy from the official APT repo ---------------------------------------
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
   | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
 apt-get update
@@ -61,7 +61,14 @@ fi
 # --- Cloudflare DNS provider module -----------------------------------------
 # The stock Caddy binary has no DNS plugins; `caddy add-package` swaps in a
 # build that includes the Cloudflare provider (needed for the DNS-01 challenge).
-caddy add-package github.com/caddy-dns/cloudflare
+# Idempotent: on a re-run `add-package` exits non-zero ("package is already
+# added"), which under `set -e` would abort the whole deploy — so only build
+# when the module is actually missing. This script MUST be safe to re-run.
+if caddy list-modules 2>/dev/null | grep -qi 'dns.providers.cloudflare'; then
+  echo "Cloudflare DNS module already present — skipping add-package."
+else
+  caddy add-package github.com/caddy-dns/cloudflare
+fi
 if caddy list-modules | grep -qi 'dns.providers.cloudflare'; then
   echo "Cloudflare DNS module present."
 else

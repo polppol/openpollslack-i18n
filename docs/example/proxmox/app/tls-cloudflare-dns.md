@@ -89,7 +89,9 @@ poll.example.com {
 
 # Wildcard variant — one cert for every app/subdomain (DNS-01 only):
 # *.example.com {
-#     tls { dns cloudflare {env.CF_API_TOKEN} }
+#     tls {
+#         dns cloudflare {env.CF_API_TOKEN}
+#     }
 #     ...
 # }
 ```

@@ -19,7 +19,7 @@ caddy_tls_directive() {
   local __cert="${2:-/etc/caddy/cert.pem}"
   local __key="${3:-/etc/caddy/key.pem}"
   case "${__mode}" in
-    cloudflare) printf 'tls { dns cloudflare {env.CF_API_TOKEN} }' ;;
+    cloudflare) printf 'tls {\n\tdns cloudflare {env.CF_API_TOKEN}\n}' ;;
     manual)     printf 'tls %s %s' "${__cert}" "${__key}" ;;
     *) echo "caddy.sh: unknown TLS_MODE '${__mode}' (use cloudflare|manual)" >&2; return 1 ;;
   esac
@@ -38,14 +38,18 @@ caddy_finalize() {
   __directive="$(caddy_tls_directive "${__mode}" "${__cert}" "${__key}")" || return 1
   # Replace ONLY a line whose sole content is the sentinel (ignoring
   # indentation) — so comment lines that merely mention __TLS_DIRECTIVE__ are
-  # left untouched. Indentation of the sentinel line is preserved.
+  # left untouched. The cloudflare directive spans multiple lines (Caddy forbids
+  # one-line blocks: '{' must end its line, '}' on its own line), so prepend the
+  # sentinel line's indentation to EACH line of the directive.
   awk -v d="${__directive}" '
     {
       t = $0
       sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
       if (t == "__TLS_DIRECTIVE__") {
         match($0, /^[ \t]*/)
-        print substr($0, 1, RLENGTH) d
+        ind = substr($0, 1, RLENGTH)
+        n = split(d, lines, "\n")
+        for (i = 1; i <= n; i++) print ind lines[i]
       } else {
         print
       }

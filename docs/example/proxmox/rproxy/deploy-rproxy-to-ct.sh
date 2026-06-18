@@ -64,7 +64,11 @@ fi
 # The multi-backend Caddyfile you must edit first (domain + backend IP:PORTs).
 [ -f "${HERE}/Caddyfile.multi" ] || {
   echo "ERROR: ${HERE}/Caddyfile.multi is missing." >&2; exit 1; }
-if grep -q "REPLACE_WITH" "${HERE}/Caddyfile.multi"; then
+# Strip "#" comments before checking — this file MENTIONS the placeholder in its
+# own header comments, so grepping the raw file would keep matching even after
+# you've edited the real domain line. (A domain never contains "#", so stripping
+# from "#" to end-of-line can't swallow a real value.)
+if sed 's/#.*//' "${HERE}/Caddyfile.multi" | grep -q "REPLACE_WITH"; then
   echo "ERROR: edit ${HERE}/Caddyfile.multi — set your domain (REPLACE_WITH_YOUR_DOMAIN) and each backend IP:PORT." >&2
   exit 1
 fi
@@ -101,8 +105,12 @@ if [ "${TLS_MODE}" = cloudflare ]; then
 fi
 
 echo ">>> Validating the Caddy config ..."
+pct exec "${RPROXY_ID}" -- caddy fmt --overwrite /etc/caddy/Caddyfile
 if [ "${TLS_MODE}" = cloudflare ]; then
-  pct exec "${RPROXY_ID}" -- caddy validate --config /etc/caddy/Caddyfile
+  # `caddy validate` provisions the cloudflare DNS module, which needs the token,
+  # but a bare validate does NOT read the systemd EnvironmentFile — so load
+  # /etc/caddy/cloudflare.env first (set -a exports it, like systemd does).
+  pct exec "${RPROXY_ID}" -- bash -c 'set -ea; . /etc/caddy/cloudflare.env; caddy validate --config /etc/caddy/Caddyfile'
   pct exec "${RPROXY_ID}" -- systemctl enable caddy
   pct exec "${RPROXY_ID}" -- systemctl restart caddy
 else

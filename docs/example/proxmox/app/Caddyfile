@@ -9,8 +9,11 @@
 # — set it to whatever path you register in Slack.
 #
 # Replace poll.example.com with your domain. The __TLS_DIRECTIVE__ line is filled
-# in by the deploy wrapper (app/deploy-app-to-ct.sh) based on TLS_MODE:
-#   cloudflare -> tls { dns cloudflare {env.CF_API_TOKEN} }   (DNS-01, see tls-cloudflare-dns.md)
+# in by the deploy wrapper (app/deploy-app-to-ct.sh) based on TLS_MODE (Caddy
+# needs '{' at end of line, '}' on its own line — no one-line blocks):
+#   cloudflare -> tls {                                      (DNS-01, see tls-cloudflare-dns.md)
+#                     dns cloudflare {env.CF_API_TOKEN}
+#                 }
 #   manual     -> tls /etc/caddy/cert.pem /etc/caddy/key.pem  (you install the cert)
 # If you edit/deploy this file by hand, replace __TLS_DIRECTIVE__ with one of those.
 
@@ -22,10 +25,18 @@ poll.example.com {
 	# other path under /node/5000/ gets a 403. Do NOT add request-body rewriting
 	# (compression/charset) here — Slack verifies its signature on the raw body.
 	handle_path /node/5000/* {
-		handle /slack/* { reverse_proxy 127.0.0.1:5000 }
-		handle /healthz { reverse_proxy 127.0.0.1:5000 }
-		handle /ping    { reverse_proxy 127.0.0.1:5000 }
-		handle          { respond 403 }
+		handle /slack/* {
+			reverse_proxy 127.0.0.1:5000
+		}
+		handle /healthz {
+			reverse_proxy 127.0.0.1:5000
+		}
+		handle /ping {
+			reverse_proxy 127.0.0.1:5000
+		}
+		handle {
+			respond 403
+		}
 	}
 
 	# Everything outside /node/5000/ (incl. your oauth_success / oauth_failure
