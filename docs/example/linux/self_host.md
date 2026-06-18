@@ -101,6 +101,8 @@ Inside the `config` folder, you have a `default.json.dist`. Copy it into `config
 
 The app listens on the `port` key from `config/default.json` (default `5000`); your HTTPS reverse proxy must forward the `/slack/*` paths to it — see [apache-ssl.md](../apache/apache-ssl.md) for an Apache example.
 
+> **⚠️ TLS/SSL inspection breaks Slack — exempt your Slack endpoint.** If a firewall/WAF in front of your reverse proxy does inbound **SSL inspection** — e.g. FortiGate **"HTTPS server protection"**, deep/SSL inspection, or anything that **terminates and re‑signs** the HTTPS connection — Slack will **reject your Request URLs** (the app‑config page shows *"Hmm, something's gone wrong"*) **even though the certificate that device presents is valid** and browsers/`curl` work fine. Slack's server‑side TLS client is stricter than a browser, and the inspected/re‑signed handshake never completes, so **your app logs nothing at all**. **Fix:** exempt the Slack‑facing hostname (or the `/slack/*` path) from SSL inspection so Slack's TLS reaches your proxy's real certificate end‑to‑end. Tell‑tale: `openssl s_client` to the proxy *from inside* shows your real cert, but the certificate a **remote** client / Slack negotiates is the inspection device's (e.g. a `*.yourdomain` wildcard).
+
 
 ### Create an app into slack
 To use the poll in slack workspace, you need to create an app into slack. Go to this page : https://api.slack.com/apps and click on `Create New App`. Fill the fields :

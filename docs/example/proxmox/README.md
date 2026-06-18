@@ -601,6 +601,26 @@ wait on `/healthz`).
   from its Proxmox **host**, so run NTP/chrony on the **host nodes** (you can't
   enable NTP inside an unprivileged CT). Slack rejects requests whose timestamp
   is off by more than ~5 minutes.
+- **Slack rejects your Request URL (*"Hmm, something's gone wrong"*) but browsers
+  / `curl` reach the proxy fine** → a firewall/WAF in front is doing inbound
+  **TLS/SSL inspection** (e.g. FortiGate **"HTTPS server protection"**, deep SSL
+  inspection). It **terminates and re‑signs** Slack's HTTPS, and Slack's strict
+  server‑side TLS client rejects that **even though the re‑signed cert is valid**.
+  The handshake dies at the inspecting device, so the app logs **nothing**.
+  **Fix: exempt the Slack‑facing hostname (or `/slack/*`) from SSL inspection** so
+  Slack's TLS reaches the proxy's real cert end‑to‑end. Tell‑tale: `openssl
+  s_client` to the proxy *from inside* shows your real Caddy cert, but the cert a
+  *remote* client / Slack negotiates is the inspection box's (e.g. `*.yourdomain`).
+- **Slash commands / buttons fail with "the app did not respond" and the app logs
+  `AuthorizationError: Failed fetching data from the Installation Store`** → the app
+  has no install token for that workspace in **this** instance's database (`token`
+  collection). Each `/node/<port>` instance has its own DB **and** its own Slack
+  app, so the OAuth install must complete **through this instance** — a reinstall
+  that landed in a *different* instance's DB won't help this one. Register
+  `…/node/<port>/slack/oauth_redirect` as the app's Redirect URL and open
+  `…/node/<port>/slack/install` in a browser → *Allow* (see Step 5). Verify the
+  token is present with
+  `mongosh "<this instance's mongo_url>" --eval 'db.token.find({},{"team.id":1,_id:0}).toArray()'`.
 - **App logs "Failed to connect to MongoDB"** → check `mongo_url` host/password,
   that `authSource=open_poll` matches where the user was created, and that
   `bindIp` in `mongod.conf` includes the DB CT's IP. Test from CT 5000:
