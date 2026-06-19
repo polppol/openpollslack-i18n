@@ -168,14 +168,17 @@ Inside the "Basic Information" page, click on "Premissions" under "Add features 
 
 Firstly, click on "Add New Redirect URL". Fill it with `https://YOURHOSTNAME/slack/oauth_redirect` and replace `YOURHOSTNAME` with yours. Then click on "Add" button.
 
-Under "Scopes" section and "Bot Token Scopes" subsection, click on "Add an OAuth Scope". Then, add theses scopes (the same list the app requests during the OAuth install):
+Under "Scopes" section and "Bot Token Scopes" subsection, click on "Add an OAuth Scope". Then add these scopes:
 
-- `commands` : slash commands and the global shortcut
-- `chat:write` : post and update poll messages
-- `chat:write.public` : to write in the workspace channels
-- `groups:write` : write access in private channels the bot is a member of
-- `users:read` : to read user time zone, and to resolve names for CSV export
-- `channels:read`,`groups:read`,`mpim:read` : to check if bot in selected channel (if not using `response_url`)
+| OAuth Scope | Description | Request Reason |
+|---|---|---|
+| `channels:read` | View basic information about public channels in a workspace | Check if the bot is in the selected channel when a member creates a poll via the modal (called from a shortcut, where there is no `response_url`, so the user picks which channel/group/DM to post to and the app verifies the bot is in it). |
+| `chat:write` | Send messages as @Open Poll Plus | Post the poll to chat when a member creates it, and update it when users interact (vote, add choice, or modify the poll). |
+| `chat:write.public` | Send messages to channels @Open Poll Plus isn't a member of | Post the poll to chat when a member creates it, and update it when users interact (vote, add choice, or modify the poll). |
+| `commands` | Add shortcuts and/or slash commands that people can use | Use the slash command to create polls, e.g. `/poll add-choice "What's your favourite colour?" "Red" "Green" "Blue" "Yellow"`. |
+| `groups:read` | View basic information about private channels that Open Poll+ has been added to | Check if the bot is in the selected channel when a member creates a poll via the modal (shortcut, no `response_url`). |
+| `mpim:read` | View basic information about group direct messages that Open Poll+ has been added to | Check if the bot is in the selected channel when a member creates a poll via the modal (shortcut, no `response_url`). |
+| `users:read` | View people in a workspace | Read the user's timezone, so when a user makes/manages a scheduled poll the date/time is shown in the user's timezone instead of the server's. |
 
 Also, but optional, in the "Restrict API Token Usage" section, you can add your server IP address to restrict api usage.
 

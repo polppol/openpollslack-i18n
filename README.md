@@ -404,14 +404,17 @@ See the **[self‑hosting examples index](docs/example/README.md)**:
 
 ## Additional Permissions
 
-The OAuth install flow (`/slack/install`) requests these bot scopes:
+Bot Token Scopes:
 
-- `commands` : slash commands (`/poll`, `/openpoll`) and the global shortcut
-- `chat:write` : post and update poll messages
-- `chat:write.public` : post in public channels without adding the bot first
-- `groups:write` : write access in private channels the bot is a member of
-- `channels:read`,`groups:read`,`mpim:read` : to check if bot in selected channel (if not using `response_url`)
-- `users:read` : to read user time zone, and to resolve real/display names for CSV export (`users.info`)
+| OAuth Scope | Description | Request Reason |
+|---|---|---|
+| `channels:read` | View basic information about public channels in a workspace | Check if the bot is in the selected channel when a member creates a poll via the modal (called from a shortcut, where there is no `response_url`, so the user picks which channel/group/DM to post to and the app verifies the bot is in it). |
+| `chat:write` | Send messages as @Open Poll Plus | Post the poll to chat when a member creates it, and update it when users interact (vote, add choice, or modify the poll). |
+| `chat:write.public` | Send messages to channels @Open Poll Plus isn't a member of | Post the poll to chat when a member creates it, and update it when users interact (vote, add choice, or modify the poll). |
+| `commands` | Add shortcuts and/or slash commands that people can use | Use the slash command to create polls, e.g. `/poll add-choice "What's your favourite colour?" "Red" "Green" "Blue" "Yellow"`. |
+| `groups:read` | View basic information about private channels that Open Poll+ has been added to | Check if the bot is in the selected channel when a member creates a poll via the modal (shortcut, no `response_url`). |
+| `mpim:read` | View basic information about group direct messages that Open Poll+ has been added to | Check if the bot is in the selected channel when a member creates a poll via the modal (shortcut, no `response_url`). |
+| `users:read` | View people in a workspace | Read the user's timezone, so when a user makes/manages a scheduled poll the date/time is shown in the user's timezone instead of the server's. |
 
 
 ## License

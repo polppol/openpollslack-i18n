@@ -20,6 +20,19 @@ WorkingDirectory=/opt/openpollslack-i18n
 # The app reads config/default.json relative to WorkingDirectory (node-config).
 ExecStart=/usr/bin/node index.js
 Environment=NODE_ENV=production
+# ── Application timezone ────────────────────────────────────────────────────
+# Sets the Node process timezone. It does NOT change WHEN scheduled polls fire
+# (each schedule stores its creator's own Slack timezone) and it does NOT touch
+# stored data (MongoDB always stores UTC). It ONLY affects two host-local
+# fallbacks:
+#   • how a timestamp is shown to a user whose Slack profile has NO timezone, and
+#   • the wall-clock hour of the daily auto-cleanup job.
+# Default Asia/Bangkok (GMT+7). Use UTC, Europe/Paris, America/New_York, … (any
+# IANA zone — see `timedatectl list-timezones`). To change it:
+#   edit this line, then:  systemctl daemon-reload && systemctl restart openpoll
+# or, WITHOUT editing this unit, add a drop-in (see the README "Timezone"
+# section) — handy for changing a running box with no redeploy.
+Environment=TZ=Asia/Bangkok
 Restart=on-failure
 RestartSec=5
 

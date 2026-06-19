@@ -279,7 +279,9 @@ bash app/deploy-app-to-ct.sh --app-only  # SPLIT: app only, fronted by the rprox
 
 `deploy-app-to-ct.sh` installs Node 24 + Yarn 4 and the app under
 `/opt/openpollslack-i18n`, pushes your `default.json` (`chmod 600`), starts the
-`openpoll` systemd service, and — unless `--app-only` — installs Caddy on `:443`
+`openpoll` systemd service (in the timezone you pick at the **`App timezone`**
+prompt — default `Asia/Bangkok`; see [Timezone](#timezone-display--daily-cleanup)),
+and — unless `--app-only` — installs Caddy on `:443`
 (see **Step 4**). At the prompts it offers to fill the Slack secrets in
 `default.json` (hidden, never echoed); the **mongo password** you set by hand in
 the `mongo_url` line. A healthy start logs `Bolt app is running!`. Verify:
@@ -439,6 +441,13 @@ anywhere) and want your workspaces, polls and scheduled polls to carry over. All
 Slack tokens live in MongoDB, so restoring the database is all it takes — your
 domain and Slack URLs don't change, so Slack needs no reconfiguration.
 
+> **Timezone:** your scheduled polls and all stored timestamps are UTC in the
+> dump and restore unchanged — they fire at the same real time on the new box no
+> matter its clock. If your old server ran on local time (e.g. a Thai box on
+> GMT+7), set the **`App timezone`** prompt to `Asia/Bangkok` in Step 3 to keep
+> the display fallback + daily‑cleanup hour identical; `UTC` is fine too. Full
+> detail: [Timezone](#timezone-display--daily-cleanup).
+
 **Dry run first** (the old server stays live — build the new stack in parallel):
 
 ```powershell
@@ -590,6 +599,65 @@ wait on `/healthz`).
 
 ---
 
+## Timezone (display + daily cleanup)
+
+The app's timezone is the **`TZ`** environment variable on the `openpoll`
+service — set by the **`App timezone`** prompt in `deploy-app-to-ct.sh` (default
+**`Asia/Bangkok`**, GMT+7) and baked into `app/openpoll.service`. Use any
+[IANA zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) —
+`UTC`, `Europe/Paris`, `America/New_York`, … (list them with
+`timedatectl list-timezones`).
+
+**It only affects two things, and changing it cannot corrupt data or shift your
+schedules:**
+
+| Concern | Effect of `TZ` |
+|---|---|
+| **When scheduled polls fire** | **None.** Each schedule stores its creator's own Slack timezone and fires at that absolute instant under any `TZ`. |
+| **Stored data** | **None.** MongoDB always stores UTC — a `TZ` change never moves a stored timestamp. |
+| **Timestamp shown to a user with *no* Slack timezone** | Rendered in `TZ`. This is the only host‑local fallback; a user who *has* a Slack tz always sees their own zone regardless. |
+| **The daily auto‑cleanup job** | Runs at 22:00 **in `TZ`** (purges old closed polls — the exact hour is cosmetic). |
+
+So `Asia/Bangkok` keeps a Thai deployment's fallbacks + cleanup on local time;
+`UTC` is equally valid (the conventional server choice — just expect the rare
+no‑tz user to see UTC times). **Moving off a GMT+7 box?** Keep `Asia/Bangkok` for
+behavior identical to the old server. (The **DB** container's timezone is
+irrelevant — MongoDB stores UTC either way.)
+
+### Change it on a running box — no redeploy
+
+A systemd **drop‑in** overrides the unit's `TZ` without editing it; only a quick
+service restart is needed (a few seconds — no re‑clone, no re‑install, no
+`deploy-app-to-ct.sh`). On a Proxmox node (set your App CT id + zone):
+
+```bash
+APP_ID=5000; APP_TZ=Asia/Bangkok      # <- your CT id and zone (e.g. APP_TZ=UTC)
+pct exec "$APP_ID" -- mkdir -p /etc/systemd/system/openpoll.service.d
+pct exec "$APP_ID" -- bash -c "printf '[Service]\nEnvironment=TZ=%s\n' '$APP_TZ' \
+  > /etc/systemd/system/openpoll.service.d/10-timezone.conf"
+pct exec "$APP_ID" -- systemctl daemon-reload
+pct exec "$APP_ID" -- systemctl restart openpoll
+# confirm the app now sees it:
+pct exec "$APP_ID" -- systemctl show openpoll -p Environment | tr ' ' '\n' | grep TZ
+```
+
+(Running *inside* the CT instead? Drop the `pct exec "$APP_ID" --` prefixes.) To
+revert to the unit's baked‑in default, delete the drop‑in
+(`/etc/systemd/system/openpoll.service.d/10-timezone.conf`), then `daemon-reload`
++ restart. *Optional:* to also put the container's shell/journal clock on local
+time (the app doesn't need it — it reads `TZ`):
+`pct exec "$APP_ID" -- ln -sf /usr/share/zoneinfo/$APP_TZ /etc/localtime`.
+
+### Which script changes the timezone?
+
+| Script | Effect on `TZ` |
+|---|---|
+| `deploy-app-to-ct.sh` | **Sets it** — bakes your `App timezone` answer into the unit and **removes** any drop‑in, so a (re‑)deploy is authoritative. Re‑run it to change the zone. |
+| `update-app-to-ct.sh` | **Leaves it as‑is** — it only updates the app code + restarts; it never touches the unit, so your timezone (and any drop‑in) is preserved across upgrades. |
+| drop‑in (above) | **Overrides** the unit until the next `deploy-app-to-ct.sh` (which clears it). Use it to change a running box with no redeploy. |
+
+---
+
 ## Gotchas / troubleshooting
 
 - **Slack URLs return 404 / the app sees `/node/5000/slack/...`** → the prefix
@@ -711,6 +779,7 @@ downtime. That's more moving parts — only do it if you actually need it.
 | App health (on the CT) | `curl -s http://127.0.0.1:5000/healthz` |
 | App health (via proxy) | `curl -s https://poll.example.com/node/5000/healthz` |
 | Restart app | `systemctl restart openpoll` |
+| Set app timezone (no redeploy) | drop-in `…/openpoll.service.d/10-timezone.conf` + restart — see [Timezone](#timezone-display--daily-cleanup) |
 | Mongo shell | `mongosh "mongodb://openpoll:<pw>@127.0.0.1:27017/open_poll?authSource=open_poll"` |
 | HA status | `ha-manager status` |
 | Migrate a CT | `pct migrate 5000 <node> --restart` |

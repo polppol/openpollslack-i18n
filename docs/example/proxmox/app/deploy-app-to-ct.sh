@@ -34,6 +34,7 @@ done
 APP_ID=5000                                  # this app CT's id
 APP_PORT=5000                                # port the Node app listens on (must match "port" in default.json)
 APP_DIR=/opt/openpollslack-i18n
+APP_TZ=Asia/Bangkok                          # app timezone (IANA). Only the display fallback (users with no Slack tz) + the daily cleanup hour; UTC is fine too. Does NOT change when polls fire.
 INSTALL_CADDY=true                           # true = bundled (Caddy here); false = app-only (--app-only)
 TLS_MODE=cloudflare                          # (bundled) cloudflare = DNS-01 auto-cert; manual = you install the cert
 TLS_CERT_PATH=/etc/caddy/cert.pem            # (bundled, manual TLS) cert path inside the CT
@@ -54,6 +55,7 @@ export NONINTERACTIVE
 ask_active || echo ">>> non-interactive: keeping defaults (App CT ${APP_ID}, port ${APP_PORT}, INSTALL_CADDY=${INSTALL_CADDY})." >&2
 ask     APP_ID    "App CT id"
 ask     APP_PORT  "App listen port (must match \"port\" in default.json)"
+ask     APP_TZ    "App timezone (IANA, e.g. Asia/Bangkok or UTC) — display fallback + cleanup hour only"
 confirm INSTALL_CADDY "Install Caddy (HTTPS) in THIS CT?  No = app-only, fronted by a separate reverse-proxy CT"
 if [ "${INSTALL_CADDY}" = true ]; then
   ask TLS_MODE "TLS mode (cloudflare = auto DNS-01 cert | manual = you install the cert)"
@@ -117,7 +119,17 @@ echo ">>> Pushing your config + the systemd unit ..."
 pct push "${APP_ID}" "${HERE}/default.json"     "${APP_DIR}/config/default.json"
 pct exec "${APP_ID}" -- chown openpoll:openpoll "${APP_DIR}/config/default.json"
 pct exec "${APP_ID}" -- chmod 600               "${APP_DIR}/config/default.json"
-pct push "${APP_ID}" "${HERE}/openpoll.service" /etc/systemd/system/openpoll.service
+# Bake the chosen timezone into the unit before pushing it (single knob — the
+# TZ env var on the service; see the README "Timezone" section). '|' delimiter
+# because IANA zones contain '/'.
+_UNIT="$(mktemp)"
+sed "s|^Environment=TZ=.*|Environment=TZ=${APP_TZ}|" "${HERE}/openpoll.service" > "${_UNIT}"
+pct push "${APP_ID}" "${_UNIT}" /etc/systemd/system/openpoll.service
+rm -f "${_UNIT}"
+# A deploy is authoritative for TZ: drop any drop-in left by the README's
+# "change TZ without redeploy" step, so the value you answered above actually
+# wins (a drop-in would otherwise override the unit).
+pct exec "${APP_ID}" -- rm -f /etc/systemd/system/openpoll.service.d/10-timezone.conf
 pct exec "${APP_ID}" -- systemctl daemon-reload
 pct exec "${APP_ID}" -- systemctl enable --now openpoll
 
@@ -164,7 +176,7 @@ if [ "${INSTALL_CADDY}" = true ]; then
 fi
 
 echo
-echo "App container ${APP_ID} is set up (mode: $([ "${INSTALL_CADDY}" = true ] && echo bundled || echo app-only))."
+echo "App container ${APP_ID} is set up (mode: $([ "${INSTALL_CADDY}" = true ] && echo bundled || echo app-only), timezone: ${APP_TZ})."
 echo "  pct exec ${APP_ID} -- curl -s http://127.0.0.1:${APP_PORT}/healthz"
 if [ "${INSTALL_CADDY}" = true ]; then
   echo "  then point your router's 443 at this CT and open https://<your-domain>/node/${APP_PORT}/healthz"
