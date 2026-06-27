@@ -4034,23 +4034,47 @@ async function dashboardLinkAction(body, client, context, value) {
   const token = mintDashboardToken(pollData._id, body.user.id, teamId);
   const url = gDashboardUrl.replace(/\/+$/, '') + '/#/h/' + token;
 
-  await postChat(body.response_url, 'ephemeral', {
-    token: context.botToken,
-    channel: body.channel?.id,
-    user: body.user.id,
-    text: stri18n(userLang, 'dashboard_link_open'),
-    blocks: [{
-      type: 'section',
-      text: { type: 'mrkdwn', text: stri18n(userLang, 'dashboard_link_open') },
-      accessory: {
-        type: 'button',
-        text: { type: 'plain_text', text: stri18n(userLang, 'menu_view_on_dashboard') },
-        style: 'primary',
-        url,
-        action_id: 'ignore_me',
+  // Open a MODAL (popup) with the link button instead of posting an ephemeral
+  // message — a modal adds NOTHING to the channel, keeping it clean. Every check
+  // above is a fast local DB read, so we are within Slack's ~3s trigger_id window
+  // for views.open. If it ever fails (e.g. an expired trigger), fall back to the
+  // ephemeral link so the user still gets it.
+  const dashTitle = stri18n(userLang, 'menu_view_on_dashboard');
+  const linkButton = {
+    type: 'button',
+    text: { type: 'plain_text', text: dashTitle },
+    style: 'primary',
+    url,
+    action_id: 'ignore_me',
+  };
+  try {
+    await client.views.open({
+      token: context.botToken,
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal',
+        // Modal title is capped at 24 chars by Slack — slice for long languages.
+        title: { type: 'plain_text', text: dashTitle.length > 24 ? dashTitle.slice(0, 24) : dashTitle },
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: stri18n(userLang, 'dashboard_link_open') } },
+          { type: 'actions', elements: [linkButton] },
+        ],
       },
-    }],
-  });
+    });
+  } catch (e) {
+    logger.warn('dashboardLinkAction: views.open failed, falling back to ephemeral: ' + (e?.data?.error || e?.message || e));
+    await postChat(body.response_url, 'ephemeral', {
+      token: context.botToken,
+      channel: body.channel?.id,
+      user: body.user.id,
+      text: stri18n(userLang, 'dashboard_link_open'),
+      blocks: [{
+        type: 'section',
+        text: { type: 'mrkdwn', text: stri18n(userLang, 'dashboard_link_open') },
+        accessory: linkButton,
+      }],
+    });
+  }
 }
 
 const createModalBlockInput = (userLang, isRichText, initialMrkdwn)  => {
