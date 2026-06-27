@@ -6,6 +6,11 @@
 # ownership, restarts the service and waits for a healthy start. You run THIS on
 # the node. Works for both bundled and app-only CTs (it only touches the app).
 #
+# The update NEVER changes the listen port or writes config — it only updates the
+# code + dependencies and restarts. So this does not prompt for the port; the
+# port is read from the CT's existing config solely for the post-update health
+# check (override with APP_PORT=… only if your config isn't the source of truth).
+#
 #   bash app/update-app-to-ct.sh                 # prompts; pull latest of current branch
 #   APP_REF=4.1.1.1 bash app/update-app-to-ct.sh # deploy a specific release tag
 #
@@ -22,7 +27,7 @@ _p="${HERE}/../lib/ask.sh"
 
 # ─────────────────────────── settings to review ────────────────────────────
 APP_ID=5000                                  # the App CT to update
-APP_PORT=5000                                # the port the app listens on (must match default.json)
+APP_PORT="${APP_PORT:-}"                      # health-check port ONLY; auto-detected from the CT's config when blank. The update NEVER changes the port or writes config.
 APP_REF="${APP_REF:-}"                       # tag/branch to deploy; empty = pull current branch
 SNAPSHOT=true                                # take a pre-update snapshot first (rollback safety)
 SNAPSHOT_NAME=pre-update
@@ -39,7 +44,6 @@ export NONINTERACTIVE
 
 ask_active || echo ">>> non-interactive: keeping defaults (App CT ${APP_ID}, ref '${APP_REF:-current branch}', snapshot=${SNAPSHOT})." >&2
 ask     APP_ID   "App CT id to update"
-ask     APP_PORT "App listen port (matches default.json)"
 ask     APP_REF  "Version to deploy — tag/branch (blank = pull current branch)"
 confirm SNAPSHOT "Take a pre-update snapshot first (instant rollback)?"
 
@@ -50,6 +54,15 @@ pct status "${APP_ID}" >/dev/null 2>&1 || {
 if ! pct exec "${APP_ID}" -- true 2>/dev/null; then
   echo ">>> Starting CT ${APP_ID} ..."; pct start "${APP_ID}"
   for _i in $(seq 1 30); do pct exec "${APP_ID}" -- true 2>/dev/null && break; sleep 1; done
+fi
+
+# Health-check port: read it from the CT's EXISTING config (per-instance; the
+# update never writes it). Override with APP_PORT=… only if config isn't the
+# source of truth (e.g. a PORT env in the unit).
+if [ -z "${APP_PORT}" ]; then
+  APP_PORT="$(pct exec "${APP_ID}" -- sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /opt/openpollslack-i18n/config/default.json 2>/dev/null | head -n1)"
+  [ -n "${APP_PORT}" ] || APP_PORT=5000
+  echo ">>> Health-check port (from the CT's config): ${APP_PORT}"
 fi
 
 if [ "${SNAPSHOT}" = true ]; then
