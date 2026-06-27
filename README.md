@@ -316,6 +316,8 @@ Usage:
 /poll config write enable_poll_edit_max_mins [number]
 /poll config write enable_poll_edit_keep_votes [true/false]
 /poll config write enable_rich_text_input [true/false]
+/poll config write show_dashboard_link [true/false]
+/poll config write show_csv_export [true/false]
 ```
 - `read` (alias `list`) shows every setting with its **effective value** and whether it comes from a team override or the server default.
 - `reset [config_name]` removes one team override (the setting falls back to the server default); `reset all` removes every override.
@@ -351,6 +353,11 @@ Usage:
 - `state_secret`: random string used to protect the OAuth install flow — change it from `CHANGE ME`
 - `oauth_success` / `oauth_failure`: URLs the user's browser is redirected to after a successful / failed install via `/slack/install`
 - `support_url`: if set, adds a support/donate entry to the poll menu
+- `dashboard_url`: if set together with `dashboard_link_secret`, adds a **View on dashboard** entry to the poll menu that opens an external analytics dashboard for that poll. The app opens the user's browser at `<dashboard_url>/#/h/<token>`. **Server-level only.** Build your own compatible dashboard with [docs/DASHBOARD-INTEGRATION.md](docs/DASHBOARD-INTEGRATION.md) (the full token/signing/URL contract).
+- `dashboard_link_secret`: shared secret used to HMAC-sign the dashboard link token; must equal the secret your dashboard verifies with. Use ≥32 random bytes. Empty disables the menu entry. **Server-level only.**
+- `dashboard_link_ttl_s` (default `300`): lifetime in seconds of a minted dashboard token.
+- `show_dashboard_link` (default `false`): show the **View on dashboard** menu entry (requires `dashboard_url` + `dashboard_link_secret`). Per-team overridable via `/poll config write show_dashboard_link [true/false]`.
+- `show_csv_export` (default `true`): show the **Export to CSV** menu entry. Per-team overridable via `/poll config write show_csv_export [true/false]`.
 - `log_level_app` Log level of app(console); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_app_file` Log level of app(file); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_bolt` Log level of Bolt(console); valid options are: `debug` `verbose` `info` `warn` `error`

@@ -84,6 +84,7 @@ const { createLogger, format, transports } = require('winston');
 require('winston-daily-rotate-file'); // side-effect: registers transports.DailyRotateFile
 const fs = require('fs');
 const path = require('path');
+const crypto = require('node:crypto');
 //const moment = require('moment');
 const moment = require('moment-timezone');
 
@@ -96,6 +97,19 @@ const slackCommand2 = config.get('command2');
 const helpLink = config.get('help_link');
 const helpEmail = config.get('help_email');
 const supportUrl = config.get('support_url');
+// "Open in dashboard" link (optional integration with the openpollslack-dash
+// analytics dashboard). dashboard_url is the PUBLIC base of the dashboard's
+// viewer surface; when a poll creator/installer picks "View on dashboard" the
+// app mints a short-lived HMAC token (signed with dashboard_link_secret, which
+// MUST equal the dashboard's slack_handoff.secret) and DMs them an ephemeral
+// link. SERVER-LEVEL ONLY (a per-workspace URL is useless — only the dashboard
+// that reads this same DB can serve it). The MENU is disabled by default
+// (show_dashboard_link=false) and never renders unless url + secret are both set.
+const gDashboardUrl = config.has('dashboard_url') ? config.get('dashboard_url') : '';
+const gDashboardLinkSecret = config.has('dashboard_link_secret') ? config.get('dashboard_link_secret') : '';
+const gDashboardLinkTtlS = config.has('dashboard_link_ttl_s') ? parseInt(config.get('dashboard_link_ttl_s'), 10) : 300;
+const gIsShowDashboardLink = config.has('show_dashboard_link') ? config.get('show_dashboard_link') : false;
+const gIsShowCsvExport = config.has('show_csv_export') ? config.get('show_csv_export') : true;
 const gAppLang = config.get('app_lang');
 const gAppAllowDM = config.get('app_allow_dm');
 const gSlackLimitChoices = config.get('slack_limit_choices');
@@ -134,7 +148,7 @@ const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? con
 // the same mrkdwn-string storage shape (DB schema unchanged).
 const gIsRichTextInput = config.has('enable_rich_text_input') ? config.get('enable_rich_text_input') : false;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input","show_dashboard_link","show_csv_export"];
 
 // Integer-valued team overrides. Separate from the true/false list so the
 // /poll config write dispatcher knows to parse the value as a non-negative
@@ -163,6 +177,8 @@ const serverDefaultsForConfig = () => ({
   enable_poll_edit: gEnablePollEdit,
   enable_poll_edit_keep_votes: gEnablePollEditKeepVotes,
   enable_rich_text_input: gIsRichTextInput,
+  show_dashboard_link: gIsShowDashboardLink,
+  show_csv_export: gIsShowCsvExport,
   enable_poll_edit_max_mins: gEnablePollEditMaxMins,
 });
 
@@ -203,6 +219,41 @@ function isEditKeepVotes(teamConfig) {
     return toBoolean(teamConfig.enable_poll_edit_keep_votes);
   }
   return toBoolean(gEnablePollEditKeepVotes);
+}
+
+// ── "Open in dashboard" link (optional openpollslack-dash integration) ───────
+// SSOT for whether the per-poll menu shows the built-in CSV export and the
+// external "View on dashboard" link. The server flag is the default; a
+// per-workspace boolean override wins. The dashboard link additionally requires
+// the server to be configured with a URL + signing secret, so it never renders a
+// dead link (and stays hidden by default).
+function isShowCsvExport(teamConfig) {
+  if (teamConfig && teamConfig.hasOwnProperty('show_csv_export')) {
+    return toBoolean(teamConfig.show_csv_export);
+  }
+  return toBoolean(gIsShowCsvExport);
+}
+function isShowDashboardLink(teamConfig) {
+  if (!gDashboardUrl || !gDashboardLinkSecret) return false;
+  if (teamConfig && teamConfig.hasOwnProperty('show_dashboard_link')) {
+    return toBoolean(teamConfig.show_dashboard_link);
+  }
+  return toBoolean(gIsShowDashboardLink);
+}
+
+// Mint a short-lived HMAC token for the dashboard "open in dashboard" handoff.
+// The format MUST match openpollslack-dash src/handoff.js verify():
+//   b64url(JSON payload) + "." + b64url(HMAC-SHA256(payloadB64, secret))
+// The payload carries identity + intent ONLY (who clicked / which poll / when);
+// the dashboard re-derives all authorization from the shared DB.
+function mintDashboardToken(pid, uid, tid) {
+  const now = Math.floor(Date.now() / 1000);
+  const ttl = Number.isFinite(gDashboardLinkTtlS) && gDashboardLinkTtlS > 0 ? gDashboardLinkTtlS : 300;
+  const payload = { v: 1, pid: String(pid), uid: String(uid), tid: String(tid), iat: now, exp: now + ttl, jti: crypto.randomBytes(12).toString('hex') };
+  const b64url = (b) => Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const payloadB64 = b64url(JSON.stringify(payload));
+  const sigB64 = b64url(crypto.createHmac('sha256', gDashboardLinkSecret).update(payloadB64).digest());
+  return `${payloadB64}.${sigB64}`;
 }
 
 // Re-key a vote map across an option-list edit. Returns:
@@ -3946,6 +3997,62 @@ async function exportPoll(body, client, context, value) {
   await sendCsvExport(body?.channel?.id, body?.user?.id, context, client, pollData, voteData, userLang, body?.response_url || null);
 }
 
+// Menu entry point for "View on dashboard". The shared static_select option is
+// visible to every channel member (Slack can't show a menu option to only some
+// viewers — same constraint as CSV export), but only the poll CREATOR or the
+// workspace INSTALLER gets a working link: anyone else is rejected and no token
+// is minted. The link carries a short-lived HMAC token so the dashboard can open
+// the poll under that user's permission-scoped viewer (never the admin view).
+async function dashboardLinkAction(body, client, context, value) {
+  if (!body || !body.user || !body.user.id) return;
+
+  const teamId = getTeamOrEnterpriseId(body);
+  const teamConfig = await getTeamOverride(teamId);
+  let appLang = gAppLang;
+  if (teamConfig.hasOwnProperty('app_lang')) appLang = teamConfig.app_lang;
+  const userLang = value?.user_lang || appLang;
+  const ephemeralReject = makeEphemeralReject(body, context, userLang);
+
+  if (!gDashboardUrl || !gDashboardLinkSecret) { await ephemeralReject('dashboard_link_not_configured'); return; }
+
+  let pollData = null;
+  try {
+    pollData = await pollCol.findOne({ _id: new ObjectId(value.p_id) });
+  } catch (e) { /* falls through */ }
+  if (!pollData) { await ephemeralReject('poll_export_not_found'); return; }
+
+  // Gate: poll creator OR workspace installer (same identity facts as export +
+  // the /poll config installer gate).
+  const isCreator = pollData.user_id === body.user.id;
+  let isInstaller = false;
+  try {
+    const tInfo = await getTeamInfo(teamId);
+    isInstaller = !!(tInfo && tInfo.user && tInfo.user.id === body.user.id);
+  } catch (e) { /* not installer */ }
+  if (!isCreator && !isInstaller) { await ephemeralReject('dashboard_link_no_permission'); return; }
+
+  const token = mintDashboardToken(pollData._id, body.user.id, teamId);
+  const url = gDashboardUrl.replace(/\/+$/, '') + '/#/h/' + token;
+
+  await postChat(body.response_url, 'ephemeral', {
+    token: context.botToken,
+    channel: body.channel?.id,
+    user: body.user.id,
+    text: stri18n(userLang, 'dashboard_link_open'),
+    blocks: [{
+      type: 'section',
+      text: { type: 'mrkdwn', text: stri18n(userLang, 'dashboard_link_open') },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: stri18n(userLang, 'menu_view_on_dashboard') },
+        style: 'primary',
+        url,
+        action_id: 'ignore_me',
+      },
+    }],
+  });
+}
+
 const createModalBlockInput = (userLang, isRichText, initialMrkdwn)  => {
     // rich_text_input branch: emit a rich_text editor. Optionally pre-fill via
     // initial_value (used by the edit modal in PR-C). rich_text_input does not
@@ -6356,13 +6463,19 @@ async function createPollView(teamOrEntId,channel, teamConfig, question, options
           text: stri18n(userLang, 'menu_edit_poll'),
         },
         value: JSON.stringify({action: 'btn_edit', p_id: pollID, user: userId, user_lang: userLang}),
-      }] : []), {
+      }] : []), ...(isShowCsvExport(teamConfig) ? [{
         text: {
           type: 'plain_text',
           text: stri18n(userLang, 'menu_export_csv'),
         },
         value: JSON.stringify({action: 'btn_export', p_id: pollID, user: userId, user_lang: userLang}),
-      }
+      }] : []), ...(isShowDashboardLink(teamConfig) ? [{
+        text: {
+          type: 'plain_text',
+          text: stri18n(userLang, 'menu_view_on_dashboard'),
+        },
+        value: JSON.stringify({action: 'btn_dashboard', p_id: pollID, user: userId, user_lang: userLang}),
+      }] : [])
       ],
     },
     {//GRP 1
@@ -6658,6 +6771,8 @@ async function btnActions(args) {
     editPollOpenModal(body, client, context, value);
   else if ('btn_export' === value.action)
     exportPoll(body, client, context, value);
+  else if ('btn_dashboard' === value.action)
+    dashboardLinkAction(body, client, context, value);
 }
 
 // Build a single option-input row for the edit modal: an input element
