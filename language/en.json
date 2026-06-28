@@ -27,6 +27,8 @@
   "info_welcome_message": "👋 Welcome to Open Poll+!\n\nOpen Poll+ is a *free and open-source* app designed to creating polls in Slack. \n\n🚀 To get started right away, simply type `/{{slack_command}}` in the channel where you want to launch your poll.\n\n🔍 Need more information or assistance? Check out `/{{slack_command}} help` for guidance, or visit our <{{link}}|Github> for more details and tips.\n\nHappy polling with Open Poll+!\n\nP.S. We will notify you here if something goes wrong with your poll, so you won't miss anything!\n\nIf you don't want App to DM you, you can turn if off using\n`/{{slack_command}} user_config write user_allow_dm false` (For yourself)\n`/{{slack_command}} config write app_allow_dm false` (For whole team)\n\n⚠️ If the app displays the Date/Time in an incorrect timezone, you might want to reinstall the app, as some permission scopes might be missing.",
   "btn_vote": "Vote",
   "btn_add_choice": "+ Add choice",
+  "btn_answer": "Answer",
+  "info_poll_closed": "closed",
   "btn_ok": "OK",
   "btn_close": "Close",
   "btn_create": "Create",

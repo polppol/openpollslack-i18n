@@ -1,0 +1,605 @@
+'use strict';
+
+/*
+ * multiquestion.js — multi-question polls ("forms"): one poll that asks several
+ * questions of mixed type (choice / yes-no / text / number / date / time /
+ * datetime / email / url) in a single Slack message.
+ *
+ * DESIGN: additive and fully backward-compatible. Legacy single-question polls
+ * NEVER touch this module — none of the legacy functions are modified. A poll is
+ * "multi-question" iff its poll_data carries a non-empty `questions` array; all
+ * interactions use dedicated `mq_*` action/callback ids handled here, so the
+ * existing single-question code path is left exactly as-is.
+ *
+ * STORAGE (poll_data, additive): questions:[{id,type,text,options?,multi?,
+ * user_add_choice?,required?,min?,max?}] plus a compat mirror of question #1 into
+ * the legacy `question`/`options` fields so older readers degrade instead of break.
+ * (votes doc): votes:{ "<qid>":{ "<optIdx>":[userId] } } and answers:{ "<qid>":
+ * { "<userId>": value } } — distinct from the legacy flat votes map. No migration.
+ *
+ * SECURITY: this is a PUBLIC repo. This module embeds and logs NO real workspace
+ * ids, user ids, tokens, hostnames, or any other live data — only generic code.
+ */
+
+const { ObjectId } = require('mongodb');
+const { stri18n, parameterizedString, slackNumToEmoji } = require('./i18n');
+
+let _db = null;
+/** Wire up the Mongo handle (called once from index.js after connect). */
+function init(db) { _db = db; }
+const pollCol = () => _db.collection('poll_data');
+const votesCol = () => _db.collection('votes');
+
+const MAX_QUESTIONS = 10;
+const MAX_OPTIONS = 10;
+const MAX_TEXT_LEN = 2000;
+const INPUT_TYPES = ['text', 'number', 'date', 'time', 'datetime', 'email', 'url'];
+const CHOICE_TYPES = ['choice', 'yesno'];
+const ALL_TYPES = [...CHOICE_TYPES, ...INPUT_TYPES];
+
+function isMulti(pollData) {
+  return !!(pollData && Array.isArray(pollData.questions) && pollData.questions.length > 0);
+}
+function isChoice(type) { return CHOICE_TYPES.includes(type); }
+function isInput(type) { return INPUT_TYPES.includes(type); }
+
+// ───────────────────────── DSL PARSER (pure, testable) ──────────────────────
+//
+// The create modal collects the form as one text field. Grammar (one item/line):
+//   Q: <question text> [<type> <flag> ...]   -> a question; type defaults to
+//                                               "choice" if options follow, else "text"
+//   - <option>  (or "* <option>")            -> an option for the preceding choice
+// Recognised types: choice yesno text number date time datetime email url
+// Recognised flags: multi (multi-select), add (user can add choices), required
+//
+// Example:
+//   Q: Do you want to order food? [yesno]
+//   Q: Which food? [choice multi add]
+//   - Apple
+//   - Orange
+//   Q: Any comment? [text]
+//   Q: How many? [number]
+//   Q: Preferred day? [date]
+function parseForm(text) {
+  const errors = [];
+  const questions = [];
+  const lines = String(text || '').split(/\r?\n/);
+  let cur = null;
+  const pushCur = () => {
+    if (!cur) return;
+    if (cur.type === 'yesno') cur.options = ['Yes', 'No'];
+    if (isChoice(cur.type) && (!cur.options || cur.options.length < 2) && cur.type !== 'yesno') {
+      // a choice with <2 options is meaningless — treat as a text question instead
+      errors.push(`"${cur.text.slice(0, 40)}": choice needs at least 2 options`);
+    }
+    questions.push(cur);
+    cur = null;
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const qm = line.match(/^(?:Q[:.)]|\d+[.)])\s*(.+)$/i); // "Q:", "Q.", "Q)", "1.", "1)"
+    const om = line.match(/^[-*]\s*(.+)$/);
+    if (qm) {
+      pushCur();
+      let qtext = qm[1].trim();
+      let type = null; const flags = {};
+      const tag = qtext.match(/\[([^\]]*)\]\s*$/);
+      if (tag) {
+        qtext = qtext.slice(0, tag.index).trim();
+        for (const tok of tag[1].trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+          if (ALL_TYPES.includes(tok)) type = tok;
+          else if (tok === 'multi') flags.multi = true;
+          else if (tok === 'add') flags.user_add_choice = true;
+          else if (tok === 'required') flags.required = true;
+        }
+      }
+      cur = { text: qtext.slice(0, 300), type: type, options: [], ...flags };
+    } else if (om && cur) {
+      if (cur.options.length < MAX_OPTIONS) cur.options.push(om[1].trim().slice(0, 150));
+    } else if (om && !cur) {
+      errors.push(`option "${line.slice(0, 30)}" has no preceding question`);
+    } else if (cur) {
+      // continuation line for the current question text
+      cur.text = (cur.text + ' ' + line).slice(0, 300);
+    } else {
+      errors.push(`unrecognised line "${line.slice(0, 30)}"`);
+    }
+  }
+  pushCur();
+  // finalise types + ids; cap count
+  const out = [];
+  questions.slice(0, MAX_QUESTIONS).forEach((q, i) => {
+    let type = q.type;
+    if (!type) type = (q.options && q.options.length >= 2) ? 'choice' : 'text';
+    const item = { id: `q${i + 1}`, type, text: q.text || `Question ${i + 1}` };
+    if (isChoice(type)) {
+      item.options = q.type === 'yesno' ? ['Yes', 'No'] : (q.options || []).slice(0, MAX_OPTIONS);
+      item.multi = !!q.multi;
+      if (q.user_add_choice) item.user_add_choice = true;
+    }
+    if (q.required) item.required = true;
+    out.push(item);
+  });
+  if (questions.length > MAX_QUESTIONS) errors.push(`only the first ${MAX_QUESTIONS} questions are kept`);
+  if (!out.length) errors.push('no questions found');
+  return { questions: out, errors };
+}
+
+// ───────────────────────── vote / answer logic (pure) ───────────────────────
+
+/** Toggle a voter on a nested votes map. Returns '+', '-' (or 'limit' is N/A here). */
+function applyVote(votesMap, qid, oid, userId, multi) {
+  if (!votesMap[qid]) votesMap[qid] = {};
+  const q = votesMap[qid];
+  const key = String(oid);
+  if (!Array.isArray(q[key])) q[key] = [];
+  const had = q[key].includes(userId);
+  if (had) {
+    q[key] = q[key].filter((u) => u !== userId);
+    return '-';
+  }
+  // single-select: clear the voter from the question's other options first
+  if (!multi) {
+    for (const k of Object.keys(q)) q[k] = (q[k] || []).filter((u) => u !== userId);
+  }
+  q[key].push(userId);
+  return '+';
+}
+
+/** Set/clear a free-input answer. Empty value clears it. Returns 'set'|'clear'. */
+function applyAnswer(answers, qid, userId, value) {
+  if (!answers[qid]) answers[qid] = {};
+  const v = (value == null) ? '' : String(value);
+  if (v.trim() === '') { delete answers[qid][userId]; return 'clear'; }
+  answers[qid][userId] = v.slice(0, MAX_TEXT_LEN);
+  return 'set';
+}
+
+/** Human display for a stored input answer, by question type. */
+function formatAnswer(type, value) {
+  if (value == null || value === '') return '';
+  if (type === 'datetime') {
+    const n = Number(value);
+    if (Number.isFinite(n)) return `<!date^${n}^{date_short} {time}|${n}>`; // Slack date formatting
+  }
+  return String(value);
+}
+
+// ───────────────────────── Slack block rendering (pure) ─────────────────────
+
+function divider() { return { type: 'divider' }; }
+function sectionMd(text) { return { type: 'section', text: { type: 'mrkdwn', text } }; }
+function contextMd(text) { return { type: 'context', elements: [{ type: 'mrkdwn', text }] }; }
+
+function votersText(voters, anonymous, hidden, userLang) {
+  if (hidden) return stri18n(userLang, 'info_wait_reveal');
+  const n = (voters || []).length;
+  if (n === 0) return stri18n(userLang, 'info_no_vote');
+  let s = '';
+  if (!anonymous) s += voters.map((u) => `<@${u}>`).join(' ') + '  ';
+  s += parameterizedString(stri18n(userLang, n === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: n });
+  return s;
+}
+
+/**
+ * Build the full Slack message blocks for a multi-question poll.
+ * pollData: the poll document (must have questions[]). votesDoc: the votes doc
+ * ({votes, answers}) or null. opts: { userLang, isClosed }.
+ */
+function buildBlocks(pollData, votesDoc, opts = {}) {
+  const userLang = opts.userLang || (pollData.para && pollData.para.user_lang) || 'en';
+  const anonymous = !!(pollData.para && pollData.para.anonymous);
+  // `hidden` (immutable) = this poll supports hide/reveal; `revealed` (live) =
+  // results currently shown. Effective hidden = hidden && !revealed && !closed.
+  // (Kept separate so reveal/hide is a true two-way toggle.)
+  const revealed = !!(pollData.para && pollData.para.revealed);
+  const hidden = !!(pollData.para && pollData.para.hidden) && !revealed && !opts.isClosed;
+  const votes = (votesDoc && votesDoc.votes) || {};
+  const answers = (votesDoc && votesDoc.answers) || {};
+  const pollId = String(pollData._id);
+  const blocks = [];
+
+  blocks.push({ type: 'header', text: { type: 'plain_text', text: trimText(pollData.question || 'Poll', 150), emoji: true } });
+  const sub = [];
+  if (pollData.user_id && (pollData.para && pollData.para.display_poller_name !== false)) sub.push(`by <@${pollData.user_id}>`);
+  sub.push(`${pollData.questions.length} question${pollData.questions.length === 1 ? '' : 's'}`);
+  if (opts.isClosed) sub.push(`:lock: ${stri18n(userLang, 'info_poll_closed') || 'closed'}`);
+  blocks.push(contextMd(sub.join('  ·  ')));
+  blocks.push(divider());
+
+  pollData.questions.forEach((q, qi) => {
+    blocks.push(sectionMd(`*${qi + 1}. ${trimText(q.text, 300)}*`));
+    if (isChoice(q.type)) {
+      const qVotes = votes[q.id] || {};
+      (q.options || []).forEach((opt, oi) => {
+        const voters = qVotes[String(oi)] || [];
+        const btnVal = { poll_id: pollId, qid: q.id, oid: oi, multi: !!q.multi, user_lang: userLang };
+        // Compact: voters/count on the SAME section as the option (1 block/option)
+        // to stay within Slack's 50-block-per-message limit.
+        blocks.push({
+          type: 'section',
+          text: { type: 'mrkdwn', text: `${slackNumToEmoji(oi + 1, userLang)} ${trimText(opt, 150)}\n${votersText(voters, anonymous, hidden, userLang)}` },
+          accessory: opts.isClosed ? undefined : {
+            type: 'button', action_id: 'mq_vote',
+            text: { type: 'plain_text', emoji: true, text: stri18n(userLang, 'btn_vote') },
+            value: JSON.stringify(btnVal),
+          },
+        });
+      });
+      if (q.user_add_choice && !opts.isClosed) {
+        blocks.push({
+          type: 'actions',
+          elements: [{
+            type: 'button', action_id: 'mq_addchoice',
+            text: { type: 'plain_text', emoji: true, text: '➕ ' + (stri18n(userLang, 'btn_add_choice') || 'Add choice') },
+            value: JSON.stringify({ poll_id: pollId, qid: q.id }),
+          }],
+        });
+      }
+    } else {
+      // input question: an Answer button + a summary line
+      const qa = answers[q.id] || {};
+      const answeredBy = Object.keys(qa);
+      let summary;
+      if (hidden) summary = stri18n(userLang, 'info_wait_reveal');
+      else if (answeredBy.length === 0) summary = stri18n(userLang, 'info_no_vote');
+      else if (anonymous) summary = `${answeredBy.length} answered`;
+      else summary = answeredBy.map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: summary || ' ' },
+        accessory: opts.isClosed ? undefined : {
+          type: 'button', action_id: 'mq_answer',
+          text: { type: 'plain_text', emoji: true, text: '✏️ ' + (stri18n(userLang, 'btn_answer') || 'Answer') },
+          value: JSON.stringify({ poll_id: pollId, qid: q.id, type: q.type, text: q.text }),
+        },
+      });
+    }
+    blocks.push(divider());
+  });
+
+  // menu (reveal/hide + close) — own action ids, handled in this module.
+  const menu = [];
+  if (pollData.para && pollData.para.hidden && !opts.isClosed) {
+    menu.push({ type: 'button', action_id: 'mq_reveal', text: { type: 'plain_text', emoji: true, text: hidden ? (stri18n(userLang, 'menu_reveal_vote') || 'Reveal') : (stri18n(userLang, 'menu_hide_vote') || 'Hide') }, value: JSON.stringify({ poll_id: pollId, reveal: hidden ? 1 : 0 }) });
+  }
+  if (!opts.isClosed) {
+    menu.push({ type: 'button', style: 'danger', action_id: 'mq_close', text: { type: 'plain_text', emoji: true, text: stri18n(userLang, 'menu_close_poll') || 'Close' }, value: JSON.stringify({ poll_id: pollId }) });
+  }
+  if (menu.length) blocks.push({ type: 'actions', elements: menu });
+  blocks.push(contextMd(`poll_id: ${pollId}`));
+  return blocks;
+}
+
+function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+// ───────────────────────── create modal + submit ────────────────────────────
+
+const FORM_PLACEHOLDER = [
+  'Q: Do you want to order food? [yesno]',
+  'Q: Which food? [choice multi add]',
+  '- Pizza',
+  '- Sushi',
+  'Q: Any comment? [text]',
+  'Q: How many people? [number]',
+  'Q: Preferred day? [date]',
+].join('\n');
+
+function buildCreateModalView(channelId) {
+  return {
+    type: 'modal',
+    callback_id: 'mq_create_submit',
+    title: { type: 'plain_text', text: 'Multi-question poll' },
+    submit: { type: 'plain_text', text: 'Create' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks: [
+      { type: 'input', block_id: 'mq_title', label: { type: 'plain_text', text: 'Title' },
+        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: 'e.g. Friday team lunch' } } },
+      { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: 'Questions' },
+        element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, initial_value: '', placeholder: { type: 'plain_text', text: FORM_PLACEHOLDER } } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'One question per `Q:` line. Options on `-` lines. Tag a type in `[...]`: choice · yesno · text · number · date · time · datetime · email · url. Flags: `multi` `add` `required`.' }] },
+      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: 'Post to channel' },
+        element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
+      { type: 'input', block_id: 'mq_settings', optional: true, label: { type: 'plain_text', text: 'Settings' },
+        element: { type: 'checkboxes', action_id: 'v', options: [
+          { text: { type: 'mrkdwn', text: '*Anonymous* — hide who voted/answered' }, value: 'anonymous' },
+          { text: { type: 'mrkdwn', text: '*Hidden* — hide results until revealed' }, value: 'hidden' },
+        ] } },
+    ],
+  };
+}
+
+/** Parse the create modal submission → { title, channel, questions, errors, para }. */
+function parseCreateSubmit(view) {
+  const v = view.state.values;
+  const title = (v.mq_title && v.mq_title.v && v.mq_title.v.value || '').trim();
+  const formText = (v.mq_form && v.mq_form.v && v.mq_form.v.value) || '';
+  const channel = (v.mq_channel && v.mq_channel.v && v.mq_channel.v.selected_conversation) || null;
+  const settings = ((v.mq_settings && v.mq_settings.v && v.mq_settings.v.selected_options) || []).map((o) => o.value);
+  const { questions, errors } = parseForm(formText);
+  return {
+    title: title || (questions[0] && questions[0].text) || 'Poll',
+    channel,
+    questions,
+    errors,
+    para: { anonymous: settings.includes('anonymous'), hidden: settings.includes('hidden') },
+  };
+}
+
+// ───────────────────────── answer modal ─────────────────────────────────────
+
+function answerElement(type, qmin, qmax) {
+  const a = { action_id: 'v' };
+  switch (type) {
+    case 'number': return { type: 'number_input', is_decimal: true, ...a, ...(qmin != null ? { min_value: String(qmin) } : {}), ...(qmax != null ? { max_value: String(qmax) } : {}) };
+    case 'date': return { type: 'datepicker', ...a };
+    case 'time': return { type: 'timepicker', ...a };
+    case 'datetime': return { type: 'datetimepicker', ...a };
+    case 'email': return { type: 'email_text_input', ...a };
+    case 'url': return { type: 'url_text_input', ...a };
+    case 'text':
+    default: return { type: 'plain_text_input', multiline: true, max_length: MAX_TEXT_LEN, ...a };
+  }
+}
+
+function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts) {
+  const el = answerElement(type);
+  if (current != null && current !== '') {
+    if (type === 'datetime') el.initial_date_time = Number(current);
+    else if (type === 'date') el.initial_date = current;
+    else if (type === 'time') el.initial_time = current;
+    else el.initial_value = String(current);
+  }
+  return {
+    type: 'modal',
+    callback_id: 'mq_answer_submit',
+    private_metadata: JSON.stringify({ poll_id: pollId, qid, type, channel, ts }),
+    title: { type: 'plain_text', text: 'Your answer' },
+    submit: { type: 'plain_text', text: 'Save' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks: [
+      { type: 'input', block_id: 'mq_ans', optional: true, label: { type: 'plain_text', text: trimText(qText || 'Answer', 150) }, element: el },
+    ],
+  };
+}
+
+function readAnswerValue(view) {
+  const el = view.state.values.mq_ans && view.state.values.mq_ans.v;
+  if (!el) return '';
+  if (el.selected_date_time != null) return String(el.selected_date_time);
+  if (el.selected_date != null) return el.selected_date;
+  if (el.selected_time != null) return el.selected_time;
+  return el.value != null ? el.value : '';
+}
+
+// ───────────────────────── Slack-facing operations ──────────────────────────
+
+async function loadPoll(pollId) {
+  try { return await pollCol().findOne({ _id: new ObjectId(String(pollId)) }); } catch (e) { return null; }
+}
+async function loadVotes(pollId, channel, ts) {
+  let d = null;
+  if (channel && ts) d = await votesCol().findOne({ channel, ts });
+  if (!d && pollId) d = await votesCol().findOne({ poll_id: String(pollId) });
+  return d;
+}
+
+/** Is this poll message closed? (authoritative: the `closed` collection.) */
+async function isPollClosed(channel, ts) {
+  try { const d = await _db.collection('closed').findOne({ channel, ts }); return !!(d && d.closed); } catch (e) { return false; }
+}
+
+/** Re-render the poll message from current DB state (after a vote/answer/menu).
+ *  Closed-state is read from the DB so a stale/racing click can never un-close. */
+async function rebuildMessage(client, token, pollData, channel, ts) {
+  const votesDoc = await loadVotes(pollData._id, channel, ts);
+  const isClosed = await isPollClosed(channel, ts);
+  const blocks = buildBlocks(pollData, votesDoc, { userLang: pollData.para && pollData.para.user_lang, isClosed });
+  await client.chat.update({ token, channel, ts, text: trimText(pollData.question || 'Poll', 150), blocks });
+}
+
+// Estimated message block count (Slack hard-limits a message to 50 blocks).
+function estimateBlocks(questions) {
+  let n = 5; // header + sub-context + lead divider + menu + poll_id context
+  for (const q of (questions || [])) {
+    if (isChoice(q.type)) n += 1 + ((q.options && q.options.length) || 0) + (q.user_add_choice ? 1 : 0) + 1;
+    else n += 3; // header + answer section + divider
+  }
+  return n;
+}
+const MAX_BLOCKS = 48;
+
+/** Open the create modal (entry point: `/poll multi`). */
+async function openCreateModal(client, triggerId, channelId) {
+  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId) });
+}
+
+/** Handle create-modal submit: build poll_data, post the message, store ts. */
+async function handleCreateSubmit({ ack, body, view, client, context }) {
+  const parsed = parseCreateSubmit(view);
+  if (!parsed.questions.length) {
+    await ack({ response_action: 'errors', errors: { mq_form: parsed.errors[0] || 'Add at least one question.' } });
+    return;
+  }
+  if (!parsed.channel) { await ack({ response_action: 'errors', errors: { mq_channel: 'Pick a channel.' } }); return; }
+  if (estimateBlocks(parsed.questions) > MAX_BLOCKS) {
+    await ack({ response_action: 'errors', errors: { mq_form: `Too big for one Slack message (limit ~${MAX_BLOCKS} blocks). Use fewer questions or options.` } });
+    return;
+  }
+  await ack();
+  const token = context.botToken;
+  const userId = body.user.id;
+  const teamOrEnt = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id);
+  const q1 = parsed.questions[0];
+  const pollData = {
+    team: teamOrEnt,
+    channel: parsed.channel,
+    ts: null,
+    created_ts: new Date(),
+    user_id: userId,
+    cmd_via: 'mq_modal',
+    question: parsed.title,                                   // compat mirror
+    options: isChoice(q1.type) ? (q1.options || []) : [],    // compat mirror
+    questions: parsed.questions,
+    para: { user_lang: 'en', anonymous: parsed.para.anonymous, hidden: parsed.para.hidden, form_version: 2 },
+  };
+  const res = await pollCol().insertOne(pollData);
+  pollData._id = res.insertedId;
+  const blocks = buildBlocks(pollData, null, { userLang: 'en' });
+  let posted = null;
+  try { posted = await client.chat.postMessage({ token, channel: parsed.channel, text: trimText(parsed.title, 150), blocks }); }
+  catch (e) {
+    // Can't show a modal error after ack — DM the creator + roll back the orphan poll.
+    try { await client.chat.postMessage({ token, channel: userId, text: 'Could not post your multi-question poll (is the bot in that channel?).' }); } catch (_) { /* noop */ }
+    await pollCol().deleteOne({ _id: pollData._id });
+    return;
+  }
+  if (posted && posted.ts) {
+    await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || parsed.channel } });
+    await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || parsed.channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
+  }
+}
+
+/** Handle a vote on a multi-question option (action_id mq_vote). */
+async function handleVote({ ack, body, action, client, context }) {
+  await ack();
+  const token = context.botToken;
+  const value = JSON.parse(action.value);
+  const userId = body.user.id;
+  const channel = body.channel.id;
+  const ts = body.message.ts;
+  const pollData = await loadPoll(value.poll_id);
+  if (!pollData) return;
+  if (await isPollClosed(channel, ts)) { await rebuildMessage(client, token, pollData, channel, ts); return; } // closed: re-render, no write
+  let vdoc = await votesCol().findOne({ channel, ts });
+  if (!vdoc) {
+    await votesCol().insertOne({ team: pollData.team, channel, ts, poll_id: String(value.poll_id), votes: {}, answers: {} });
+    vdoc = { votes: {}, answers: {} };
+  }
+  const votes = vdoc.votes || {};
+  const voteType = applyVote(votes, value.qid, value.oid, userId, !!value.multi);
+  await votesCol().updateOne({ channel, ts }, {
+    $set: { votes },
+    $push: { vote_events: { u: userId, q: value.qid, o: value.oid, t: new Date(), a: voteType } },
+  });
+  await rebuildMessage(client, token, pollData, channel, ts);
+}
+
+/** Open the typed answer modal (action_id mq_answer). */
+async function handleAnswerOpen({ ack, body, action, client, context }) {
+  await ack();
+  const value = JSON.parse(action.value);
+  const channel = body.channel.id;
+  const ts = body.message.ts;
+  const userId = body.user.id;
+  const vdoc = await loadVotes(value.poll_id, channel, ts);
+  const current = vdoc && vdoc.answers && vdoc.answers[value.qid] && vdoc.answers[value.qid][userId];
+  await client.views.open({ trigger_id: body.trigger_id, view: buildAnswerModalView(value.poll_id, value.qid, value.type, value.text, current, channel, ts) });
+}
+
+/** Save a typed answer (callback_id mq_answer_submit). */
+async function handleAnswerSubmit({ ack, body, view, client, context }) {
+  await ack();
+  const meta = JSON.parse(view.private_metadata || '{}');
+  const token = context.botToken;
+  if (await isPollClosed(meta.channel, meta.ts)) return; // poll closed -> ignore the answer
+  const userId = body.user.id;
+  const val = readAnswerValue(view);
+  const vdoc = await votesCol().findOne({ channel: meta.channel, ts: meta.ts });
+  const answers = (vdoc && vdoc.answers) || {};
+  applyAnswer(answers, meta.qid, userId, val);
+  await votesCol().updateOne({ channel: meta.channel, ts: meta.ts }, { $set: { answers } }, { upsert: false });
+  const pollData = await loadPoll(meta.poll_id);
+  if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts);
+}
+
+/** Reveal/hide a hidden multi-question poll (action_id mq_reveal). */
+async function handleReveal({ ack, body, action, client, context }) {
+  await ack();
+  const token = context.botToken;
+  const value = JSON.parse(action.value);
+  const pollData = await loadPoll(value.poll_id);
+  if (!pollData) return;
+  // Flip the LIVE reveal state (para.revealed), not the immutable hide setting.
+  const newRevealed = (value.reveal === 1); // reveal=1 -> show results; 0 -> hide again
+  await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.revealed': newRevealed } });
+  pollData.para = { ...pollData.para, revealed: newRevealed };
+  await rebuildMessage(client, token, pollData, body.channel.id, body.message.ts);
+}
+
+/** Close a multi-question poll (action_id mq_close). */
+async function handleClose({ ack, body, action, client, context }) {
+  await ack();
+  const token = context.botToken;
+  const value = JSON.parse(action.value);
+  const pollData = await loadPoll(value.poll_id);
+  if (!pollData) return;
+  try { await _db.collection('closed').updateOne({ channel: body.channel.id, ts: body.message.ts }, { $setOnInsert: { team: pollData.team }, $set: { closed: true } }, { upsert: true }); } catch (e) { /* best-effort */ }
+  await rebuildMessage(client, token, pollData, body.channel.id, body.message.ts); // reads closed=true just set
+}
+
+/** Per-question "add choice" (action_id mq_addchoice) → small modal. */
+async function handleAddChoiceOpen({ ack, body, action, client }) {
+  await ack();
+  const value = JSON.parse(action.value);
+  await client.views.open({
+    trigger_id: body.trigger_id,
+    view: {
+      type: 'modal', callback_id: 'mq_addchoice_submit',
+      private_metadata: JSON.stringify({ poll_id: value.poll_id, qid: value.qid, channel: body.channel.id, ts: body.message.ts }),
+      title: { type: 'plain_text', text: 'Add a choice' }, submit: { type: 'plain_text', text: 'Add' }, close: { type: 'plain_text', text: 'Cancel' },
+      blocks: [{ type: 'input', block_id: 'mq_newopt', label: { type: 'plain_text', text: 'New choice' }, element: { type: 'plain_text_input', action_id: 'v', max_length: 150 } }],
+    },
+  });
+}
+
+async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
+  const meta = JSON.parse(view.private_metadata || '{}');
+  const text = ((view.state.values.mq_newopt && view.state.values.mq_newopt.v && view.state.values.mq_newopt.v.value) || '').trim();
+  if (!text) { await ack({ response_action: 'errors', errors: { mq_newopt: 'Enter a choice.' } }); return; }
+  await ack();
+  const pollData = await loadPoll(meta.poll_id);
+  if (!pollData || !isMulti(pollData)) return;
+  if (await isPollClosed(meta.channel, meta.ts)) return;
+  const q = pollData.questions.find((x) => x.id === meta.qid);
+  if (!q || !isChoice(q.type)) return;
+  if ((q.options || []).length >= MAX_OPTIONS) return;
+  q.options = [...(q.options || []), text.slice(0, 150)];
+  if (estimateBlocks(pollData.questions) > MAX_BLOCKS) return; // would exceed Slack's block limit
+  await pollCol().updateOne({ _id: pollData._id }, { $set: { questions: pollData.questions } });
+  await rebuildMessage(client, context.botToken, pollData, meta.channel, meta.ts);
+}
+
+/** Register all mq_* handlers on the Bolt app. Call once from index.js. */
+function register(app) {
+  app.action('mq_vote', wrap(handleVote, 'mq_vote'));
+  app.action('mq_answer', wrap(handleAnswerOpen, 'mq_answer'));
+  app.action('mq_reveal', wrap(handleReveal, 'mq_reveal'));
+  app.action('mq_close', wrap(handleClose, 'mq_close'));
+  app.action('mq_addchoice', wrap(handleAddChoiceOpen, 'mq_addchoice'));
+  app.view('mq_create_submit', wrap(handleCreateSubmit, 'mq_create_submit'));
+  app.view('mq_answer_submit', wrap(handleAnswerSubmit, 'mq_answer_submit'));
+  app.view('mq_addchoice_submit', wrap(handleAddChoiceSubmit, 'mq_addchoice_submit'));
+}
+
+// Wrap a handler so an exception never crashes Bolt; ack on error to avoid a hang.
+// Logs only a generic message (no ids/data — public repo).
+function wrap(fn, name) {
+  return async (args) => {
+    try { await fn(args); }
+    catch (e) {
+      try { if (args.ack) await args.ack(); } catch (_) { /* already acked */ }
+      // eslint-disable-next-line no-console
+      console.error(`[multiquestion] ${name} failed: ${e && e.message}`);
+    }
+  };
+}
+
+module.exports = {
+  init, register, isMulti, openCreateModal,
+  // exported for unit tests:
+  parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit,
+  buildCreateModalView, buildAnswerModalView, answerElement, readAnswerValue, estimateBlocks,
+  MAX_QUESTIONS, MAX_OPTIONS, MAX_BLOCKS, ALL_TYPES,
+};

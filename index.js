@@ -78,6 +78,10 @@ const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron'
 const { richTextToMrkdwn, mrkdwnToRichText, readInputAsMrkdwn } = require('./src/util/richtext');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
+// Multi-question polls ("forms") — self-contained, additive, backward-compatible.
+// Legacy single-question polls never enter this module (it owns its own mq_* ids).
+const mq = require('./src/multiquestion');
+
 const cron = require('node-cron');
 
 const { createLogger, format, transports } = require('winston');
@@ -542,6 +546,7 @@ try {
   hiddenCol = db.collection('hidden');
   pollCol = db.collection('poll_data');
   scheduleCol = db.collection('poll_schedule');
+  mq.init(db); // wire the multi-question module to the same DB handle
 
   migrations = new Migrations(db);
 } catch (e) {
@@ -1251,6 +1256,9 @@ const app = new App({
   receiver: receiver
 });
 
+// Register multi-question poll handlers (mq_* actions/views). Self-contained.
+mq.register(app);
+
 const sendMessageUsingUrl = async (url,newMessage) => {
   return await fetch(url, {
     method: 'POST',
@@ -1839,6 +1847,14 @@ async function processCommand(ack, body, client, command, context, say, respond)
       const timeDiff = ackedTime - receivedTime;
       // Respond with the time difference
       await respond(`Time from receiving to acknowledging: ${timeDiff} ms`);
+      return;
+    }
+
+    // Multi-question poll: "/<cmd> multi" opens the form builder modal. The whole
+    // multi-question feature is self-contained in src/multiquestion.js.
+    if (cmdBody && /^multi(\b|$)/i.test(cmdBody)) {
+      try { await mq.openCreateModal(client, body.trigger_id, body.channel_id); }
+      catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }
     // Create a pattern for matching escaped quotes
