@@ -561,6 +561,16 @@ const createDBIndex = async () => {
   hiddenCol.createIndex({ channel: 1, ts: 1 });
   pollCol.createIndex({ channel: 1, ts: 1 });
   pollCol.createIndex({ schedule_end_active: 1, schedule_end_ts: 1 });
+  // Indexes that accelerate the read-only analytics dashboard's filtered reads
+  // (team/creator/date drilldowns + recurring-series grouping). Background +
+  // idempotent; tiny write overhead on poll_data. The app itself also benefits
+  // from team/created_ts lookups. cmd_via_ref groups a scheduled template's
+  // reposted instances (cmd_via='task_schedule').
+  pollCol.createIndex({ team: 1 }, { background: true });
+  pollCol.createIndex({ user_id: 1 }, { background: true });
+  pollCol.createIndex({ created_ts: 1 }, { background: true });
+  pollCol.createIndex({ team: 1, created_ts: 1 }, { background: true });
+  pollCol.createIndex({ cmd_via_ref: 1 }, { background: true });
   scheduleCol.createIndex({ poll_id: 1, next_ts: 1, is_enable: 1, is_done: 1   });
   scheduleCol.createIndex({ next_ts: 1, is_enable: 1 , is_done: 1  });
 }
@@ -4579,7 +4589,16 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         }, {
           $set: {
             votes: poll,
-          }
+          },
+          // Per-vote timestamp trail. ADDITIVE and backward-compatible: the
+          // authoritative `votes` map above is unchanged, so all existing app
+          // code, old vote documents, and downstream readers keep working — old
+          // polls simply have no `vote_events` (treat absent as "no timing
+          // known"). No migration needed; new votes start appending events on
+          // upgrade. One event per toggle so true vote-time analytics become
+          // possible (the votes map alone carries no timestamps):
+          //   u = voter id, o = option id, t = when (Date), a = '+' cast / '-' retract.
+          $push: { vote_events: { u: user_id, o: value.id, t: new Date(), a: voteType } },
         });
         logger.debug(`Vote ${voteType} For ${poll_id} : ${value.id}`);
 
