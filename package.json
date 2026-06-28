@@ -1,6 +1,6 @@
 {
   "name": "openpollplus",
-  "version": "4.1.1.2",
+  "version": "4.2.0.0",
   "description": "Open source poll slack app",
   "main": "index.js",
   "scripts": {
