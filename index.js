@@ -1279,16 +1279,17 @@ mq.register(app);
 app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   await ack();
   const val = (action && action.selected_option && action.selected_option.value) || 'single';
-  let channel = null;
-  try { channel = (JSON.parse((body.view && body.view.private_metadata) || '{}').channel) || null; } catch (e) { /* ignore */ }
+  let channel = null; let responseUrl = '';
+  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; } catch (e) { /* ignore */ }
   try {
     if (val === 'multi') {
-      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel) });
+      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl) });
     } else {
-      await createModal(context, client, body.trigger_id, '', channel);
+      // swap back to single-question — update THIS modal in place (no new modal).
+      await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);
     }
   } catch (e) {
-    console.error('mq_poll_type swap failed:', e && e.message);
+    logger.error('mq_poll_type swap failed:', e && e.message);
   }
 });
 
@@ -1889,7 +1890,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
       // Auto-detect the channel the command was run in — same source the
       // single-question modal uses below (command.channel_id).
       const mqChannel = (command && command.channel_id) ? command.channel_id : ((body && body.channel_id) || null);
-      try { await mq.openCreateModal(client, body.trigger_id, mqChannel); }
+      try { await mq.openCreateModal(client, body.trigger_id, mqChannel, (body && body.response_url) || ''); }
       catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }
@@ -4992,7 +4993,7 @@ app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   }
 });
 
-async function createModal(context, client, trigger_id,response_url,channel) {
+async function createModal(context, client, trigger_id,response_url,channel,existingViewId) {
   try {
     const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
     let appLang= gAppLang;
@@ -5057,24 +5058,23 @@ async function createModal(context, client, trigger_id,response_url,channel) {
         }
       ];
 
-      const result = await client.views.open({
-        token: context.botToken,
-        trigger_id: trigger_id,
-        view: {
-          type: 'modal',
-          callback_id: 'modal_poll_submit',
-          private_metadata: JSON.stringify(privateMetadata),
-          title: {
-            type: 'plain_text',
-            text: stri18n(appLang,'info_create_poll'),
-          },
-          close: {
-            type: 'plain_text',
-            text: stri18n(appLang,'btn_cancel'),
-          },
-          blocks: blocks,
-        }
-      });
+      const cmdOnlyView = {
+        type: 'modal',
+        callback_id: 'modal_poll_submit',
+        private_metadata: JSON.stringify(privateMetadata),
+        title: {
+          type: 'plain_text',
+          text: stri18n(appLang,'info_create_poll'),
+        },
+        close: {
+          type: 'plain_text',
+          text: stri18n(appLang,'btn_cancel'),
+        },
+        blocks: blocks,
+      };
+      const result = existingViewId
+        ? await client.views.update({ token: context.botToken, view_id: existingViewId, view: cmdOnlyView })
+        : await client.views.open({ token: context.botToken, trigger_id: trigger_id, view: cmdOnlyView });
       return;
 
     }
@@ -5165,6 +5165,10 @@ async function createModal(context, client, trigger_id,response_url,channel) {
               include: ['private','public']
             },
             action_id: 'modal_poll_channel',
+            // Pre-select the channel the command ran in (when known) so it's the
+            // default and survives a poll-type swap; also makes selected_conversation
+            // non-null at submit so it doesn't clobber private_metadata.channel.
+            ...(channel ? { initial_conversation: channel } : {}),
             placeholder: {
               type: 'plain_text',
               text: stri18n(appLang,'modal_ch_select'),
@@ -5471,28 +5475,29 @@ async function createModal(context, client, trigger_id,response_url,channel) {
     ]);
 
     //logger.debug(JSON.stringify(blocks));
-    const result = await client.views.open({
-      token: context.botToken,
-      trigger_id: trigger_id,
-      view: {
-        type: 'modal',
-        callback_id: 'modal_poll_submit',
-        private_metadata: JSON.stringify(privateMetadata),
-        title: {
-          type: 'plain_text',
-          text: stri18n(appLang,'info_create_poll'),
-        },
-        submit: {
-          type: 'plain_text',
-          text: stri18n(appLang,'btn_create'),
-        },
-        close: {
-          type: 'plain_text',
-          text: stri18n(appLang,'btn_cancel'),
-        },
-        blocks: blocks,
-      }
-    });
+    const viewPayload = {
+      type: 'modal',
+      callback_id: 'modal_poll_submit',
+      private_metadata: JSON.stringify(privateMetadata),
+      title: {
+        type: 'plain_text',
+        text: stri18n(appLang,'info_create_poll'),
+      },
+      submit: {
+        type: 'plain_text',
+        text: stri18n(appLang,'btn_create'),
+      },
+      close: {
+        type: 'plain_text',
+        text: stri18n(appLang,'btn_cancel'),
+      },
+      blocks: blocks,
+    };
+    // existingViewId set ⇒ we're swapping an open modal back to single-question:
+    // update in place (reliable) instead of opening a new modal.
+    const result = existingViewId
+      ? await client.views.update({ token: context.botToken, view_id: existingViewId, view: viewPayload })
+      : await client.views.open({ token: context.botToken, trigger_id: trigger_id, view: viewPayload });
   } catch (error) {
     logger.error(error);
   }

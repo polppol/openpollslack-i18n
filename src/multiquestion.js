@@ -76,7 +76,7 @@ function parseForm(text) {
     if (!cur) return;
     if (cur.type === 'yesno') cur.options = ['Yes', 'No'];
     if (isChoice(cur.type) && (!cur.options || cur.options.length < 2) && cur.type !== 'yesno') {
-      // a choice with <2 options is meaningless — treat as a text question instead
+      // a choice needs ≥2 options — surfaced here and blocked at submit (handleCreateSubmit)
       errors.push(`"${cur.text.slice(0, 40)}": choice needs at least 2 options`);
     }
     questions.push(cur);
@@ -122,7 +122,7 @@ function parseForm(text) {
     const item = { id: `q${i + 1}`, type, text: q.text || `Question ${i + 1}` };
     if (isChoice(type)) {
       item.options = q.type === 'yesno' ? ['Yes', 'No'] : (q.options || []).slice(0, MAX_OPTIONS);
-      item.multi = !!q.multi;
+      item.multi = type === 'yesno' ? false : !!q.multi; // yes/no is always single-select
       if (q.user_add_choice) item.user_add_choice = true;
     }
     if (q.required) item.required = true;
@@ -179,12 +179,21 @@ function divider() { return { type: 'divider' }; }
 function sectionMd(text) { return { type: 'section', text: { type: 'mrkdwn', text } }; }
 function contextMd(text) { return { type: 'context', elements: [{ type: 'mrkdwn', text }] }; }
 
+// Cap how many voter mentions we render per option so a popular non-anonymous
+// option can't push a section past Slack's 3000-char limit (which would make the
+// whole chat.update fail on the next interaction). Excess are summarized.
+const MAX_VOTER_MENTIONS = 40;
+
 function votersText(voters, anonymous, hidden, userLang) {
   if (hidden) return stri18n(userLang, 'info_wait_reveal');
   const n = (voters || []).length;
   if (n === 0) return stri18n(userLang, 'info_no_vote');
   let s = '';
-  if (!anonymous) s += voters.map((u) => `<@${u}>`).join(' ') + '  ';
+  if (!anonymous) {
+    const shown = voters.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>`).join(' ');
+    const extra = n - Math.min(n, MAX_VOTER_MENTIONS);
+    s += shown + (extra > 0 ? ` +${extra} more` : '') + '  ';
+  }
   s += parameterizedString(stri18n(userLang, n === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: n });
   return s;
 }
@@ -252,7 +261,13 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
       if (hidden) summary = stri18n(userLang, 'info_wait_reveal');
       else if (answeredBy.length === 0) summary = stri18n(userLang, 'info_no_vote');
       else if (anonymous) summary = `${answeredBy.length} answered`;
-      else summary = answeredBy.map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
+      else {
+        // Cap rendered answers so a popular question can't push the section past
+        // Slack's 3000-char limit (which would make chat.update fail).
+        const shown = answeredBy.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
+        const extra = answeredBy.length - Math.min(answeredBy.length, MAX_VOTER_MENTIONS);
+        summary = shown + (extra > 0 ? `\n+${extra} more` : '');
+      }
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: summary || ' ' },
@@ -372,7 +387,7 @@ function answerElement(type, qmin, qmax) {
 function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts) {
   const el = answerElement(type);
   if (current != null && current !== '') {
-    if (type === 'datetime') el.initial_date_time = Number(current);
+    if (type === 'datetime') { const n = Number(current); if (Number.isFinite(n)) el.initial_date_time = n; } // NaN would be an invalid block
     else if (type === 'date') el.initial_date = current;
     else if (type === 'time') el.initial_time = current;
     else el.initial_value = String(current);
@@ -448,6 +463,12 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
     await ack({ response_action: 'errors', errors: { mq_form: parsed.errors[0] || 'Add at least one question.' } });
     return;
   }
+  // Surface ALL parse problems before the irreversible ack (otherwise a form with
+  // e.g. a 1-option choice or a stray line would post broken with no feedback).
+  if (parsed.errors && parsed.errors.length) {
+    await ack({ response_action: 'errors', errors: { mq_form: parsed.errors.join(' • ').slice(0, 2000) } });
+    return;
+  }
   if (!parsed.channel) { await ack({ response_action: 'errors', errors: { mq_channel: 'Pick a channel.' } }); return; }
   if (estimateBlocks(parsed.questions) > MAX_BLOCKS) {
     await ack({ response_action: 'errors', errors: { mq_form: `Too big for one Slack message (limit ~${MAX_BLOCKS} blocks). Use fewer questions or options.` } });
@@ -504,17 +525,29 @@ async function handleVote({ ack, body, action, client, context }) {
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
   if (await isPollClosed(channel, ts)) { await rebuildMessage(client, token, pollData, channel, ts); return; } // closed: re-render, no write
-  let vdoc = await votesCol().findOne({ channel, ts });
-  if (!vdoc) {
-    await votesCol().insertOne({ team: pollData.team, channel, ts, poll_id: String(value.poll_id), votes: {}, answers: {} });
-    vdoc = { votes: {}, answers: {} };
+  // Atomic, concurrency-safe toggle: target only this question/option path so two
+  // people voting at once never clobber each other's writes (the old whole-`votes`
+  // $set lost concurrent updates). $addToSet/$pull are idempotent per path.
+  const qid = value.qid; const oid = value.oid;
+  const base = `votes.${qid}.${oid}`;
+  const probe = await votesCol().findOne({ channel, ts }, { projection: { [base]: 1 } });
+  const had = !!(probe && probe.votes && probe.votes[qid] && Array.isArray(probe.votes[qid][oid]) && probe.votes[qid][oid].includes(userId));
+  const ev = { u: userId, q: qid, o: oid, t: new Date(), a: had ? '-' : '+' };
+  const update = { $push: { vote_events: ev }, $setOnInsert: { team: pollData.team, poll_id: String(value.poll_id) } };
+  if (had) {
+    update.$pull = { [base]: userId }; // toggle off
+  } else {
+    update.$addToSet = { [base]: userId }; // toggle on
+    if (!value.multi) {
+      // single-select: remove this voter from the question's OTHER options
+      const q = (pollData.questions || []).find((x) => x.id === qid);
+      const n = (q && Array.isArray(q.options)) ? q.options.length : 0;
+      const pull = {};
+      for (let i = 0; i < n; i++) if (i !== oid) pull[`votes.${qid}.${i}`] = userId;
+      if (Object.keys(pull).length) update.$pull = pull;
+    }
   }
-  const votes = vdoc.votes || {};
-  const voteType = applyVote(votes, value.qid, value.oid, userId, !!value.multi);
-  await votesCol().updateOne({ channel, ts }, {
-    $set: { votes },
-    $push: { vote_events: { u: userId, q: value.qid, o: value.oid, t: new Date(), a: voteType } },
-  });
+  await votesCol().updateOne({ channel, ts }, update, { upsert: true });
   await rebuildMessage(client, token, pollData, channel, ts);
 }
 
@@ -538,11 +571,19 @@ async function handleAnswerSubmit({ ack, body, view, client, context }) {
   if (await isPollClosed(meta.channel, meta.ts)) return; // poll closed -> ignore the answer
   const userId = body.user.id;
   const val = readAnswerValue(view);
-  const vdoc = await votesCol().findOne({ channel: meta.channel, ts: meta.ts });
-  const answers = (vdoc && vdoc.answers) || {};
-  applyAnswer(answers, meta.qid, userId, val);
-  await votesCol().updateOne({ channel: meta.channel, ts: meta.ts }, { $set: { answers } }, { upsert: false });
   const pollData = await loadPoll(meta.poll_id);
+  // Atomic per-user write: only this question/user path, so concurrent answers
+  // from other users are never clobbered (the old whole-`answers` $set lost them).
+  const path = `answers.${meta.qid}.${userId}`;
+  if (val == null || String(val).trim() === '') {
+    await votesCol().updateOne({ channel: meta.channel, ts: meta.ts }, { $unset: { [path]: '' } });
+  } else {
+    await votesCol().updateOne(
+      { channel: meta.channel, ts: meta.ts },
+      { $set: { [path]: String(val).slice(0, MAX_TEXT_LEN) }, $setOnInsert: { team: pollData && pollData.team, poll_id: String(meta.poll_id) } },
+      { upsert: true },
+    );
+  }
   if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts);
 }
 
@@ -597,9 +638,17 @@ async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
   const q = pollData.questions.find((x) => x.id === meta.qid);
   if (!q || !isChoice(q.type)) return;
   if ((q.options || []).length >= MAX_OPTIONS) return;
-  q.options = [...(q.options || []), text.slice(0, 150)];
-  if (estimateBlocks(pollData.questions) > MAX_BLOCKS) return; // would exceed Slack's block limit
-  await pollCol().updateOne({ _id: pollData._id }, { $set: { questions: pollData.questions } });
+  const opt = text.slice(0, 150);
+  // budget check on the would-be shape (advisory; atomic op below is the real write)
+  const wouldBe = pollData.questions.map((x) => (x.id === meta.qid ? { ...x, options: [...(x.options || []), opt] } : x));
+  if (estimateBlocks(wouldBe) > MAX_BLOCKS) return; // would exceed Slack's block limit
+  // Atomic: push only into THIS question's options (arrayFilters) so concurrent
+  // edits don't clobber the whole questions[] array. Mirror Q1 to legacy `options`.
+  const update = { $push: { 'questions.$[q].options': opt } };
+  if (pollData.questions[0] && pollData.questions[0].id === meta.qid) update.$push.options = opt;
+  await pollCol().updateOne({ _id: pollData._id }, update, { arrayFilters: [{ 'q.id': meta.qid }] });
+  q.options = [...(q.options || []), opt]; // reflect for the immediate re-render
+  if (pollData.questions[0] && pollData.questions[0].id === meta.qid) pollData.options = [...(pollData.options || []), opt];
   await rebuildMessage(client, context.botToken, pollData, meta.channel, meta.ts);
 }
 
