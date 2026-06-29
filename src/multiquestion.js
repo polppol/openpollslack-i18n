@@ -290,10 +290,22 @@ function buildCreateModalView(channelId) {
   return {
     type: 'modal',
     callback_id: 'mq_create_submit',
+    // channel kept in private_metadata so the poll-type selector can preserve it
+    // when swapping back to the single-question modal.
+    private_metadata: JSON.stringify({ channel: channelId || null }),
     title: { type: 'plain_text', text: 'Multi-question poll' },
     submit: { type: 'plain_text', text: 'Create' },
     close: { type: 'plain_text', text: 'Cancel' },
     blocks: [
+      { // Poll-type selector (this modal = multi). Switching to "Single question"
+        // re-opens the legacy single-question modal (app.action('mq_poll_type')).
+        type: 'section', block_id: 'mq_poll_type_blk', text: { type: 'mrkdwn', text: '*Poll type*' },
+        accessory: { type: 'static_select', action_id: 'mq_poll_type',
+          initial_option: { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
+          options: [
+            { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
+            { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
+          ] } },
       { type: 'input', block_id: 'mq_title', label: { type: 'plain_text', text: 'Title' },
         element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: 'e.g. Friday team lunch' } } },
       { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: 'Questions' },

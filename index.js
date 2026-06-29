@@ -1259,6 +1259,27 @@ const app = new App({
 // Register multi-question poll handlers (mq_* actions/views). Self-contained.
 mq.register(app);
 
+// Poll-type selector shared by the single-question modal (createModal) and the
+// multi-question builder: swap between them in place. "multi" updates the current
+// modal to the form builder; "single" re-opens the legacy single-question modal
+// via the action's trigger. Channel is carried in private_metadata so it survives
+// the swap. Lives here (not in the mq module) because it bridges createModal.
+app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
+  await ack();
+  const val = (action && action.selected_option && action.selected_option.value) || 'single';
+  let channel = null;
+  try { channel = (JSON.parse((body.view && body.view.private_metadata) || '{}').channel) || null; } catch (e) { /* ignore */ }
+  try {
+    if (val === 'multi') {
+      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel) });
+    } else {
+      await createModal(context, client, body.trigger_id, '', channel);
+    }
+  } catch (e) {
+    console.error('mq_poll_type swap failed:', e && e.message);
+  }
+});
+
 const sendMessageUsingUrl = async (url,newMessage) => {
   return await fetch(url, {
     method: 'POST',
@@ -5044,6 +5065,23 @@ async function createModal(context, client, trigger_id,response_url,channel) {
     }
 
     let blocks = [
+      {
+        // Poll-type selector (default single). Switching to "Multi-question form"
+        // swaps to the multi-question builder (handled by app.action('mq_poll_type')).
+        // It's a SECTION accessory (not an input), so the legacy submit never sees it.
+        type: 'section',
+        block_id: 'mq_poll_type_blk',
+        text: { type: 'mrkdwn', text: '*Poll type*' },
+        accessory: {
+          type: 'static_select',
+          action_id: 'mq_poll_type',
+          initial_option: { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
+          options: [
+            { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
+            { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
+          ],
+        },
+      },
       {
         type: 'section',
         text: {
