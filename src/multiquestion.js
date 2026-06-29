@@ -29,13 +29,36 @@ let _opts = {};
 /** Wire up the Mongo handle + options (called once from index.js after connect).
  *  opts.resolveTeamDefaults(teamId) -> { app_lang, true_anonymous } lets forms
  *  honor each team's config defaults, the same way the single-question modal does. */
-function init(db, opts) { _db = db; _opts = opts || {}; }
+function init(db, opts) {
+  _db = db; _opts = opts || {};
+  // Visual-builder drafts are transient + GC themselves via a TTL index (24h) so
+  // abandoned builds never accumulate. Best-effort (a missing index just means no auto-GC).
+  try { _db.collection('mq_drafts').createIndex({ created_at: 1 }, { expireAfterSeconds: 86400 }).catch(() => {}); } catch (e) { /* noop */ }
+}
 async function teamDefaults(teamId) {
   try { if (_opts.resolveTeamDefaults) return (await _opts.resolveTeamDefaults(teamId)) || {}; } catch (e) { /* use built-in defaults */ }
   return {};
 }
 const pollCol = () => _db.collection('poll_data');
 const votesCol = () => _db.collection('votes');
+
+// ── Visual-builder draft store (server-side build state; private_metadata's 3000-char
+// cap can't hold a form). A draft holds the in-progress form; only its _id rides in
+// the modal's private_metadata. Deleted on create/cancel; TTL-GC'd if abandoned. ──
+const draftCol = () => _db.collection('mq_drafts');
+async function createDraft(d) {
+  const doc = {
+    team: d.team, user_id: d.user_id, channel: d.channel || null, response_url: d.response_url || '',
+    root_view_id: null, mode: d.mode || 'visual', title: d.title || '',
+    settings: { anonymous: !!(d.settings && d.settings.anonymous), hidden: !!(d.settings && d.settings.hidden), user_lang: (d.settings && d.settings.user_lang) || d.lang || 'en' },
+    questions: Array.isArray(d.questions) ? d.questions : [],
+    created_at: new Date(), updated_at: new Date(),
+  };
+  const r = await draftCol().insertOne(doc); doc._id = r.insertedId; return doc;
+}
+async function loadDraft(id) { try { return await draftCol().findOne({ _id: new ObjectId(String(id)) }); } catch (e) { return null; } }
+async function patchDraft(id, patch) { try { await draftCol().updateOne({ _id: new ObjectId(String(id)) }, { $set: { ...patch, updated_at: new Date() } }); } catch (e) { /* noop */ } }
+async function deleteDraft(id) { try { await draftCol().deleteOne({ _id: new ObjectId(String(id)) }); } catch (e) { /* noop */ } }
 
 const MAX_QUESTIONS = 10;
 const MAX_OPTIONS = 10;
@@ -526,15 +549,15 @@ const MAX_BLOCKS = 48;
 /** Open the create modal (entry point: `/poll multi`). Resolves the team language
  *  (reusing the same resolver as the single-question flow) so the modal is localized.
  *  initialForm pre-fills the Questions box (command preview / error recovery). */
-async function openCreateModal(client, triggerId, channelId, responseUrl, teamId, initialForm) {
-  const defs = await teamDefaults(teamId);
-  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm, defs.app_lang_user_selectable, _opts.isUseResponseUrl) });
+async function openCreateModal(client, triggerId, channelId, responseUrl, teamId, initialForm, userId) {
+  // Now opens the VISUAL builder (default). The DSL textarea lives on as "Advanced" mode.
+  await openBuilder({ client, triggerId, channel: channelId, responseUrl, teamId, userId: userId || null, initialForm });
 }
 
 // Rebuild the single-line `/<cmd> multi …` command that recreates this form — used
 // for the command-info context block AND the error-recovery DM. Lines are joined
 // by " | " so it pastes back as one slash command.
-function formToCommandDSL(questions) {
+function formToLines(questions) {
   const lines = [];
   for (const q of (questions || [])) {
     const flags = [];
@@ -544,8 +567,12 @@ function formToCommandDSL(questions) {
     lines.push(`Q: ${q.text} [${[q.type, ...flags].join(' ')}]`);
     if (isChoice(q.type) && q.type !== 'yesno') for (const o of (q.options || [])) lines.push(`- ${o}`);
   }
-  return lines.join(' | ');
+  return lines;
 }
+// One-line command form (` | `-separated) vs multiline modal form (`\n`-separated,
+// what parseForm reads). Same content, different separator.
+function formToCommandDSL(questions) { return formToLines(questions).join(' | '); }
+function formToModalDSL(questions) { return formToLines(questions).join('\n'); }
 function commandString(questions, para) {
   const cmd = _opts.slackCommand || 'poll';
   const kws = [];
@@ -968,6 +995,286 @@ async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
   await rebuildMessage(client, context.botToken, pollData, meta.channel, meta.ts, meta.response_url);
 }
 
+// ═══════════════════════ Visual (point-and-click) builder ════════════════════
+// Root modal (re-rendered via views.update) lists the questions; a pushed per-question
+// sub-modal edits one. State is an mq_drafts doc — only draft_id is in private_metadata
+// (3000-char cap can't hold a form). "Advanced" mode = the same DSL textarea as before.
+// Reuses parseForm (DSL→questions), formToCommandDSL (questions→DSL), createAndPost.
+
+const TYPE_EMOJI = { choice: ':radio_button:', yesno: ':white_check_mark:', text: ':pencil:', number: ':1234:', date: ':calendar:', time: ':clock3:', datetime: ':date:', email: ':email:', url: ':link:' };
+function typeLabel(lang, type) { return stri18n(lang, 'mq_qtype_' + type); }
+
+// Capture whatever is currently in the root modal's inputs into the draft, so any
+// button/select action (which re-renders) never loses in-flight typing. In advanced
+// mode the DSL textarea is parsed into questions (bidirectional Visual⇄Advanced sync).
+async function syncRootState(view, draft) {
+  const v = (view && view.state && view.state.values) || {};
+  const patch = {};
+  if (v.mq_b_title && v.mq_b_title.v) patch.title = (v.mq_b_title.v.value || '').trim();
+  if (v.mq_b_settings && v.mq_b_settings.v) { const sel = (v.mq_b_settings.v.selected_options || []).map((o) => o.value); patch['settings.anonymous'] = sel.includes('anonymous'); patch['settings.hidden'] = sel.includes('hidden'); }
+  if (v.mq_channel && v.mq_channel.v && v.mq_channel.v.selected_conversation) patch.channel = v.mq_channel.v.selected_conversation;
+  if (v.mq_lang && v.mq_lang.v && v.mq_lang.v.selected_option) patch['settings.user_lang'] = v.mq_lang.v.selected_option.value;
+  if (draft.mode === 'advanced' && v.mq_form && v.mq_form.v) {
+    const lang = (draft.settings && draft.settings.user_lang) || 'en';
+    patch.questions = parseForm(v.mq_form.v.value || '', lang).questions; // keep structured truth current
+  }
+  await patchDraft(draft._id, patch);
+  // reflect locally so the immediate re-render uses fresh values
+  if ('title' in patch) draft.title = patch.title;
+  if ('settings.anonymous' in patch) draft.settings.anonymous = patch['settings.anonymous'];
+  if ('settings.hidden' in patch) draft.settings.hidden = patch['settings.hidden'];
+  if ('channel' in patch) draft.channel = patch.channel;
+  if ('settings.user_lang' in patch) draft.settings.user_lang = patch['settings.user_lang'];
+  if ('questions' in patch) draft.questions = patch.questions;
+}
+
+function buildInitialSettings(draft, lang) {
+  const t = (k) => stri18n(lang, k);
+  const sel = [];
+  if (draft.settings && draft.settings.anonymous) sel.push({ text: { type: 'mrkdwn', text: t('mq_opt_anonymous') }, value: 'anonymous' });
+  if (draft.settings && draft.settings.hidden) sel.push({ text: { type: 'mrkdwn', text: t('mq_opt_hidden') }, value: 'hidden' });
+  return sel.length ? { initial_options: sel } : {};
+}
+
+/** The root builder modal, rendered from the draft. */
+function buildBuilderView(draft, useResponseUrl, langSelectable) {
+  const lang = (draft.settings && draft.settings.user_lang) || 'en';
+  const t = (k) => stri18n(lang, k);
+  const blocks = [];
+  // Mode toggle (Visual ⇄ Advanced) — section accessory static_select, like the poll-type selector.
+  const modeOpt = (val, key) => ({ text: { type: 'plain_text', text: trimText(t(key), 75) }, value: val });
+  blocks.push({ type: 'section', block_id: 'mq_b_mode_blk', text: { type: 'mrkdwn', text: `*${t('mq_b_mode_label')}*` },
+    accessory: { type: 'static_select', action_id: 'mq_b_mode',
+      initial_option: draft.mode === 'advanced' ? modeOpt('advanced', 'mq_b_mode_advanced') : modeOpt('visual', 'mq_b_mode_visual'),
+      options: [modeOpt('visual', 'mq_b_mode_visual'), modeOpt('advanced', 'mq_b_mode_advanced')],
+      confirm: { title: { type: 'plain_text', text: trimText(t('mq_switch_title'), 100) }, text: { type: 'mrkdwn', text: trimText(t('mq_b_mode_switch'), 300) }, confirm: { type: 'plain_text', text: trimText(t('mq_switch_ok'), 30) }, deny: { type: 'plain_text', text: trimText(t('mq_switch_deny'), 30) } } } });
+  // Title
+  blocks.push({ type: 'input', block_id: 'mq_b_title', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_title'), 2000) },
+    element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...(draft.title ? { initial_value: draft.title } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_title_ph'), 150) } } });
+
+  if (draft.mode === 'advanced') {
+    blocks.push({ type: 'input', block_id: 'mq_form', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_questions'), 2000) },
+      element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...((draft.questions && draft.questions.length) ? { initial_value: String(formToModalDSL(draft.questions)).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } });
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] });
+  } else {
+    blocks.push(divider());
+    const qs = draft.questions || [];
+    if (!qs.length) blocks.push(contextMd(t('mq_b_no_questions')));
+    qs.forEach((q, i) => {
+      const opts = [{ text: { type: 'plain_text', emoji: true, text: trimText('✏️ ' + t('mq_b_q_edit'), 75) }, value: `edit:${i}` }];
+      if (i > 0) opts.push({ text: { type: 'plain_text', emoji: true, text: trimText('⬆️ ' + t('mq_b_q_up'), 75) }, value: `up:${i}` });
+      if (i < qs.length - 1) opts.push({ text: { type: 'plain_text', emoji: true, text: trimText('⬇️ ' + t('mq_b_q_down'), 75) }, value: `down:${i}` });
+      opts.push({ text: { type: 'plain_text', emoji: true, text: trimText('🗑️ ' + t('mq_b_q_remove'), 75) }, value: `del:${i}` });
+      const sub = isChoice(q.type) && q.type !== 'yesno' ? ` · ${(q.options || []).length} ${t('mq_b_options')}` : '';
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*${i + 1}.* ${TYPE_EMOJI[q.type] || ''} ${trimText(q.text || '', 140)}\n_${typeLabel(lang, q.type)}${sub}_` },
+        accessory: { type: 'overflow', action_id: 'mq_b_qmenu', options: opts } });
+    });
+    if (qs.length < MAX_QUESTIONS) blocks.push({ type: 'actions', elements: [{ type: 'button', action_id: 'mq_b_add_q', style: 'primary', text: { type: 'plain_text', emoji: true, text: trimText('➕ ' + t('mq_b_add_q'), 75) } }] });
+    else blocks.push(contextMd(parameterizedString(t('mq_err_max_questions'), { max: MAX_QUESTIONS })));
+    blocks.push(divider());
+  }
+
+  // Settings (anonymous/hidden)
+  blocks.push({ type: 'input', block_id: 'mq_b_settings', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_settings'), 2000) },
+    element: { type: 'checkboxes', action_id: 'v', options: [{ text: { type: 'mrkdwn', text: t('mq_opt_anonymous') }, value: 'anonymous' }, { text: { type: 'mrkdwn', text: t('mq_opt_hidden') }, value: 'hidden' }], ...buildInitialSettings(draft, lang) } });
+
+  // Channel + language — same logic/keys as the create modal.
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } });
+  if (useResponseUrl && draft.response_url) {
+    blocks.push(contextMd(t('modal_ch_response_url_auto')));
+  } else {
+    blocks.push({ type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
+      element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(draft.channel ? { initial_conversation: draft.channel } : {}) } });
+    blocks.push(contextMd(useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn')));
+  }
+  if (langSelectable && Object.keys(langList).length) {
+    blocks.push({ type: 'input', block_id: 'mq_lang', optional: true, label: { type: 'plain_text', text: trimText(t('info_lang_select_label'), 2000) },
+      element: { type: 'static_select', action_id: 'v', placeholder: { type: 'plain_text', text: trimText(t('info_lang_select_hint'), 150) },
+        ...(langList[lang] ? { initial_option: { text: { type: 'plain_text', text: trimText(langList[lang] || lang, 75) }, value: lang } } : {}),
+        options: Object.keys(langList).map((k) => ({ text: { type: 'plain_text', text: trimText(langList[k] || k, 75) }, value: k })) } });
+  }
+
+  return { type: 'modal', callback_id: 'mq_build_submit', private_metadata: JSON.stringify({ draft_id: String(draft._id) }),
+    title: { type: 'plain_text', text: betaTitle(t('mq_modal_title')) }, submit: { type: 'plain_text', text: trimText(t('btn_create'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
+}
+
+/** Per-question sub-modal (views.push). Type-aware; options as a multiline box (v1). */
+function buildQuestionView(ctx, q) {
+  const lang = ctx.lang || 'en';
+  const t = (k) => stri18n(lang, k);
+  q = q || { type: 'choice', text: '', options: [], multi: false, required: false, user_add_choice: false };
+  const blocks = [];
+  const tOpt = (type) => ({ text: { type: 'plain_text', emoji: true, text: trimText(typeLabel(lang, type), 75) }, value: type });
+  blocks.push({ type: 'section', block_id: 'mq_q_type_blk', text: { type: 'mrkdwn', text: `*${t('mq_b_q_type_label')}*` },
+    accessory: { type: 'static_select', action_id: 'mq_q_type', initial_option: tOpt(q.type), options: ALL_TYPES.map(tOpt) } });
+  blocks.push({ type: 'input', block_id: 'mq_q_text', label: { type: 'plain_text', text: trimText(t('mq_b_q_text_label'), 2000) },
+    element: { type: 'plain_text_input', action_id: 'v', max_length: 300, ...(q.text ? { initial_value: q.text } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_text_ph'), 150) } } });
+  if (q.type === 'choice') {
+    blocks.push({ type: 'input', block_id: 'mq_q_opts', label: { type: 'plain_text', text: trimText(t('mq_b_q_options_label'), 2000) },
+      element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 2000, ...((q.options && q.options.length) ? { initial_value: q.options.join('\n') } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_options_ph'), 150) } } });
+    blocks.push(contextMd(t('mq_b_q_options_hint')));
+  } else if (q.type === 'yesno') {
+    blocks.push(contextMd(`${t('mq_b_q_yesno_hint')} — *${t('mq_yes')}* / *${t('mq_no')}*`));
+  }
+  const flagOpts = [];
+  if (q.type === 'choice') { flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_multi') }, value: 'multi' }); flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_addown') }, value: 'addown' }); }
+  flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_required') }, value: 'required' });
+  const flagSel = [];
+  if (q.type === 'choice' && q.multi) flagSel.push(flagOpts.find((o) => o.value === 'multi'));
+  if (q.type === 'choice' && q.user_add_choice) flagSel.push(flagOpts.find((o) => o.value === 'addown'));
+  if (q.required) flagSel.push(flagOpts.find((o) => o.value === 'required'));
+  blocks.push({ type: 'input', block_id: 'mq_q_flags', optional: true, label: { type: 'plain_text', text: trimText(t('mq_b_q_flags_label'), 2000) },
+    element: { type: 'checkboxes', action_id: 'v', options: flagOpts, ...(flagSel.filter(Boolean).length ? { initial_options: flagSel.filter(Boolean) } : {}) } });
+
+  return { type: 'modal', callback_id: 'mq_q_submit', private_metadata: JSON.stringify(ctx),
+    title: { type: 'plain_text', text: trimText(t('mq_b_q_title'), 24) }, submit: { type: 'plain_text', text: trimText(t('mq_b_q_save'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
+}
+
+/** Read a question object out of the sub-modal's current state. */
+function readQuestionFromView(view) {
+  const v = (view.state && view.state.values) || {};
+  const type = (v.mq_q_type && v.mq_q_type.v && v.mq_q_type.v.selected_option && v.mq_q_type.v.selected_option.value) || 'choice';
+  const text = ((v.mq_q_text && v.mq_q_text.v && v.mq_q_text.v.value) || '').trim();
+  let options = [];
+  if (v.mq_q_opts && v.mq_q_opts.v && v.mq_q_opts.v.value) options = v.mq_q_opts.v.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, MAX_OPTIONS).map((s) => s.slice(0, 150));
+  const flags = ((v.mq_q_flags && v.mq_q_flags.v && v.mq_q_flags.v.selected_options) || []).map((o) => o.value);
+  const q = { type, text };
+  if (type === 'choice') { q.options = options; q.multi = flags.includes('multi'); if (flags.includes('addown')) q.user_add_choice = true; }
+  else if (type === 'yesno') { q.multi = false; }
+  if (flags.includes('required')) q.required = true;
+  return q;
+}
+
+async function builderRenderOpts(draft) {
+  let defs = {}; try { defs = await teamDefaults(draft.team); } catch (e) { defs = {}; }
+  return { useResponseUrl: !!_opts.isUseResponseUrl, langSelectable: !!defs.app_lang_user_selectable };
+}
+
+/** Entry: create a draft + open (trigger_id) or update (view_id) the builder. */
+async function openBuilder({ client, triggerId, viewId, channel, responseUrl, teamId, userId, initialForm }) {
+  const defs = await teamDefaults(teamId);
+  const lang = defs.app_lang || 'en';
+  let questions = [];
+  if (initialForm) { try { questions = parseForm(String(initialForm), lang).questions; } catch (e) { questions = []; } }
+  const draft = await createDraft({ team: teamId, user_id: userId || null, channel, response_url: responseUrl, mode: 'visual', lang, settings: { user_lang: lang }, questions });
+  const ro = await builderRenderOpts(draft);
+  const view = buildBuilderView(draft, ro.useResponseUrl, ro.langSelectable);
+  let vid = viewId || null;
+  if (viewId) { try { await client.views.update({ view_id: viewId, view }); } catch (e) { try { const r = await client.views.open({ trigger_id: triggerId, view }); vid = r && r.view && r.view.id; } catch (_) { /* noop */ } } }
+  else { const r = await client.views.open({ trigger_id: triggerId, view }); vid = r && r.view && r.view.id; }
+  if (vid) await patchDraft(draft._id, { root_view_id: vid });
+}
+
+// Re-render the root builder modal from the current draft (after an action).
+async function rerenderBuilder(client, token, draft, viewId) {
+  const ro = await builderRenderOpts(draft);
+  try { await client.views.update({ token, view_id: viewId, view: buildBuilderView(draft, ro.useResponseUrl, ro.langSelectable) }); } catch (e) { /* user may have closed it */ }
+}
+
+async function handleBuilderMode({ ack, body, action, client, context }) {
+  await ack();
+  let pm = {}; try { pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const draft = await loadDraft(pm.draft_id); if (!draft) return;
+  if (draft.user_id && body.user.id !== draft.user_id) return;
+  await syncRootState(body.view, draft); // parses DSL→questions if leaving advanced
+  draft.mode = (action.selected_option && action.selected_option.value) || 'visual';
+  await patchDraft(draft._id, { mode: draft.mode });
+  await rerenderBuilder(client, context.botToken, draft, body.view.id);
+}
+
+async function handleAddQuestion({ ack, body, client, context }) {
+  await ack();
+  let pm = {}; try { pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const draft = await loadDraft(pm.draft_id); if (!draft) return;
+  if (draft.user_id && body.user.id !== draft.user_id) return;
+  await syncRootState(body.view, draft);
+  if ((draft.questions || []).length >= MAX_QUESTIONS) return;
+  const lang = (draft.settings && draft.settings.user_lang) || 'en';
+  const ctx = { draft_id: String(draft._id), root_view_id: body.view.id, qIndex: -1, lang };
+  try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, null) }); } catch (e) { /* noop */ }
+}
+
+async function handleQMenu({ ack, body, action, client, context }) {
+  await ack();
+  let pm = {}; try { pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const draft = await loadDraft(pm.draft_id); if (!draft) return;
+  if (draft.user_id && body.user.id !== draft.user_id) return;
+  await syncRootState(body.view, draft);
+  const parts = String((action.selected_option && action.selected_option.value) || '').split(':');
+  const a = parts[0]; const i = parseInt(parts[1], 10);
+  const qs = draft.questions || [];
+  if (a === 'edit') {
+    const lang = (draft.settings && draft.settings.user_lang) || 'en';
+    const ctx = { draft_id: String(draft._id), root_view_id: body.view.id, qIndex: i, lang };
+    try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, qs[i]) }); } catch (e) { /* noop */ }
+    return;
+  }
+  if (a === 'del') qs.splice(i, 1);
+  else if (a === 'up' && i > 0) { const x = qs[i - 1]; qs[i - 1] = qs[i]; qs[i] = x; }
+  else if (a === 'down' && i < qs.length - 1) { const x = qs[i + 1]; qs[i + 1] = qs[i]; qs[i] = x; }
+  await patchDraft(draft._id, { questions: qs }); draft.questions = qs;
+  await rerenderBuilder(client, context.botToken, draft, body.view.id);
+}
+
+async function handleQType({ ack, body, action, client, context }) {
+  await ack();
+  let ctx = {}; try { ctx = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const q = readQuestionFromView(body.view); // preserve current entries
+  q.type = (action.selected_option && action.selected_option.value) || q.type;
+  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
+}
+
+async function handleQuestionSubmit({ ack, body, view, client, context }) {
+  let ctx = {}; try { ctx = JSON.parse(view.private_metadata || '{}'); } catch (e) { /* noop */ }
+  const lang = ctx.lang || 'en';
+  const q = readQuestionFromView(view);
+  if (!q.text) { await ack({ response_action: 'errors', errors: { mq_q_text: stri18n(lang, 'mq_b_err_need_text') } }); return; }
+  if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { mq_q_opts: stri18n(lang, 'mq_b_err_2opts') } }); return; }
+  await ack(); // pops the sub-modal back to the root
+  const draft = await loadDraft(ctx.draft_id); if (!draft) return;
+  const qs = draft.questions || [];
+  if (ctx.qIndex >= 0 && ctx.qIndex < qs.length) qs[ctx.qIndex] = q;
+  else if (qs.length < MAX_QUESTIONS) qs.push(q);
+  await patchDraft(draft._id, { questions: qs }); draft.questions = qs;
+  if (ctx.root_view_id) await rerenderBuilder(client, context.botToken, draft, ctx.root_view_id);
+}
+
+/** Final submit (mq_build_submit) — works in BOTH visual and advanced mode. */
+async function handleBuilderSubmit({ ack, body, view, client, context }) {
+  let pm = {}; try { pm = JSON.parse(view.private_metadata || '{}'); } catch (e) { /* noop */ }
+  const draft = await loadDraft(pm.draft_id);
+  const teamId = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id) || (draft && draft.team);
+  const defs = await teamDefaults(teamId);
+  const lang = (draft && draft.settings && draft.settings.user_lang) || defs.app_lang || 'en';
+  const t = (k, p) => (p ? parameterizedString(stri18n(lang, k), p) : stri18n(lang, k));
+  if (!draft) { await ack({ response_action: 'errors', errors: { mq_b_title: t('mq_b_err_expired') } }); return; }
+  await syncRootState(view, draft);
+  // Advanced mode: surface DSL parse errors (visual questions were validated per-sub-modal).
+  if (draft.mode === 'advanced') {
+    const dsl = (view.state.values.mq_form && view.state.values.mq_form.v && view.state.values.mq_form.v.value) || '';
+    const parsed = parseForm(dsl, lang);
+    if (!parsed.questions.length) { await ack({ response_action: 'errors', errors: { mq_form: t('mq_err_need_question') } }); return; }
+    if (parsed.errors && parsed.errors.length) { await ack({ response_action: 'errors', errors: { mq_form: parsed.errors.join(' • ').slice(0, 2000) } }); return; }
+    draft.questions = parsed.questions;
+  }
+  const questions = draft.questions || [];
+  const errTarget = draft.mode === 'advanced' ? 'mq_form' : 'mq_b_title';
+  if (!questions.length) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_need_question') } }); return; }
+  for (const q of questions) { if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_choice_2opts', { q: (q.text || '').slice(0, 40) }) } }); return; } }
+  if (estimateBlocks(questions) > MAX_BLOCKS) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_too_big', { max: MAX_BLOCKS }) } }); return; }
+  const channel = draft.channel; const responseUrl = draft.response_url || '';
+  if (!channel && !(_opts.isUseResponseUrl && responseUrl)) { await ack({ response_action: 'errors', errors: { mq_channel: t('mq_err_pick_channel') } }); return; }
+  await ack(); // close the modal
+  const userId = body.user.id;
+  const trueAnon = !!(draft.settings.anonymous && defs.true_anonymous);
+  await createAndPost(client, context.botToken, {
+    teamOrEnt: teamId, userId, channel, title: draft.title || (questions[0] && questions[0].text) || 'Poll', questions,
+    paraIn: { anonymous: !!draft.settings.anonymous, true_anonymous: trueAnon, hidden: !!draft.settings.hidden, menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info, show_dashboard_link: defs.show_dashboard_link, display_poller_name: defs.display_poller_name },
+    lang, responseUrl,
+  });
+  await deleteDraft(draft._id);
+}
+
 /** Register all mq_* handlers on the Bolt app. Call once from index.js. */
 function register(app) {
   app.action('mq_vote', wrap(handleVote, 'mq_vote'));
@@ -976,9 +1283,16 @@ function register(app) {
   app.action('mq_reveal', wrap(handleReveal, 'mq_reveal')); // legacy (already-posted polls)
   app.action('mq_close', wrap(handleClose, 'mq_close'));    // legacy (already-posted polls)
   app.action('mq_addchoice', wrap(handleAddChoiceOpen, 'mq_addchoice'));
-  app.view('mq_create_submit', wrap(handleCreateSubmit, 'mq_create_submit'));
+  app.view('mq_create_submit', wrap(handleCreateSubmit, 'mq_create_submit')); // legacy DSL modal (kept for stale views)
   app.view('mq_answer_submit', wrap(handleAnswerSubmit, 'mq_answer_submit'));
   app.view('mq_addchoice_submit', wrap(handleAddChoiceSubmit, 'mq_addchoice_submit'));
+  // Visual builder
+  app.action('mq_b_mode', wrap(handleBuilderMode, 'mq_b_mode'));
+  app.action('mq_b_add_q', wrap(handleAddQuestion, 'mq_b_add_q'));
+  app.action('mq_b_qmenu', wrap(handleQMenu, 'mq_b_qmenu'));
+  app.action('mq_q_type', wrap(handleQType, 'mq_q_type'));
+  app.view('mq_q_submit', wrap(handleQuestionSubmit, 'mq_q_submit'));
+  app.view('mq_build_submit', wrap(handleBuilderSubmit, 'mq_build_submit'));
 }
 
 // Wrap a handler so an exception never crashes Bolt; ack on error to avoid a hang.
@@ -995,7 +1309,8 @@ function wrap(fn, name) {
 }
 
 module.exports = {
-  init, register, isMulti, openCreateModal, createFromCommand, formToCommandDSL,
+  init, register, isMulti, openCreateModal, openBuilder, createFromCommand, formToCommandDSL,
+  buildBuilderView, buildQuestionView, readQuestionFromView, // exported for structural tests
   // exported for unit tests:
   parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit,
   buildCreateModalView, buildAnswerModalView, answerElement, readAnswerValue, estimateBlocks,

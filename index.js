@@ -1309,7 +1309,8 @@ app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   }
   try {
     if (val === 'multi') {
-      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang, undefined, langSelectable, isUseResponseUrl) });
+      // Open the VISUAL builder in place (the DSL textarea lives on as the builder's "Advanced" mode).
+      await mq.openBuilder({ client, viewId: body.view.id, channel, responseUrl, teamId: getTeamOrEnterpriseId(context), userId: body.user && body.user.id });
     } else {
       // swap back to single-question — update THIS modal in place (no new modal).
       await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);
