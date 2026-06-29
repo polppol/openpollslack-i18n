@@ -607,12 +607,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"cronstrue@npm:^3.21.0":
-  version: 3.21.0
-  resolution: "cronstrue@npm:3.21.0"
+"cronstrue@npm:^3.23.0":
+  version: 3.23.0
+  resolution: "cronstrue@npm:3.23.0"
   bin:
     cronstrue: bin/cli.js
-  checksum: 10c0/6896a5685a841436ab057fe7e8ea545341db77f414b286f032a4b4d26c87320a65da5cc774d5b7ef132ff25a6eae8779c56ecc48cfd6d5da8ef9a14483adfd76
+  checksum: 10c0/5e8d86743ebee6052a885b5bd62393fa2673880fe1a79a370bc20a1f323290a007a7e097707d6c59f1a08d03d565abeb75ca9a9b2d33cef129832cf8bf9740f8
   languageName: node
   linkType: hard
 
@@ -1404,7 +1404,7 @@ __metadata:
     compression: "npm:^1.8.1"
     config: "npm:^4.4.1"
     cron-parser: "npm:^5.6.1"
-    cronstrue: "npm:^3.21.0"
+    cronstrue: "npm:^3.23.0"
     glob: "npm:^13.0.6"
     helmet: "npm:^8.2.0"
     moment-timezone: "npm:^0.6.2"
