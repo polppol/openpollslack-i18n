@@ -60,15 +60,19 @@ Just type `/poll` (without any options) in the channel that you want to post!
 At the top of that window there is a **Poll type** dropdown (default **Single question**). Switch it to **Multi-question form** to ask several questions of mixed types in one poll (see below).
 
 ### Multi-question polls (forms)
-A multi-question poll ("form") asks several questions — of different types — in a single message. Open it either way:
+A multi-question poll ("form", **BETA**) asks several questions — of different types — in one message. Open the builder either way:
 
 - Type `/poll`, then change the **Poll type** dropdown to **Multi-question form**, **or**
-- Type `/poll multi` to open the form builder directly.
+- Type `/poll multi` to open the builder directly.
 
-You describe the whole form in one text box, **one item per line**:
+The builder has two modes (toggle at the top):
 
-- `Q: <your question>` starts a question. Add a type in square brackets, e.g. `[yesno]`.
-- `- <option>` lines (right under a question) are the choices for a choice question.
+**Visual (default — point & click).** Build the form one question at a time, no syntax to learn:
+- Click **➕ Add question**, pick a **type**, type the question, and (for a multiple-choice question) enter its options (one per line). Tick **Allow multiple answers** / **Let people add their own option** / **Required** as needed, then **Save question**.
+- Each question has a **⋯ menu** to **edit**, **move up/down** (reorder), or **remove** it.
+- Set the title and the **anonymous / hidden** options once for the whole form, choose the channel, and click **Create poll**.
+
+**Advanced (text).** Describe the whole form in one box, **one item per line** — fast for power users:
 
 ```
 Q: Do you want to order food? [yesno]
@@ -80,10 +84,13 @@ Q: How many people? [number]
 Q: Preferred day? [date]
 ```
 
-**Question types:** `choice` · `yesno` · `text` · `number` · `date` · `time` · `datetime` · `email` · `url`
-(if you give options but no type, it defaults to `choice`; with no options it defaults to `text`).
+- `Q: <your question>` starts a question; add a type in `[...]`. `- <option>` lines under it are the choices.
+- **Question types:** `choice` · `yesno` · `text` · `number` · `date` · `time` · `datetime` · `email` · `url` (options but no type → `choice`; no options → `text`).
+- **Flags** (after the type, space-separated): `multi` (pick more than one), `add` (voters add their own choice), `required`.
 
-**Flags** (after the type, space-separated): `multi` (allow picking more than one choice), `add` (let voters add their own choice), `required`.
+You can switch between **Visual** and **Advanced** at any time — your questions carry over both ways.
+
+**Via command (no modal):** `/poll multi Q: ... [type] | - opt | - opt | Q: ...` (use ` | ` between lines). Add `preview` (e.g. `/poll multi preview …`) to open the builder pre-filled instead, and lead with `anonymous` / `hidden` to set those.
 
 Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. Regular single-question polls work exactly as before — this is an additional option, not a replacement.
 
