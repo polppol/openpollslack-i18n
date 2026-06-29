@@ -276,14 +276,14 @@ function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? 
 
 // ───────────────────────── create modal + submit ────────────────────────────
 
+// Slack caps placeholder text at 150 chars — keep this short. The full grammar +
+// type list lives in the context block under the field.
 const FORM_PLACEHOLDER = [
-  'Q: Do you want to order food? [yesno]',
-  'Q: Which food? [choice multi add]',
+  'Q: Want lunch? [yesno]',
+  'Q: Which food? [choice multi]',
   '- Pizza',
   '- Sushi',
-  'Q: Any comment? [text]',
-  'Q: How many people? [number]',
-  'Q: Preferred day? [date]',
+  'Q: Comment? [text]',
 ].join('\n');
 
 function buildCreateModalView(channelId) {
