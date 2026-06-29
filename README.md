@@ -68,7 +68,7 @@ A multi-question poll ("form", **BETA**) asks several questions — of different
 The builder has two modes (toggle at the top):
 
 **Visual (default — point & click).** Build the form one question at a time, no syntax to learn:
-- Click **➕ Add question**, pick a **type**, type the question, and (for a multiple-choice question) enter its options (one per line). Tick **Allow multiple answers** / **Let people add their own option** / **Required** as needed, then **Save question**.
+- Click **➕ Add question**, pick a **type**, type the question, and (for a multiple-choice question) fill in the option fields — click **➕ Add option** for more, or clear a field to drop it. Tick **Allow multiple answers** / **Let people add their own option** / **Required** as needed, then **Save question**.
 - Each question has a **⋯ menu** to **edit**, **move up/down** (reorder), or **remove** it.
 - Set the title and the **anonymous / hidden** options once for the whole form, choose the channel, and click **Create poll**.
 

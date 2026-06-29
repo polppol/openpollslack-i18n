@@ -1109,9 +1109,18 @@ function buildQuestionView(ctx, q) {
     accessory: { type: 'static_select', action_id: 'mq_q_type', initial_option: tOpt(q.type), options: ALL_TYPES.map(tOpt) } });
   blocks.push({ type: 'input', block_id: 'mq_q_text', label: { type: 'plain_text', text: trimText(t('mq_b_q_text_label'), 2000) },
     element: { type: 'plain_text_input', action_id: 'v', max_length: 300, ...(q.text ? { initial_value: q.text } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_text_ph'), 150) } } });
+  // One input ROW per option + an "Add option" button (the GUI alternative to a textarea).
+  // optRows (carried in private_metadata) is how many rows to render; "Add option" bumps it.
+  // Removing = clear a row (empty rows are dropped on the next render / on save).
+  let optRows = 0;
   if (q.type === 'choice') {
-    blocks.push({ type: 'input', block_id: 'mq_q_opts', label: { type: 'plain_text', text: trimText(t('mq_b_q_options_label'), 2000) },
-      element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 2000, ...((q.options && q.options.length) ? { initial_value: q.options.join('\n') } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_options_ph'), 150) } } });
+    optRows = Math.min(MAX_OPTIONS, Math.max(2, ctx.optRows || (q.options || []).length || 2));
+    blocks.push(contextMd(`*${t('mq_b_q_options_label')}*`));
+    for (let i = 0; i < optRows; i++) {
+      blocks.push({ type: 'input', block_id: `mq_q_opt_${i}`, optional: true, label: { type: 'plain_text', text: `${i + 1}.` },
+        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...((q.options && q.options[i]) ? { initial_value: q.options[i] } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_options_ph'), 150) } } });
+    }
+    if (optRows < MAX_OPTIONS) blocks.push({ type: 'actions', elements: [{ type: 'button', action_id: 'mq_q_add_opt', text: { type: 'plain_text', emoji: true, text: trimText('➕ ' + t('mq_b_add_option'), 75) } }] });
     blocks.push(contextMd(t('mq_b_q_options_hint')));
   } else if (q.type === 'yesno') {
     blocks.push(contextMd(`${t('mq_b_q_yesno_hint')} — *${t('mq_yes')}* / *${t('mq_no')}*`));
@@ -1126,7 +1135,8 @@ function buildQuestionView(ctx, q) {
   blocks.push({ type: 'input', block_id: 'mq_q_flags', optional: true, label: { type: 'plain_text', text: trimText(t('mq_b_q_flags_label'), 2000) },
     element: { type: 'checkboxes', action_id: 'v', options: flagOpts, ...(flagSel.filter(Boolean).length ? { initial_options: flagSel.filter(Boolean) } : {}) } });
 
-  return { type: 'modal', callback_id: 'mq_q_submit', private_metadata: JSON.stringify(ctx),
+  const pm = { draft_id: ctx.draft_id, root_view_id: ctx.root_view_id, qIndex: ctx.qIndex, lang: ctx.lang, optRows };
+  return { type: 'modal', callback_id: 'mq_q_submit', private_metadata: JSON.stringify(pm),
     title: { type: 'plain_text', text: trimText(t('mq_b_q_title'), 24) }, submit: { type: 'plain_text', text: trimText(t('mq_b_q_save'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
 }
 
@@ -1135,8 +1145,13 @@ function readQuestionFromView(view) {
   const v = (view.state && view.state.values) || {};
   const type = (v.mq_q_type && v.mq_q_type.v && v.mq_q_type.v.selected_option && v.mq_q_type.v.selected_option.value) || 'choice';
   const text = ((v.mq_q_text && v.mq_q_text.v && v.mq_q_text.v.value) || '').trim();
+  // Collect option ROWS (mq_q_opt_0..N) in order, dropping blanks (clear-to-remove).
   let options = [];
-  if (v.mq_q_opts && v.mq_q_opts.v && v.mq_q_opts.v.value) options = v.mq_q_opts.v.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, MAX_OPTIONS).map((s) => s.slice(0, 150));
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    const cell = v[`mq_q_opt_${i}`];
+    const val = (cell && cell.v && cell.v.value || '').trim();
+    if (val) options.push(val.slice(0, 150));
+  }
   const flags = ((v.mq_q_flags && v.mq_q_flags.v && v.mq_q_flags.v.selected_options) || []).map((o) => o.value);
   const q = { type, text };
   if (type === 'choice') { q.options = options; q.multi = flags.includes('multi'); if (flags.includes('addown')) q.user_add_choice = true; }
@@ -1224,6 +1239,16 @@ async function handleQType({ ack, body, action, client, context }) {
   try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
 }
 
+// "Add option" — render one more option row (capturing what's already typed).
+async function handleQAddOpt({ ack, body, client, context }) {
+  await ack();
+  let ctx = {}; try { ctx = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const q = readQuestionFromView(body.view);
+  const cur = Math.max(ctx.optRows || 0, (q.options || []).length, 2);
+  ctx.optRows = Math.min(MAX_OPTIONS, cur + 1);
+  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
+}
+
 async function handleQuestionSubmit({ ack, body, view, client, context }) {
   let ctx = {}; try { ctx = JSON.parse(view.private_metadata || '{}'); } catch (e) { /* noop */ }
   const lang = ctx.lang || 'en';
@@ -1302,6 +1327,7 @@ function register(app) {
   app.action('mq_b_add_q', wrap(handleAddQuestion, 'mq_b_add_q'));
   app.action('mq_b_qmenu', wrap(handleQMenu, 'mq_b_qmenu'));
   app.action('mq_q_type', wrap(handleQType, 'mq_q_type'));
+  app.action('mq_q_add_opt', wrap(handleQAddOpt, 'mq_q_add_opt'));
   app.view('mq_q_submit', wrap(handleQuestionSubmit, 'mq_q_submit'));
   app.view('mq_build_submit', wrap(handleBuilderSubmit, 'mq_build_submit'));
 }

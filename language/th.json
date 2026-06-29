@@ -231,9 +231,9 @@
   "mq_b_q_type_label": "ประเภทคำถาม",
   "mq_b_q_text_label": "คำถาม",
   "mq_b_q_text_ph": "พิมพ์คำถามของคุณ…",
-  "mq_b_q_options_label": "ตัวเลือก (บรรทัดละหนึ่งตัว)",
-  "mq_b_q_options_ph": "หนึ่งตัวเลือกต่อบรรทัด",
-  "mq_b_q_options_hint": "เพิ่ม 2–10 ตัวเลือก บรรทัดละหนึ่งตัว",
+  "mq_b_q_options_label": "ตัวเลือก",
+  "mq_b_q_options_ph": "ข้อความตัวเลือก",
+  "mq_b_q_options_hint": "เพิ่มตัวเลือก 2 ถึง 10 รายการ",
   "mq_b_q_yesno_hint": "เพิ่ม ใช่ / ไม่ใช่ ให้อัตโนมัติ",
   "mq_b_opt_multi": "อนุญาตให้เลือกหลายคำตอบ",
   "mq_b_opt_addown": "ให้ผู้ตอบเพิ่มตัวเลือกเองได้",
@@ -250,5 +250,6 @@
   "mq_qtype_time": "เวลา",
   "mq_qtype_datetime": "วันที่และเวลา",
   "mq_qtype_email": "อีเมล",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "เพิ่มตัวเลือก"
 }

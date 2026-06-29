@@ -223,9 +223,9 @@
   "mq_b_q_type_label": "Type de question",
   "mq_b_q_text_label": "Question",
   "mq_b_q_text_ph": "Saisissez votre question…",
-  "mq_b_q_options_label": "Options (une par ligne)",
-  "mq_b_q_options_ph": "Une option par ligne",
-  "mq_b_q_options_hint": "Ajoutez 2 à 10 options, une par ligne.",
+  "mq_b_q_options_label": "Options",
+  "mq_b_q_options_ph": "Texte de l'option",
+  "mq_b_q_options_hint": "Ajoutez entre 2 et 10 options.",
   "mq_b_q_yesno_hint": "Oui / Non sont ajoutés automatiquement",
   "mq_b_opt_multi": "Autoriser plusieurs réponses",
   "mq_b_opt_addown": "Laisser ajouter sa propre option",
@@ -242,5 +242,6 @@
   "mq_qtype_time": "Heure",
   "mq_qtype_datetime": "Date et heure",
   "mq_qtype_email": "E-mail",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "Ajouter une option"
 }

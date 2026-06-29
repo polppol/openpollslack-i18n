@@ -263,9 +263,9 @@
   "mq_b_q_type_label": "Question type",
   "mq_b_q_text_label": "Question",
   "mq_b_q_text_ph": "Type your question…",
-  "mq_b_q_options_label": "Options (one per line)",
-  "mq_b_q_options_ph": "One option per line",
-  "mq_b_q_options_hint": "Add 2–10 options, one per line.",
+  "mq_b_q_options_label": "Options",
+  "mq_b_q_options_ph": "Option text",
+  "mq_b_q_options_hint": "Add between 2 and 10 options.",
   "mq_b_q_yesno_hint": "Yes / No are added automatically",
   "mq_b_opt_multi": "Allow multiple answers",
   "mq_b_opt_addown": "Let people add their own option",
@@ -282,5 +282,6 @@
   "mq_qtype_time": "Time",
   "mq_qtype_datetime": "Date & time",
   "mq_qtype_email": "Email",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "Add option"
 }

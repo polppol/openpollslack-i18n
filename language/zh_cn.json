@@ -193,9 +193,9 @@
   "mq_b_q_type_label": "问题类型",
   "mq_b_q_text_label": "问题",
   "mq_b_q_text_ph": "输入你的问题…",
-  "mq_b_q_options_label": "选项（每行一个）",
-  "mq_b_q_options_ph": "每行一个选项",
-  "mq_b_q_options_hint": "添加 2–10 个选项，每行一个。",
+  "mq_b_q_options_label": "选项",
+  "mq_b_q_options_ph": "选项文本",
+  "mq_b_q_options_hint": "请添加 2 到 10 个选项。",
   "mq_b_q_yesno_hint": "是 / 否 会自动添加",
   "mq_b_opt_multi": "允许多选",
   "mq_b_opt_addown": "允许他人添加自己的选项",
@@ -212,5 +212,6 @@
   "mq_qtype_time": "时间",
   "mq_qtype_datetime": "日期和时间",
   "mq_qtype_email": "电子邮件",
-  "mq_qtype_url": "网址"
+  "mq_qtype_url": "网址",
+  "mq_b_add_option": "添加选项"
 }

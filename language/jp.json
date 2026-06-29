@@ -195,9 +195,9 @@
   "mq_b_q_type_label": "質問タイプ",
   "mq_b_q_text_label": "質問",
   "mq_b_q_text_ph": "質問を入力…",
-  "mq_b_q_options_label": "選択肢（1行に1つ）",
-  "mq_b_q_options_ph": "1行に1つの選択肢",
-  "mq_b_q_options_hint": "2〜10個の選択肢を1行に1つずつ追加します。",
+  "mq_b_q_options_label": "選択肢",
+  "mq_b_q_options_ph": "選択肢のテキスト",
+  "mq_b_q_options_hint": "2〜10個の選択肢を追加してください。",
   "mq_b_q_yesno_hint": "はい / いいえ は自動で追加されます",
   "mq_b_opt_multi": "複数回答を許可",
   "mq_b_opt_addown": "独自の選択肢の追加を許可",
@@ -214,5 +214,6 @@
   "mq_qtype_time": "時刻",
   "mq_qtype_datetime": "日付と時刻",
   "mq_qtype_email": "メール",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "選択肢を追加"
 }

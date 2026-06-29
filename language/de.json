@@ -195,9 +195,9 @@
   "mq_b_q_type_label": "Fragetyp",
   "mq_b_q_text_label": "Frage",
   "mq_b_q_text_ph": "Gib deine Frage ein…",
-  "mq_b_q_options_label": "Optionen (eine pro Zeile)",
-  "mq_b_q_options_ph": "Eine Option pro Zeile",
-  "mq_b_q_options_hint": "Füge 2–10 Optionen hinzu, eine pro Zeile.",
+  "mq_b_q_options_label": "Optionen",
+  "mq_b_q_options_ph": "Optionstext",
+  "mq_b_q_options_hint": "Füge 2 bis 10 Optionen hinzu.",
   "mq_b_q_yesno_hint": "Ja / Nein werden automatisch hinzugefügt",
   "mq_b_opt_multi": "Mehrfachauswahl erlauben",
   "mq_b_opt_addown": "Eigene Optionen zulassen",
@@ -214,5 +214,6 @@
   "mq_qtype_time": "Uhrzeit",
   "mq_qtype_datetime": "Datum & Uhrzeit",
   "mq_qtype_email": "E-Mail",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "Option hinzufügen"
 }

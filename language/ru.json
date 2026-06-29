@@ -195,9 +195,9 @@
   "mq_b_q_type_label": "Тип вопроса",
   "mq_b_q_text_label": "Вопрос",
   "mq_b_q_text_ph": "Введите ваш вопрос…",
-  "mq_b_q_options_label": "Варианты (по одному на строку)",
-  "mq_b_q_options_ph": "По одному варианту на строку",
-  "mq_b_q_options_hint": "Добавьте 2–10 вариантов, по одному на строку.",
+  "mq_b_q_options_label": "Варианты",
+  "mq_b_q_options_ph": "Текст варианта",
+  "mq_b_q_options_hint": "Добавьте от 2 до 10 вариантов.",
   "mq_b_q_yesno_hint": "«Да» / «Нет» добавляются автоматически",
   "mq_b_opt_multi": "Разрешить несколько ответов",
   "mq_b_opt_addown": "Разрешить добавлять свои варианты",
@@ -214,5 +214,6 @@
   "mq_qtype_time": "Время",
   "mq_qtype_datetime": "Дата и время",
   "mq_qtype_email": "Эл. почта",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "Добавить вариант"
 }

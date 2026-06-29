@@ -195,9 +195,9 @@
   "mq_b_q_type_label": "질문 유형",
   "mq_b_q_text_label": "질문",
   "mq_b_q_text_ph": "질문을 입력하세요…",
-  "mq_b_q_options_label": "선택지 (한 줄에 하나씩)",
-  "mq_b_q_options_ph": "한 줄에 선택지 하나씩",
-  "mq_b_q_options_hint": "2~10개의 선택지를 한 줄에 하나씩 추가하세요.",
+  "mq_b_q_options_label": "선택지",
+  "mq_b_q_options_ph": "선택지 텍스트",
+  "mq_b_q_options_hint": "2~10개의 선택지를 추가하세요.",
   "mq_b_q_yesno_hint": "예 / 아니요는 자동으로 추가됩니다",
   "mq_b_opt_multi": "복수 응답 허용",
   "mq_b_opt_addown": "참여자가 직접 선택지를 추가하도록 허용",
@@ -214,5 +214,6 @@
   "mq_qtype_time": "시간",
   "mq_qtype_datetime": "날짜 및 시간",
   "mq_qtype_email": "이메일",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "선택지 추가"
 }

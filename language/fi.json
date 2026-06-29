@@ -195,9 +195,9 @@
   "mq_b_q_type_label": "Kysymyksen tyyppi",
   "mq_b_q_text_label": "Kysymys",
   "mq_b_q_text_ph": "Kirjoita kysymyksesi…",
-  "mq_b_q_options_label": "Vaihtoehdot (yksi riviä kohti)",
-  "mq_b_q_options_ph": "Yksi vaihtoehto riviä kohti",
-  "mq_b_q_options_hint": "Lisää 2–10 vaihtoehtoa, yksi riviä kohti.",
+  "mq_b_q_options_label": "Vaihtoehdot",
+  "mq_b_q_options_ph": "Vaihtoehdon teksti",
+  "mq_b_q_options_hint": "Lisää 2–10 vaihtoehtoa.",
   "mq_b_q_yesno_hint": "Kyllä / Ei lisätään automaattisesti",
   "mq_b_opt_multi": "Salli useita vastauksia",
   "mq_b_opt_addown": "Anna käyttäjien lisätä oma vaihtoehto",
@@ -214,5 +214,6 @@
   "mq_qtype_time": "Aika",
   "mq_qtype_datetime": "Päivämäärä ja aika",
   "mq_qtype_email": "Sähköposti",
-  "mq_qtype_url": "URL"
+  "mq_qtype_url": "URL",
+  "mq_b_add_option": "Lisää vaihtoehto"
 }
