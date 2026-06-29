@@ -67,7 +67,9 @@ function isInput(type) { return INPUT_TYPES.includes(type); }
 //   Q: Any comment? [text]
 //   Q: How many? [number]
 //   Q: Preferred day? [date]
-function parseForm(text) {
+function parseForm(text, lang) {
+  const L = lang || 'en';
+  const t = (k, p) => (p ? parameterizedString(stri18n(L, k), p) : stri18n(L, k));
   const errors = [];
   const questions = [];
   const lines = String(text || '').split(/\r?\n/);
@@ -77,7 +79,7 @@ function parseForm(text) {
     if (cur.type === 'yesno') cur.options = ['Yes', 'No'];
     if (isChoice(cur.type) && (!cur.options || cur.options.length < 2) && cur.type !== 'yesno') {
       // a choice needs ≥2 options — surfaced here and blocked at submit (handleCreateSubmit)
-      errors.push(`"${cur.text.slice(0, 40)}": choice needs at least 2 options`);
+      errors.push(t('mq_err_choice_2opts', { q: cur.text.slice(0, 40) }));
     }
     questions.push(cur);
     cur = null;
@@ -105,12 +107,12 @@ function parseForm(text) {
     } else if (om && cur) {
       if (cur.options.length < MAX_OPTIONS) cur.options.push(om[1].trim().slice(0, 150));
     } else if (om && !cur) {
-      errors.push(`option "${line.slice(0, 30)}" has no preceding question`);
+      errors.push(t('mq_err_orphan_option', { opt: line.slice(0, 30) }));
     } else if (cur) {
       // continuation line for the current question text
       cur.text = (cur.text + ' ' + line).slice(0, 300);
     } else {
-      errors.push(`unrecognised line "${line.slice(0, 30)}"`);
+      errors.push(t('mq_err_unrecognised', { line: line.slice(0, 30) }));
     }
   }
   pushCur();
@@ -128,8 +130,8 @@ function parseForm(text) {
     if (q.required) item.required = true;
     out.push(item);
   });
-  if (questions.length > MAX_QUESTIONS) errors.push(`only the first ${MAX_QUESTIONS} questions are kept`);
-  if (!out.length) errors.push('no questions found');
+  if (questions.length > MAX_QUESTIONS) errors.push(t('mq_err_max_questions', { max: MAX_QUESTIONS }));
+  if (!out.length) errors.push(t('mq_err_no_questions'));
   return { questions: out, errors };
 }
 
@@ -192,7 +194,7 @@ function votersText(voters, anonymous, hidden, userLang) {
   if (!anonymous) {
     const shown = voters.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>`).join(' ');
     const extra = n - Math.min(n, MAX_VOTER_MENTIONS);
-    s += shown + (extra > 0 ? ` +${extra} more` : '') + '  ';
+    s += shown + (extra > 0 ? ` ${parameterizedString(stri18n(userLang, 'mq_more'), { count: extra })}` : '') + '  ';
   }
   s += parameterizedString(stri18n(userLang, n === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: n });
   return s;
@@ -218,9 +220,10 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
 
   blocks.push({ type: 'header', text: { type: 'plain_text', text: trimText(pollData.question || 'Poll', 150), emoji: true } });
   const sub = [];
-  if (pollData.user_id && (pollData.para && pollData.para.display_poller_name !== false)) sub.push(`by <@${pollData.user_id}>`);
-  sub.push(`${pollData.questions.length} question${pollData.questions.length === 1 ? '' : 's'}`);
-  if (opts.isClosed) sub.push(`:lock: ${stri18n(userLang, 'info_poll_closed') || 'closed'}`);
+  if (pollData.user_id && (pollData.para && pollData.para.display_poller_name !== false)) sub.push(`${stri18n(userLang, 'mq_created_by')} <@${pollData.user_id}>`);
+  const nq = pollData.questions.length;
+  sub.push(parameterizedString(stri18n(userLang, nq === 1 ? 'mq_n_questions_one' : 'mq_n_questions_many'), { count: nq }));
+  if (opts.isClosed) sub.push(`:lock: ${stri18n(userLang, 'info_poll_closed')}`);
   blocks.push(contextMd(sub.join('  ·  ')));
   blocks.push(divider());
 
@@ -248,8 +251,8 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
           type: 'actions',
           elements: [{
             type: 'button', action_id: 'mq_addchoice',
-            text: { type: 'plain_text', emoji: true, text: '➕ ' + (stri18n(userLang, 'btn_add_choice') || 'Add choice') },
-            value: JSON.stringify({ poll_id: pollId, qid: q.id }),
+            text: { type: 'plain_text', emoji: true, text: '➕ ' + stri18n(userLang, 'btn_add_choice') },
+            value: JSON.stringify({ poll_id: pollId, qid: q.id, user_lang: userLang }),
           }],
         });
       }
@@ -260,21 +263,21 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
       let summary;
       if (hidden) summary = stri18n(userLang, 'info_wait_reveal');
       else if (answeredBy.length === 0) summary = stri18n(userLang, 'info_no_vote');
-      else if (anonymous) summary = `${answeredBy.length} answered`;
+      else if (anonymous) summary = parameterizedString(stri18n(userLang, 'mq_answered'), { count: answeredBy.length });
       else {
         // Cap rendered answers so a popular question can't push the section past
         // Slack's 3000-char limit (which would make chat.update fail).
         const shown = answeredBy.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
         const extra = answeredBy.length - Math.min(answeredBy.length, MAX_VOTER_MENTIONS);
-        summary = shown + (extra > 0 ? `\n+${extra} more` : '');
+        summary = shown + (extra > 0 ? `\n${parameterizedString(stri18n(userLang, 'mq_more'), { count: extra })}` : '');
       }
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: summary || ' ' },
         accessory: opts.isClosed ? undefined : {
           type: 'button', action_id: 'mq_answer',
-          text: { type: 'plain_text', emoji: true, text: '✏️ ' + (stri18n(userLang, 'btn_answer') || 'Answer') },
-          value: JSON.stringify({ poll_id: pollId, qid: q.id, type: q.type, text: q.text }),
+          text: { type: 'plain_text', emoji: true, text: '✏️ ' + stri18n(userLang, 'btn_answer') },
+          value: JSON.stringify({ poll_id: pollId, qid: q.id, type: q.type, text: q.text, user_lang: userLang }),
         },
       });
     }
@@ -298,67 +301,61 @@ function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? 
 
 // ───────────────────────── create modal + submit ────────────────────────────
 
-// Slack caps placeholder text at 150 chars — keep this short. The full grammar +
-// type list lives in the context block under the field.
-const FORM_PLACEHOLDER = [
-  'Q: Want lunch? [yesno]',
-  'Q: Which food? [choice multi]',
-  '- Pizza',
-  '- Sushi',
-  'Q: Comment? [text]',
-].join('\n');
-
-function buildCreateModalView(channelId) {
+// All user-facing strings come from the language files (stri18n), same as the
+// single-question flow, so the form is fully translatable. `lang` = the team's
+// resolved language; `initialForm` pre-fills the Questions box (command preview /
+// error-recovery so a user's work is never lost).
+function buildCreateModalView(channelId, responseUrl, lang, initialForm) {
+  const L = lang || 'en';
+  const t = (k) => stri18n(L, k);
+  const opt = (val, key) => ({ text: { type: 'plain_text', text: trimText(t(key), 75) }, value: val });
   return {
     type: 'modal',
     callback_id: 'mq_create_submit',
-    // channel kept in private_metadata so the poll-type selector can preserve it
-    // when swapping back to the single-question modal.
-    private_metadata: JSON.stringify({ channel: channelId || null }),
-    title: { type: 'plain_text', text: 'Multi-question poll' },
-    submit: { type: 'plain_text', text: 'Create' },
-    close: { type: 'plain_text', text: 'Cancel' },
+    // channel/response_url/lang kept in private_metadata so the poll-type selector
+    // can preserve them when swapping back to the single-question modal.
+    private_metadata: JSON.stringify({ channel: channelId || null, response_url: responseUrl || '', user_lang: L }),
+    title: { type: 'plain_text', text: trimText(t('mq_modal_title'), 24) },
+    submit: { type: 'plain_text', text: trimText(t('btn_create'), 24) },
+    close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) },
     blocks: [
       { // Poll-type selector (this modal = multi). Switching to "Single question"
         // re-opens the single-question modal (app.action('mq_poll_type')).
-        type: 'section', block_id: 'mq_poll_type_blk', text: { type: 'mrkdwn', text: '*Poll type*' },
+        type: 'section', block_id: 'mq_poll_type_blk', text: { type: 'mrkdwn', text: `*${t('mq_poll_type')}*` },
         accessory: { type: 'static_select', action_id: 'mq_poll_type',
-          initial_option: { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
-          options: [
-            { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
-            { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
-          ],
+          initial_option: opt('multi', 'mq_type_multi'),
+          options: [opt('single', 'mq_type_single'), opt('multi', 'mq_type_multi')],
           // Warn before switching — swapping the modal clears the form. Deny = no change.
           confirm: {
-            title: { type: 'plain_text', text: 'Switch poll type?' },
-            text: { type: 'mrkdwn', text: 'Anything you have entered here will be cleared.' },
-            confirm: { type: 'plain_text', text: 'Switch' },
-            deny: { type: 'plain_text', text: 'Keep editing' },
+            title: { type: 'plain_text', text: trimText(t('mq_switch_title'), 100) },
+            text: { type: 'mrkdwn', text: trimText(t('mq_switch_text'), 300) },
+            confirm: { type: 'plain_text', text: trimText(t('mq_switch_ok'), 30) },
+            deny: { type: 'plain_text', text: trimText(t('mq_switch_deny'), 30) },
           } } },
-      { type: 'input', block_id: 'mq_title', label: { type: 'plain_text', text: 'Title' },
-        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: 'e.g. Friday team lunch' } } },
-      { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: 'Questions' },
-        element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, initial_value: '', placeholder: { type: 'plain_text', text: FORM_PLACEHOLDER } } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text: 'One question per `Q:` line. Options on `-` lines. Tag a type in `[...]`: choice · yesno · text · number · date · time · datetime · email · url. Flags: `multi` `add` `required`.  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|How to use ↗>' }] },
-      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: 'Post to channel' },
+      { type: 'input', block_id: 'mq_title', label: { type: 'plain_text', text: trimText(t('mq_field_title'), 2000) },
+        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: trimText(t('mq_field_title_ph'), 150) } } },
+      { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: trimText(t('mq_field_questions'), 2000) },
+        element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...(initialForm ? { initial_value: String(initialForm).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] },
+      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: trimText(t('mq_field_channel'), 2000) },
         element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
-      { type: 'input', block_id: 'mq_settings', optional: true, label: { type: 'plain_text', text: 'Settings' },
+      { type: 'input', block_id: 'mq_settings', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_settings'), 2000) },
         element: { type: 'checkboxes', action_id: 'v', options: [
-          { text: { type: 'mrkdwn', text: '*Anonymous* — hide who voted/answered' }, value: 'anonymous' },
-          { text: { type: 'mrkdwn', text: '*Hidden* — hide results until revealed' }, value: 'hidden' },
+          { text: { type: 'mrkdwn', text: t('mq_opt_anonymous') }, value: 'anonymous' },
+          { text: { type: 'mrkdwn', text: t('mq_opt_hidden') }, value: 'hidden' },
         ] } },
     ],
   };
 }
 
 /** Parse the create modal submission → { title, channel, questions, errors, para }. */
-function parseCreateSubmit(view) {
+function parseCreateSubmit(view, lang) {
   const v = view.state.values;
   const title = (v.mq_title && v.mq_title.v && v.mq_title.v.value || '').trim();
   const formText = (v.mq_form && v.mq_form.v && v.mq_form.v.value) || '';
   const channel = (v.mq_channel && v.mq_channel.v && v.mq_channel.v.selected_conversation) || null;
   const settings = ((v.mq_settings && v.mq_settings.v && v.mq_settings.v.selected_options) || []).map((o) => o.value);
-  const { questions, errors } = parseForm(formText);
+  const { questions, errors } = parseForm(formText, lang);
   return {
     title: title || (questions[0] && questions[0].text) || 'Poll',
     channel,
@@ -384,7 +381,8 @@ function answerElement(type, qmin, qmax) {
   }
 }
 
-function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts) {
+function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts, lang) {
+  const L = lang || 'en';
   const el = answerElement(type);
   if (current != null && current !== '') {
     if (type === 'datetime') { const n = Number(current); if (Number.isFinite(n)) el.initial_date_time = n; } // NaN would be an invalid block
@@ -395,12 +393,12 @@ function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts) {
   return {
     type: 'modal',
     callback_id: 'mq_answer_submit',
-    private_metadata: JSON.stringify({ poll_id: pollId, qid, type, channel, ts }),
-    title: { type: 'plain_text', text: 'Your answer' },
-    submit: { type: 'plain_text', text: 'Save' },
-    close: { type: 'plain_text', text: 'Cancel' },
+    private_metadata: JSON.stringify({ poll_id: pollId, qid, type, channel, ts, user_lang: L }),
+    title: { type: 'plain_text', text: trimText(stri18n(L, 'mq_answer_title'), 24) },
+    submit: { type: 'plain_text', text: trimText(stri18n(L, 'mq_answer_save'), 24) },
+    close: { type: 'plain_text', text: trimText(stri18n(L, 'btn_cancel'), 24) },
     blocks: [
-      { type: 'input', block_id: 'mq_ans', optional: true, label: { type: 'plain_text', text: trimText(qText || 'Answer', 150) }, element: el },
+      { type: 'input', block_id: 'mq_ans', optional: true, label: { type: 'plain_text', text: trimText(qText || stri18n(L, 'btn_answer'), 150) }, element: el },
     ],
   };
 }
@@ -451,16 +449,25 @@ function estimateBlocks(questions) {
 }
 const MAX_BLOCKS = 48;
 
-/** Open the create modal (entry point: `/poll multi`). */
-async function openCreateModal(client, triggerId, channelId) {
-  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId) });
+/** Open the create modal (entry point: `/poll multi`). Resolves the team language
+ *  (reusing the same resolver as the single-question flow) so the modal is localized.
+ *  initialForm pre-fills the Questions box (command preview / error recovery). */
+async function openCreateModal(client, triggerId, channelId, responseUrl, teamId, initialForm) {
+  const defs = await teamDefaults(teamId);
+  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm) });
 }
 
 /** Handle create-modal submit: build poll_data, post the message, store ts. */
 async function handleCreateSubmit({ ack, body, view, client, context }) {
-  const parsed = parseCreateSubmit(view);
+  const teamOrEnt = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id);
+  // Resolve team config FIRST so error messages + the poll render in the team
+  // language, same as the single-question flow.
+  const defs = await teamDefaults(teamOrEnt);
+  const lang = defs.app_lang || 'en';
+  const t = (k, p) => (p ? parameterizedString(stri18n(lang, k), p) : stri18n(lang, k));
+  const parsed = parseCreateSubmit(view, lang);
   if (!parsed.questions.length) {
-    await ack({ response_action: 'errors', errors: { mq_form: parsed.errors[0] || 'Add at least one question.' } });
+    await ack({ response_action: 'errors', errors: { mq_form: parsed.errors[0] || t('mq_err_need_question') } });
     return;
   }
   // Surface ALL parse problems before the irreversible ack (otherwise a form with
@@ -469,20 +476,14 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
     await ack({ response_action: 'errors', errors: { mq_form: parsed.errors.join(' • ').slice(0, 2000) } });
     return;
   }
-  if (!parsed.channel) { await ack({ response_action: 'errors', errors: { mq_channel: 'Pick a channel.' } }); return; }
+  if (!parsed.channel) { await ack({ response_action: 'errors', errors: { mq_channel: t('mq_err_pick_channel') } }); return; }
   if (estimateBlocks(parsed.questions) > MAX_BLOCKS) {
-    await ack({ response_action: 'errors', errors: { mq_form: `Too big for one Slack message (limit ~${MAX_BLOCKS} blocks). Use fewer questions or options.` } });
+    await ack({ response_action: 'errors', errors: { mq_form: t('mq_err_too_big', { max: MAX_BLOCKS }) } });
     return;
   }
   await ack();
   const token = context.botToken;
   const userId = body.user.id;
-  const teamOrEnt = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id);
-  // Honor the team's config defaults (language + workspace true-anonymous), same
-  // as the single-question modal: an anonymous form is true-anonymous when the
-  // workspace defaults that way, and the posted poll renders in the team language.
-  const defs = await teamDefaults(teamOrEnt);
-  const lang = defs.app_lang || 'en';
   const trueAnon = !!(parsed.para.anonymous && defs.true_anonymous);
   const q1 = parsed.questions[0];
   const pollData = {
@@ -495,7 +496,18 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
     question: parsed.title,                                   // compat mirror
     options: isChoice(q1.type) ? (q1.options || []) : [],    // compat mirror
     questions: parsed.questions,
-    para: { user_lang: lang, anonymous: parsed.para.anonymous, true_anonymous: trueAnon, hidden: parsed.para.hidden, form_version: 2 },
+    // Stamp config onto the poll so later config changes never alter/break it —
+    // the renderer reads ONLY para (same approach as single-question polls).
+    para: {
+      user_lang: lang,
+      anonymous: parsed.para.anonymous,
+      true_anonymous: trueAnon,
+      hidden: parsed.para.hidden,
+      menu_at_the_end: !!defs.menu_at_the_end,
+      show_command_info: !!defs.show_command_info,
+      display_poller_name: defs.display_poller_name !== false,
+      form_version: 2,
+    },
   };
   const res = await pollCol().insertOne(pollData);
   pollData._id = res.insertedId;
@@ -504,7 +516,7 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
   try { posted = await client.chat.postMessage({ token, channel: parsed.channel, text: trimText(parsed.title, 150), blocks }); }
   catch (e) {
     // Can't show a modal error after ack — DM the creator + roll back the orphan poll.
-    try { await client.chat.postMessage({ token, channel: userId, text: 'Could not post your multi-question poll (is the bot in that channel?).' }); } catch (_) { /* noop */ }
+    try { await client.chat.postMessage({ token, channel: userId, text: t('mq_post_failed') }); } catch (_) { /* noop */ }
     await pollCol().deleteOne({ _id: pollData._id });
     return;
   }
@@ -560,7 +572,7 @@ async function handleAnswerOpen({ ack, body, action, client, context }) {
   const userId = body.user.id;
   const vdoc = await loadVotes(value.poll_id, channel, ts);
   const current = vdoc && vdoc.answers && vdoc.answers[value.qid] && vdoc.answers[value.qid][userId];
-  await client.views.open({ trigger_id: body.trigger_id, view: buildAnswerModalView(value.poll_id, value.qid, value.type, value.text, current, channel, ts) });
+  await client.views.open({ trigger_id: body.trigger_id, view: buildAnswerModalView(value.poll_id, value.qid, value.type, value.text, current, channel, ts, value.user_lang) });
 }
 
 /** Save a typed answer (callback_id mq_answer_submit). */
@@ -616,13 +628,14 @@ async function handleClose({ ack, body, action, client, context }) {
 async function handleAddChoiceOpen({ ack, body, action, client }) {
   await ack();
   const value = JSON.parse(action.value);
+  const L = value.user_lang || 'en';
   await client.views.open({
     trigger_id: body.trigger_id,
     view: {
       type: 'modal', callback_id: 'mq_addchoice_submit',
-      private_metadata: JSON.stringify({ poll_id: value.poll_id, qid: value.qid, channel: body.channel.id, ts: body.message.ts }),
-      title: { type: 'plain_text', text: 'Add a choice' }, submit: { type: 'plain_text', text: 'Add' }, close: { type: 'plain_text', text: 'Cancel' },
-      blocks: [{ type: 'input', block_id: 'mq_newopt', label: { type: 'plain_text', text: 'New choice' }, element: { type: 'plain_text_input', action_id: 'v', max_length: 150 } }],
+      private_metadata: JSON.stringify({ poll_id: value.poll_id, qid: value.qid, channel: body.channel.id, ts: body.message.ts, user_lang: L }),
+      title: { type: 'plain_text', text: trimText(stri18n(L, 'mq_add_choice_title'), 24) }, submit: { type: 'plain_text', text: trimText(stri18n(L, 'mq_add_choice_submit'), 24) }, close: { type: 'plain_text', text: trimText(stri18n(L, 'btn_cancel'), 24) },
+      blocks: [{ type: 'input', block_id: 'mq_newopt', label: { type: 'plain_text', text: trimText(stri18n(L, 'mq_new_choice'), 2000) }, element: { type: 'plain_text_input', action_id: 'v', max_length: 150 } }],
     },
   });
 }
@@ -630,7 +643,7 @@ async function handleAddChoiceOpen({ ack, body, action, client }) {
 async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
   const meta = JSON.parse(view.private_metadata || '{}');
   const text = ((view.state.values.mq_newopt && view.state.values.mq_newopt.v && view.state.values.mq_newopt.v.value) || '').trim();
-  if (!text) { await ack({ response_action: 'errors', errors: { mq_newopt: 'Enter a choice.' } }); return; }
+  if (!text) { await ack({ response_action: 'errors', errors: { mq_newopt: stri18n(meta.user_lang || 'en', 'mq_err_enter_choice') } }); return; }
   await ack();
   const pollData = await loadPoll(meta.poll_id);
   if (!pollData || !isMulti(pollData)) return;

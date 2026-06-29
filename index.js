@@ -553,9 +553,13 @@ try {
     resolveTeamDefaults: async (teamId) => {
       let tc = {};
       try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
+      const pick = (k, g) => (tc.hasOwnProperty(k) ? tc[k] : g);
       return {
-        app_lang: tc.hasOwnProperty('app_lang') ? tc.app_lang : gAppLang,
-        true_anonymous: tc.hasOwnProperty('true_anonymous') ? tc.true_anonymous : gTrueAnonymous,
+        app_lang: pick('app_lang', gAppLang),
+        true_anonymous: pick('true_anonymous', gTrueAnonymous),
+        menu_at_the_end: pick('menu_at_the_end', gIsMenuAtTheEnd),
+        show_command_info: pick('show_command_info', gIsShowCommandInfo),
+        display_poller_name: pick('display_poller_name', gDisplayPollerName),
       };
     },
   });
@@ -1279,11 +1283,11 @@ mq.register(app);
 app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   await ack();
   const val = (action && action.selected_option && action.selected_option.value) || 'single';
-  let channel = null; let responseUrl = '';
-  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; } catch (e) { /* ignore */ }
+  let channel = null; let responseUrl = ''; let userLang = 'en';
+  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; } catch (e) { /* ignore */ }
   try {
     if (val === 'multi') {
-      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl) });
+      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang) });
     } else {
       // swap back to single-question — update THIS modal in place (no new modal).
       await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);
@@ -1890,7 +1894,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
       // Auto-detect the channel the command was run in — same source the
       // single-question modal uses below (command.channel_id).
       const mqChannel = (command && command.channel_id) ? command.channel_id : ((body && body.channel_id) || null);
-      try { await mq.openCreateModal(client, body.trigger_id, mqChannel, (body && body.response_url) || ''); }
+      try { await mq.openCreateModal(client, body.trigger_id, mqChannel, (body && body.response_url) || '', getTeamOrEnterpriseId(context)); }
       catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }
