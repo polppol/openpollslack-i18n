@@ -557,6 +557,10 @@ try {
     isUseResponseUrl,
     postChat: (url, type, requestBody) => postChat(url, type, requestBody),
     botName,
+    // Reuse the single-question poll's per-message in-process mutex so the lazy
+    // votes-doc create (response_url mode) is serialized — no duplicate votes docs
+    // under concurrent first-interactions. Same key shape btn_vote uses.
+    lock: async (key) => { if (!mutexes.hasOwnProperty(key)) mutexes[key] = new Mutex(); return await mutexes[key].acquire(); },
     resolveTeamDefaults: async (teamId) => {
       let tc = {};
       try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
@@ -569,6 +573,7 @@ try {
         show_command_info: pick('show_command_info', gIsShowCommandInfo),
         show_dashboard_link: pick('show_dashboard_link', gIsShowDashboardLink),
         display_poller_name: pick('display_poller_name', gDisplayPollerName),
+        delete_data_on_poll_delete: pick('delete_data_on_poll_delete', gIsDeleteDataOnRequest),
       };
     },
     // Reuse the single-question poll's "View on dashboard" flow for forms.

@@ -323,6 +323,10 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
     blocks.push(divider());
   });
 
+  // Visible command-source line when show_command_info is on — same as the single-question
+  // poll (the menu also always has a "Command Info" option for the full ephemeral detail).
+  if (para.show_command_info && pollData.cmd) blocks.push(contextMd(trimText(stri18n(userLang, 'info_command_source') + ' ' + pollData.cmd, 2900)));
+
   // When menu_at_the_end, the menu lives on a trailing section accessory (the title
   // section above carries no accessory in that case) — same as the single-question poll.
   if (para.menu_at_the_end) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ' ' }, accessory: menuAccessory });
@@ -377,7 +381,7 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSel
         { type: 'context', elements: [{ type: 'mrkdwn', text: t('modal_ch_response_url_auto') }] },
       ] : [
         { type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
-          element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
+          element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
         { type: 'context', elements: [{ type: 'mrkdwn', text: useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn') }] },
       ]),
       // Per-poll language selector (single-question parity) — only when the team
@@ -684,29 +688,34 @@ async function handleVote({ ack, body, action, client, context }) {
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
   if (await isPollClosed(channel, ts)) { await rebuildMessage(client, token, pollData, channel, ts, body.response_url); return; } // closed: re-render, no write
-  // Atomic, concurrency-safe toggle: target only this question/option path so two
-  // people voting at once never clobber each other's writes (the old whole-`votes`
-  // $set lost concurrent updates). $addToSet/$pull are idempotent per path.
-  const qid = value.qid; const oid = value.oid;
-  const base = `votes.${qid}.${oid}`;
-  const probe = await votesCol().findOne({ channel, ts }, { projection: { [base]: 1 } });
-  const had = !!(probe && probe.votes && probe.votes[qid] && Array.isArray(probe.votes[qid][oid]) && probe.votes[qid][oid].includes(userId));
-  const ev = { u: userId, q: qid, o: oid, t: new Date(), a: had ? '-' : '+' };
-  const update = { $push: { vote_events: ev }, $setOnInsert: { team: pollData.team, poll_id: String(value.poll_id) } };
-  if (had) {
-    update.$pull = { [base]: userId }; // toggle off
-  } else {
-    update.$addToSet = { [base]: userId }; // toggle on
-    if (!value.multi) {
-      // single-select: remove this voter from the question's OTHER options
-      const q = (pollData.questions || []).find((x) => x.id === qid);
-      const n = (q && Array.isArray(q.options)) ? q.options.length : 0;
-      const pull = {};
-      for (let i = 0; i < n; i++) if (i !== oid) pull[`votes.${qid}.${i}`] = userId;
-      if (Object.keys(pull).length) update.$pull = pull;
+  // Serialize the probe+upsert per message (same mutex single's btn_vote uses) so the
+  // lazy votes-doc create (response_url mode) can't duplicate under concurrent first votes.
+  const release = _opts.lock ? await _opts.lock(`${pollData.team}/${channel}/${ts}`) : null;
+  try {
+    // Atomic, concurrency-safe toggle: target only this question/option path so two
+    // people voting at once never clobber each other's writes (the old whole-`votes`
+    // $set lost concurrent updates). $addToSet/$pull are idempotent per path.
+    const qid = value.qid; const oid = value.oid;
+    const base = `votes.${qid}.${oid}`;
+    const probe = await votesCol().findOne({ channel, ts }, { projection: { [base]: 1 } });
+    const had = !!(probe && probe.votes && probe.votes[qid] && Array.isArray(probe.votes[qid][oid]) && probe.votes[qid][oid].includes(userId));
+    const ev = { u: userId, q: qid, o: oid, t: new Date(), a: had ? '-' : '+' };
+    const update = { $push: { vote_events: ev }, $setOnInsert: { team: pollData.team, poll_id: String(value.poll_id) } };
+    if (had) {
+      update.$pull = { [base]: userId }; // toggle off
+    } else {
+      update.$addToSet = { [base]: userId }; // toggle on
+      if (!value.multi) {
+        // single-select: remove this voter from the question's OTHER options
+        const q = (pollData.questions || []).find((x) => x.id === qid);
+        const n = (q && Array.isArray(q.options)) ? q.options.length : 0;
+        const pull = {};
+        for (let i = 0; i < n; i++) if (i !== oid) pull[`votes.${qid}.${i}`] = userId;
+        if (Object.keys(pull).length) update.$pull = pull;
+      }
     }
-  }
-  await votesCol().updateOne({ channel, ts }, update, { upsert: true });
+    await votesCol().updateOne({ channel, ts }, update, { upsert: true });
+  } finally { if (release) release(); }
   await rebuildMessage(client, token, pollData, channel, ts, body.response_url);
 }
 
@@ -733,16 +742,21 @@ async function handleAnswerSubmit({ ack, body, view, client, context }) {
   const pollData = await loadPoll(meta.poll_id);
   // Atomic per-user write: only this question/user path, so concurrent answers
   // from other users are never clobbered (the old whole-`answers` $set lost them).
+  // Wrapped in the per-message mutex so the lazy votes-doc create (response_url mode)
+  // can't duplicate under concurrent first-answers — same as handleVote.
   const path = `answers.${meta.qid}.${userId}`;
-  if (val == null || String(val).trim() === '') {
-    await votesCol().updateOne({ channel: meta.channel, ts: meta.ts }, { $unset: { [path]: '' } });
-  } else {
-    await votesCol().updateOne(
-      { channel: meta.channel, ts: meta.ts },
-      { $set: { [path]: String(val).slice(0, MAX_TEXT_LEN) }, $setOnInsert: { team: pollData && pollData.team, poll_id: String(meta.poll_id) } },
-      { upsert: true },
-    );
-  }
+  const release = _opts.lock ? await _opts.lock(`${(pollData && pollData.team)}/${meta.channel}/${meta.ts}`) : null;
+  try {
+    if (val == null || String(val).trim() === '') {
+      await votesCol().updateOne({ channel: meta.channel, ts: meta.ts }, { $unset: { [path]: '' } });
+    } else {
+      await votesCol().updateOne(
+        { channel: meta.channel, ts: meta.ts },
+        { $set: { [path]: String(val).slice(0, MAX_TEXT_LEN) }, $setOnInsert: { team: pollData && pollData.team, poll_id: String(meta.poll_id) } },
+        { upsert: true },
+      );
+    }
+  } finally { if (release) release(); }
   if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts, meta.response_url);
 }
 
@@ -761,16 +775,32 @@ async function doSetClosed(client, token, pollData, channel, ts, closed, respons
   } catch (e) { /* best-effort */ }
   await rebuildMessage(client, token, pollData, channel, ts, responseUrl);
 }
-async function doDelete(client, token, pollData, channel, ts, responseUrl) {
-  // Remove the poll + all of its own data, then delete the message.
-  try { await pollCol().deleteOne({ _id: pollData._id }); } catch (e) { /* noop */ }
-  try { await votesCol().deleteMany({ channel, ts }); } catch (e) { /* noop */ }
-  try { await votesCol().deleteMany({ poll_id: String(pollData._id) }); } catch (e) { /* noop */ } // response_url mode: votes doc keyed by poll_id
-  try { await _db.collection('closed').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
-  try { await _db.collection('hidden').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
-  // Delete via the interaction's response_url when bot membership isn't assumed.
-  if (canUseResponseUrl(responseUrl)) { try { await _opts.postChat(responseUrl, 'delete', { token, channel, ts }); } catch (e) { /* noop */ } }
-  else { try { await client.chat.delete({ token, channel, ts }); } catch (e) { /* noop */ } }
+async function doDelete(client, token, pollData, channel, ts, responseUrl, userId) {
+  // Mirror the single-question poll's delete (deletePollConfirm): delete the MESSAGE
+  // FIRST; if that fails, do NOT wipe the DB (or the surviving message's buttons stop
+  // resolving) — tell the user via an ephemeral. Only when the message is gone do we
+  // delete the DB rows, and only if the workspace's delete_data_on_poll_delete is on.
+  let ok = true;
+  if (canUseResponseUrl(responseUrl)) {
+    let r = null; try { r = await _opts.postChat(responseUrl, 'delete', { token, channel, ts }); } catch (e) { r = null; }
+    ok = !!(r && r.status !== false);
+  } else {
+    try { await client.chat.delete({ token, channel, ts }); } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    const lang = (pollData.para && pollData.para.user_lang) || 'en';
+    try { await client.chat.postEphemeral({ token, channel, user: userId, text: stri18n(lang, 'err_delete_failed') }); } catch (e) { /* noop */ }
+    return;
+  }
+  let delData = false;
+  try { const defs = await teamDefaults(pollData.team); delData = !!defs.delete_data_on_poll_delete; } catch (e) { /* keep data when unsure */ }
+  if (delData) {
+    try { await pollCol().deleteOne({ _id: pollData._id }); } catch (e) { /* noop */ }
+    try { await votesCol().deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+    try { await votesCol().deleteMany({ poll_id: String(pollData._id) }); } catch (e) { /* noop */ } // response_url mode: votes doc keyed by poll_id
+    try { await _db.collection('closed').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+    try { await _db.collection('hidden').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+  }
 }
 
 /** Legacy reveal button (mq_reveal) on already-posted polls. */
@@ -839,8 +869,11 @@ async function sendMyVotes(client, token, body, pollData, ts, lang) {
 async function sendAllVotes(client, token, body, pollData, ts, lang) {
   const userId = body.user.id; const para = pollData.para || {};
   const reject = async (k) => { try { await client.chat.postEphemeral({ token, channel: body.channel.id, user: userId, text: stri18n(lang, k) }); } catch (e) { /* noop */ } };
+  // CREATOR-ONLY, always — exactly like the single-question poll's usersVotes
+  // (index.js usersVotes: body.user.id !== value.user → reject). This also prevents a
+  // non-creator from seeing hidden/un-revealed voters or free-text answers early.
+  if (!pollData.user_id || userId !== pollData.user_id) return reject('err_see_all_vote_other');
   if (para.anonymous && para.true_anonymous) return reject('err_see_all_vote_true_anonymous');
-  if (para.anonymous && (!pollData.user_id || userId !== pollData.user_id)) return reject('err_see_all_vote_other');
   const vdoc = await loadVotes(pollData._id, body.channel.id, ts);
   const votes = (vdoc && vdoc.votes) || {}; const answers = (vdoc && vdoc.answers) || {};
   const blocks = [];
@@ -883,7 +916,7 @@ async function handleMenu({ ack, body, action, client, context }) {
   if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal, body.response_url);
   else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true, body.response_url);
   else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false, body.response_url);
-  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts, body.response_url);
+  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts, body.response_url, body.user.id);
   else if (a === 'cmdinfo') await sendCommandInfo(client, token, body, pollData, lang);
   else if (a === 'myvotes') await sendMyVotes(client, token, body, pollData, ts, lang);
   else if (a === 'allvotes') await sendAllVotes(client, token, body, pollData, ts, lang);
