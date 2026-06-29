@@ -557,12 +557,16 @@ try {
       const pick = (k, g) => (tc.hasOwnProperty(k) ? tc[k] : g);
       return {
         app_lang: pick('app_lang', gAppLang),
+        app_lang_user_selectable: pick('app_lang_user_selectable', gIsAppLangSelectable),
         true_anonymous: pick('true_anonymous', gTrueAnonymous),
         menu_at_the_end: pick('menu_at_the_end', gIsMenuAtTheEnd),
         show_command_info: pick('show_command_info', gIsShowCommandInfo),
+        show_dashboard_link: pick('show_dashboard_link', gIsShowDashboardLink),
         display_poller_name: pick('display_poller_name', gDisplayPollerName),
       };
     },
+    // Reuse the single-question poll's "View on dashboard" flow for forms.
+    dashboardLinkAction: (body, client, context, value) => dashboardLinkAction(body, client, context, value),
   });
 
   migrations = new Migrations(db);
@@ -1284,11 +1288,11 @@ mq.register(app);
 app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   await ack();
   const val = (action && action.selected_option && action.selected_option.value) || 'single';
-  let channel = null; let responseUrl = ''; let userLang = 'en';
-  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; } catch (e) { /* ignore */ }
+  let channel = null; let responseUrl = ''; let userLang = 'en'; let langSelectable = false;
+  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; langSelectable = !!pm.lang_selectable; } catch (e) { /* ignore */ }
   try {
     if (val === 'multi') {
-      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang) });
+      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang, undefined, langSelectable) });
     } else {
       // swap back to single-question — update THIS modal in place (no new modal).
       await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);

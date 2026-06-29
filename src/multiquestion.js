@@ -22,7 +22,7 @@
  */
 
 const { ObjectId } = require('mongodb');
-const { stri18n, parameterizedString, slackNumToEmoji } = require('./i18n');
+const { stri18n, parameterizedString, slackNumToEmoji, langList } = require('./i18n');
 
 let _db = null;
 let _opts = {};
@@ -219,12 +219,25 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   const blocks = [];
 
   blocks.push({ type: 'header', text: { type: 'plain_text', text: trimText(pollData.question || 'Poll', 150), emoji: true } });
-  const sub = [];
-  if (pollData.user_id && (pollData.para && pollData.para.display_poller_name !== false)) sub.push(`${stri18n(userLang, 'mq_created_by')} <@${pollData.user_id}>`);
+
+  // Flags + creator + question-count context, mirroring the single-question poll
+  // (same i18n keys; creator shown per display_poller_name "tag"/"none", not a bool).
+  const para = pollData.para || {};
+  const els = [];
+  if (anonymous) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_anonymous') });
+  if (para.hidden) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_hidden') });
+  const showPoller = (para.display_poller_name === 'tag' || para.display_poller_name === true);
+  if (pollData.user_id && showPoller) els.push({ type: 'mrkdwn', text: parameterizedString(stri18n(userLang, 'info_by'), { user_id: pollData.user_id }) });
   const nq = pollData.questions.length;
-  sub.push(parameterizedString(stri18n(userLang, nq === 1 ? 'mq_n_questions_one' : 'mq_n_questions_many'), { count: nq }));
-  if (opts.isClosed) sub.push(`:lock: ${stri18n(userLang, 'info_poll_closed')}`);
-  blocks.push(contextMd(sub.join('  ·  ')));
+  els.push({ type: 'mrkdwn', text: parameterizedString(stri18n(userLang, nq === 1 ? 'mq_n_questions_one' : 'mq_n_questions_many'), { count: nq }) });
+  if (opts.isClosed) els.push({ type: 'mrkdwn', text: `:lock: ${stri18n(userLang, 'info_poll_closed')}` });
+  blocks.push({ type: 'context', elements: els });
+
+  // Mobile "View Full Message" hint (info_addon — per-language, empty in en) + the
+  // anonymous notice, same as the single-question poll.
+  let addInfo = stri18n(userLang, 'info_addon');
+  if (anonymous && !para.true_anonymous) { if (addInfo) addInfo += '\n'; addInfo += stri18n(userLang, 'info_anonymous_notice'); }
+  if (addInfo) blocks.push(contextMd(addInfo));
   blocks.push(divider());
 
   pollData.questions.forEach((q, qi) => {
@@ -284,22 +297,25 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
     blocks.push(divider());
   });
 
-  // Management menu — one static_select dispatched by mq_menu (mirrors the single-
-  // question poll's menu). Reveal/hide (if hideable), close/reopen, delete. Placement
-  // (top vs end) + command-info follow the config STAMPED on para (config-safe).
-  const para = pollData.para || {};
+  // Management menu — one static_select dispatched by mq_menu, mirroring the
+  // single-question poll's menu + honoring the same config (all on para, config-safe):
+  // reveal/hide · see users votes · see your votes · close/reopen · delete · view on
+  // dashboard · command info. poll_id/cmd are NOT visible blocks — they live under
+  // "Command Info" (like the single-question poll).
   const mtext = (k) => ({ type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, k), 75) });
+  const mopt = (k, val) => ({ text: mtext(k), value: JSON.stringify(val) });
   const menuOpts = [];
-  if (para.hidden) menuOpts.push({ text: mtext(hidden ? 'menu_reveal_vote' : 'menu_hide_vote'), value: JSON.stringify({ a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }) });
-  menuOpts.push({ text: mtext(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll'), value: JSON.stringify({ a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }) });
-  menuOpts.push({ text: mtext('menu_delete_poll'), value: JSON.stringify({ a: 'delete', poll_id: pollId }) });
-  const menuBlocks = [{ type: 'actions', elements: [{ type: 'static_select', action_id: 'mq_menu', placeholder: { type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, 'menu_poll_action'), 150) }, options: menuOpts }] }];
-  // blocks[0]=header, [1]=sub-context, [2]=divider — insert the menu after the header
-  // unless menu_at_the_end is set.
-  if (para.menu_at_the_end) blocks.push(...menuBlocks); else blocks.splice(2, 0, ...menuBlocks);
-  // Command info: the command that recreates this poll (when the workspace enables it).
-  if (para.show_command_info && pollData.cmd) blocks.push(contextMd('`' + trimText(pollData.cmd, 2900) + '`'));
-  blocks.push(contextMd(`poll_id: ${pollId}`));
+  if (para.hidden) menuOpts.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
+  if (!(anonymous && para.true_anonymous)) menuOpts.push(mopt('menu_all_user_vote', { a: 'allvotes', poll_id: pollId }));
+  menuOpts.push(mopt('menu_user_self_vote', { a: 'myvotes', poll_id: pollId }));
+  menuOpts.push(mopt(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll', { a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }));
+  menuOpts.push(mopt('menu_delete_poll', { a: 'delete', poll_id: pollId }));
+  if (para.show_dashboard_link) menuOpts.push(mopt('menu_view_on_dashboard', { a: 'dashboard', poll_id: pollId }));
+  if (para.show_command_info) menuOpts.push(mopt('menu_command_info', { a: 'cmdinfo', poll_id: pollId }));
+  const menuBlocks = [{ type: 'actions', elements: [{ type: 'static_select', action_id: 'mq_menu', placeholder: mtext('menu_poll_action'), options: menuOpts }] }];
+  // Place after the lead divider (top) unless menu_at_the_end → at the very end.
+  if (para.menu_at_the_end) { blocks.push(...menuBlocks); }
+  else { const di = blocks.findIndex((b) => b.type === 'divider'); blocks.splice(di >= 0 ? di + 1 : blocks.length, 0, ...menuBlocks); }
   return blocks;
 }
 
@@ -311,16 +327,16 @@ function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? 
 // single-question flow, so the form is fully translatable. `lang` = the team's
 // resolved language; `initialForm` pre-fills the Questions box (command preview /
 // error-recovery so a user's work is never lost).
-function buildCreateModalView(channelId, responseUrl, lang, initialForm) {
+function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSelectable) {
   const L = lang || 'en';
   const t = (k) => stri18n(L, k);
   const opt = (val, key) => ({ text: { type: 'plain_text', text: trimText(t(key), 75) }, value: val });
   return {
     type: 'modal',
     callback_id: 'mq_create_submit',
-    // channel/response_url/lang kept in private_metadata so the poll-type selector
-    // can preserve them when swapping back to the single-question modal.
-    private_metadata: JSON.stringify({ channel: channelId || null, response_url: responseUrl || '', user_lang: L }),
+    // channel/response_url/lang/lang_selectable kept in private_metadata so the
+    // poll-type selector can preserve them when swapping back to single-question.
+    private_metadata: JSON.stringify({ channel: channelId || null, response_url: responseUrl || '', user_lang: L, lang_selectable: !!langSelectable }),
     title: { type: 'plain_text', text: trimText(t('mq_modal_title'), 24) },
     submit: { type: 'plain_text', text: trimText(t('btn_create'), 24) },
     close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) },
@@ -345,6 +361,18 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm) {
       { type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] },
       { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: trimText(t('mq_field_channel'), 2000) },
         element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
+      // Per-poll language selector (single-question parity) — only when the team
+      // allows it (app_lang_user_selectable). Options come from the loaded languages.
+      ...((langSelectable && Object.keys(langList).length) ? [{
+        type: 'input', block_id: 'mq_lang', optional: true,
+        label: { type: 'plain_text', text: trimText(t('info_lang_select_label'), 2000) },
+        element: {
+          type: 'static_select', action_id: 'v',
+          placeholder: { type: 'plain_text', text: trimText(t('info_lang_select_hint'), 150) },
+          ...(langList[L] ? { initial_option: { text: { type: 'plain_text', text: trimText(langList[L] || L, 75) }, value: L } } : {}),
+          options: Object.keys(langList).map((k) => ({ text: { type: 'plain_text', text: trimText(langList[k] || k, 75) }, value: k })),
+        },
+      }] : []),
       { type: 'input', block_id: 'mq_settings', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_settings'), 2000) },
         element: { type: 'checkboxes', action_id: 'v', options: [
           { text: { type: 'mrkdwn', text: t('mq_opt_anonymous') }, value: 'anonymous' },
@@ -361,12 +389,14 @@ function parseCreateSubmit(view, lang) {
   const formText = (v.mq_form && v.mq_form.v && v.mq_form.v.value) || '';
   const channel = (v.mq_channel && v.mq_channel.v && v.mq_channel.v.selected_conversation) || null;
   const settings = ((v.mq_settings && v.mq_settings.v && v.mq_settings.v.selected_options) || []).map((o) => o.value);
+  const selLang = (v.mq_lang && v.mq_lang.v && v.mq_lang.v.selected_option && v.mq_lang.v.selected_option.value) || null;
   const { questions, errors } = parseForm(formText, lang);
   return {
     title: title || (questions[0] && questions[0].text) || 'Poll',
     channel,
     questions,
     errors,
+    lang: (selLang && langList[selLang]) ? selLang : null, // per-poll language override
     para: { anonymous: settings.includes('anonymous'), hidden: settings.includes('hidden') },
   };
 }
@@ -460,7 +490,7 @@ const MAX_BLOCKS = 48;
  *  initialForm pre-fills the Questions box (command preview / error recovery). */
 async function openCreateModal(client, triggerId, channelId, responseUrl, teamId, initialForm) {
   const defs = await teamDefaults(teamId);
-  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm) });
+  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm, defs.app_lang_user_selectable) });
 }
 
 // Rebuild the single-line `/<cmd> multi …` command that recreates this form — used
@@ -499,7 +529,8 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
     hidden: !!paraIn.hidden,
     menu_at_the_end: !!paraIn.menu_at_the_end,
     show_command_info: !!paraIn.show_command_info,
-    display_poller_name: paraIn.display_poller_name !== false,
+    show_dashboard_link: !!paraIn.show_dashboard_link,
+    display_poller_name: paraIn.display_poller_name, // raw "tag"/"none" — single-poll semantics
     form_version: 2,
   };
   const cmd = commandString(questions, para);
@@ -548,6 +579,7 @@ async function createFromCommand({ client, token, teamId, userId, channel, dsl }
   paraIn.true_anonymous = !!(paraIn.anonymous && defs.true_anonymous);
   paraIn.menu_at_the_end = defs.menu_at_the_end;
   paraIn.show_command_info = defs.show_command_info;
+  paraIn.show_dashboard_link = defs.show_dashboard_link;
   paraIn.display_poller_name = defs.display_poller_name;
   const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang });
   return { ok: r.ok, formText };
@@ -581,14 +613,16 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
   const token = context.botToken;
   const userId = body.user.id;
   const trueAnon = !!(parsed.para.anonymous && defs.true_anonymous);
+  const pollLang = parsed.lang || lang; // per-poll language selector overrides the team default
   // Delegate to the shared create+post (same path the command uses).
   await createAndPost(client, token, {
     teamOrEnt, userId, channel: parsed.channel, title: parsed.title, questions: parsed.questions,
     paraIn: {
       anonymous: parsed.para.anonymous, true_anonymous: trueAnon, hidden: parsed.para.hidden,
-      menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info, display_poller_name: defs.display_poller_name,
+      menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info,
+      show_dashboard_link: defs.show_dashboard_link, display_poller_name: defs.display_poller_name,
     },
-    lang,
+    lang: pollLang,
   });
 }
 
@@ -707,24 +741,84 @@ async function handleClose({ ack, body, action, client, context }) {
   await doSetClosed(client, context.botToken, pollData, body.channel.id, body.message.ts, true);
 }
 
-/** Management menu dispatcher (mq_menu): reveal/hide · close/reopen · delete.
- *  Creator-only (mirrors the single-question poll owner guard). */
+// Command Info — ephemeral poll id + created-via + recreate command (single-poll parity).
+async function sendCommandInfo(client, token, pollData, channel, userId, lang) {
+  const lines = [parameterizedString(stri18n(lang, 'info_poll_id_label'), { value: String(pollData._id) })];
+  if (pollData.cmd_via) lines.push(parameterizedString(stri18n(lang, 'info_created_via_label'), { value: pollData.cmd_via }));
+  if (pollData.cmd) lines.push('```' + trimText(pollData.cmd, 2900) + '```');
+  try { await client.chat.postEphemeral({ token, channel, user: userId, text: lines.join('\n') }); } catch (e) { /* noop */ }
+}
+// "See your votes" — ephemeral per-question summary of THIS user's choices/answers.
+async function sendMyVotes(client, token, pollData, channel, ts, userId, lang) {
+  const vdoc = await loadVotes(pollData._id, channel, ts);
+  const votes = (vdoc && vdoc.votes) || {}; const answers = (vdoc && vdoc.answers) || {};
+  const lines = [];
+  for (const q of (pollData.questions || [])) {
+    if (isChoice(q.type)) {
+      const qv = votes[q.id] || {}; const chosen = [];
+      (q.options || []).forEach((opt, oi) => { if ((qv[String(oi)] || []).includes(userId)) chosen.push(opt); });
+      lines.push(`*${trimText(q.text, 120)}*: ${chosen.length ? chosen.join(', ') : '—'}`);
+    } else {
+      const ans = (answers[q.id] || {})[userId];
+      lines.push(`*${trimText(q.text, 120)}*: ${(ans != null && ans !== '') ? formatAnswer(q.type, ans) : '—'}`);
+    }
+  }
+  try { await client.chat.postEphemeral({ token, channel, user: userId, text: `*${stri18n(lang, 'menu_user_self_vote')}*\n${lines.join('\n') || '—'}`.slice(0, 38000) }); } catch (e) { /* noop */ }
+}
+// "See users votes" — ephemeral per-question voter breakdown. Honors anonymity the
+// same way the single-question poll does: blocked for true-anonymous; anonymous polls
+// are creator-only; public polls are visible to anyone.
+async function sendAllVotes(client, token, pollData, channel, ts, userId, lang) {
+  const para = pollData.para || {};
+  if (para.anonymous && para.true_anonymous) { try { await client.chat.postEphemeral({ token, channel, user: userId, text: stri18n(lang, 'err_see_all_vote_true_anonymous') }); } catch (e) { /* noop */ } return; }
+  // Anonymous (not true-anon): creator-only. A missing/falsy creator blocks EVERYONE
+  // (never widen visibility when there's no owner to match against).
+  if (para.anonymous && (!pollData.user_id || userId !== pollData.user_id)) { try { await client.chat.postEphemeral({ token, channel, user: userId, text: stri18n(lang, 'err_see_all_vote_other') }); } catch (e) { /* noop */ } return; }
+  const vdoc = await loadVotes(pollData._id, channel, ts);
+  const votes = (vdoc && vdoc.votes) || {}; const answers = (vdoc && vdoc.answers) || {};
+  const lines = [];
+  for (const q of (pollData.questions || [])) {
+    lines.push(`*${trimText(q.text, 150)}*`);
+    if (isChoice(q.type)) {
+      const qv = votes[q.id] || {};
+      (q.options || []).forEach((opt, oi) => {
+        const voters = qv[String(oi)] || [];
+        lines.push(`  ${slackNumToEmoji(oi + 1, lang)} ${opt}: ${voters.length ? voters.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>`).join(' ') + (voters.length > MAX_VOTER_MENTIONS ? ` ${parameterizedString(stri18n(lang, 'mq_more'), { count: voters.length - MAX_VOTER_MENTIONS })}` : '') : '—'}`);
+      });
+    } else {
+      const qa = answers[q.id] || {}; const ks = Object.keys(qa);
+      if (!ks.length) lines.push('  —');
+      else ks.slice(0, MAX_VOTER_MENTIONS).forEach((u) => lines.push(`  <@${u}>: ${formatAnswer(q.type, qa[u])}`));
+    }
+  }
+  try { await client.chat.postEphemeral({ token, channel, user: userId, text: lines.join('\n').slice(0, 38000) }); } catch (e) { /* noop */ }
+}
+
+/** Management menu dispatcher (mq_menu). Mutating actions (reveal/close/reopen/delete)
+ *  are creator-only; see-votes / dashboard / command-info are open to anyone (anonymity
+ *  enforced inside), mirroring the single-question poll. */
 async function handleMenu({ ack, body, action, client, context }) {
   await ack();
   const token = context.botToken;
   const value = JSON.parse(action.selected_option.value);
+  const a = value.a;
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
   const channel = body.channel.id; const ts = body.message.ts;
   const lang = (pollData.para && pollData.para.user_lang) || 'en';
-  if (pollData.user_id && body.user.id !== pollData.user_id) {
+  const ownerOnly = (a === 'reveal' || a === 'close' || a === 'reopen' || a === 'delete');
+  if (ownerOnly && pollData.user_id && body.user.id !== pollData.user_id) {
     try { await client.chat.postEphemeral({ token, channel, user: body.user.id, text: stri18n(lang, 'err_action_other') }); } catch (e) { /* noop */ }
     return;
   }
-  if (value.a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal);
-  else if (value.a === 'close') await doSetClosed(client, token, pollData, channel, ts, true);
-  else if (value.a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false);
-  else if (value.a === 'delete') await doDelete(client, token, pollData, channel, ts);
+  if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal);
+  else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true);
+  else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false);
+  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts);
+  else if (a === 'cmdinfo') await sendCommandInfo(client, token, pollData, channel, body.user.id, lang);
+  else if (a === 'myvotes') await sendMyVotes(client, token, pollData, channel, ts, body.user.id, lang);
+  else if (a === 'allvotes') await sendAllVotes(client, token, pollData, channel, ts, body.user.id, lang);
+  else if (a === 'dashboard' && _opts.dashboardLinkAction) await _opts.dashboardLinkAction(body, client, context, { poll_id: value.poll_id, p_id: value.poll_id, user: body.user.id, user_lang: lang });
 }
 
 /** Per-question "add choice" (action_id mq_addchoice) → small modal. */
