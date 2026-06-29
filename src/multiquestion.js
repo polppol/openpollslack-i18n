@@ -1228,6 +1228,7 @@ async function handleQuestionSubmit({ ack, body, view, client, context }) {
   let ctx = {}; try { ctx = JSON.parse(view.private_metadata || '{}'); } catch (e) { /* noop */ }
   const lang = ctx.lang || 'en';
   const q = readQuestionFromView(view);
+  if (q.type === 'yesno') { q.options = [stri18n(lang, 'mq_yes'), stri18n(lang, 'mq_no')]; q.multi = false; } // keep the draft consistent (ids normalized at final submit)
   if (!q.text) { await ack({ response_action: 'errors', errors: { mq_q_text: stri18n(lang, 'mq_b_err_need_text') } }); return; }
   if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { mq_q_opts: stri18n(lang, 'mq_b_err_2opts') } }); return; }
   await ack(); // pops the sub-modal back to the root
@@ -1258,6 +1259,16 @@ async function handleBuilderSubmit({ ack, body, view, client, context }) {
     draft.questions = parsed.questions;
   }
   const questions = draft.questions || [];
+  // Normalize at the single convergence point (poll is brand-new, no votes yet):
+  // (1) positional ids — the VISUAL builder leaves them undefined; without an id
+  //     buildBlocks emits qid:undefined and every question collides on votes.undefined.*
+  //     (parseForm/advanced already yields q1..qN, so this is idempotent).
+  // (2) yes/no options in the poll language — the visual builder leaves them empty,
+  //     which would post a yes/no question with no vote buttons.
+  questions.forEach((q, i) => {
+    q.id = 'q' + (i + 1);
+    if (q.type === 'yesno') { q.options = [t('mq_yes'), t('mq_no')]; q.multi = false; }
+  });
   const errTarget = draft.mode === 'advanced' ? 'mq_form' : 'mq_b_title';
   if (!questions.length) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_need_question') } }); return; }
   for (const q of questions) { if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_choice_2opts', { q: (q.text || '').slice(0, 40) }) } }); return; } }
