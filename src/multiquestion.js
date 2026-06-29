@@ -337,7 +337,7 @@ function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? 
 // single-question flow, so the form is fully translatable. `lang` = the team's
 // resolved language; `initialForm` pre-fills the Questions box (command preview /
 // error-recovery so a user's work is never lost).
-function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSelectable) {
+function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSelectable, useResponseUrl) {
   const L = lang || 'en';
   const t = (k) => stri18n(L, k);
   const opt = (val, key) => ({ text: { type: 'plain_text', text: trimText(t(key), 75) }, value: val });
@@ -369,9 +369,17 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSel
       { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: trimText(t('mq_field_questions'), 2000) },
         element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...(initialForm ? { initial_value: String(initialForm).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } },
       { type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] },
-      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: trimText(t('modal_ch_manual_select'), 2000) },
-        element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text: t('modal_ch_warn') }] },
+      // Channel section — mirrors the single-question poll exactly (same i18n keys):
+      // in response_url mode the poll auto-posts to the command's channel (no selector,
+      // no bot membership needed); otherwise a channel picker + the bot-invite warning.
+      { type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } },
+      ...((useResponseUrl && responseUrl) ? [
+        { type: 'context', elements: [{ type: 'mrkdwn', text: t('modal_ch_response_url_auto') }] },
+      ] : [
+        { type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
+          element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn') }] },
+      ]),
       // Per-poll language selector (single-question parity) — only when the team
       // allows it (app_lang_user_selectable). Options come from the loaded languages.
       ...((langSelectable && Object.keys(langList).length) ? [{
@@ -428,7 +436,7 @@ function answerElement(type, qmin, qmax) {
   }
 }
 
-function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts, lang) {
+function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts, lang, responseUrl) {
   const L = lang || 'en';
   const el = answerElement(type);
   if (current != null && current !== '') {
@@ -440,7 +448,9 @@ function buildAnswerModalView(pollId, qid, type, qText, current, channel, ts, la
   return {
     type: 'modal',
     callback_id: 'mq_answer_submit',
-    private_metadata: JSON.stringify({ poll_id: pollId, qid, type, channel, ts, user_lang: L }),
+    // response_url carried so the channel message can be updated after submit even when
+    // the bot isn't a member (modal submits have no response_url of their own).
+    private_metadata: JSON.stringify({ poll_id: pollId, qid, type, channel, ts, user_lang: L, response_url: responseUrl || '' }),
     title: { type: 'plain_text', text: trimText(stri18n(L, 'mq_answer_title'), 24) },
     submit: { type: 'plain_text', text: trimText(stri18n(L, 'mq_answer_save'), 24) },
     close: { type: 'plain_text', text: trimText(stri18n(L, 'btn_cancel'), 24) },
@@ -476,13 +486,22 @@ async function isPollClosed(channel, ts) {
   try { const d = await _db.collection('closed').findOne({ channel, ts }); return !!(d && d.closed); } catch (e) { return false; }
 }
 
+// True when the app is configured to post via response_url (reusing the single-question
+// poll's posting) AND a usable response_url is in hand — lets forms reach a channel the
+// bot isn't a member of, exactly like the single-question poll.
+function canUseResponseUrl(responseUrl) { return !!(_opts.isUseResponseUrl && _opts.postChat && responseUrl); }
+
 /** Re-render the poll message from current DB state (after a vote/answer/menu).
- *  Closed-state is read from the DB so a stale/racing click can never un-close. */
-async function rebuildMessage(client, token, pollData, channel, ts) {
+ *  Closed-state is read from the DB so a stale/racing click can never un-close.
+ *  When response_url posting is on, updates go through the interaction's response_url
+ *  (no bot membership needed); otherwise via the bot Web API (chat.update). */
+async function rebuildMessage(client, token, pollData, channel, ts, responseUrl) {
   const votesDoc = await loadVotes(pollData._id, channel, ts);
   const isClosed = await isPollClosed(channel, ts);
   const blocks = buildBlocks(pollData, votesDoc, { userLang: pollData.para && pollData.para.user_lang, isClosed });
-  await client.chat.update({ token, channel, ts, text: trimText(pollData.question || 'Poll', 150), blocks });
+  const text = trimText(pollData.question || 'Poll', 150);
+  if (canUseResponseUrl(responseUrl)) await _opts.postChat(responseUrl, 'update', { token, channel, ts, blocks, text });
+  else await client.chat.update({ token, channel, ts, text, blocks });
 }
 
 // Estimated message block count (Slack hard-limits a message to 50 blocks).
@@ -501,7 +520,7 @@ const MAX_BLOCKS = 48;
  *  initialForm pre-fills the Questions box (command preview / error recovery). */
 async function openCreateModal(client, triggerId, channelId, responseUrl, teamId, initialForm) {
   const defs = await teamDefaults(teamId);
-  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm, defs.app_lang_user_selectable) });
+  await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm, defs.app_lang_user_selectable, _opts.isUseResponseUrl) });
 }
 
 // Rebuild the single-line `/<cmd> multi …` command that recreates this form — used
@@ -531,7 +550,7 @@ function commandString(questions, para) {
 // onto para (config-safe), stores the recreate-command on pollData.cmd, posts the
 // message, records the ts, and on a post failure DMs the creator the recovery command
 // so their work is never lost. Returns { ok }.
-async function createAndPost(client, token, { teamOrEnt, userId, channel, title, questions, paraIn, lang }) {
+async function createAndPost(client, token, { teamOrEnt, userId, channel, title, questions, paraIn, lang, responseUrl }) {
   const q1 = questions[0];
   const para = {
     user_lang: lang,
@@ -555,19 +574,31 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
   const res = await pollCol().insertOne(pollData);
   pollData._id = res.insertedId;
   const blocks = buildBlocks(pollData, null, { userLang: lang });
-  let posted = null;
-  try { posted = await client.chat.postMessage({ token, channel, text: trimText(title, 150), blocks }); }
-  catch (e) {
-    // Can't post (e.g. bot not in channel) — DM the creator the recreate command +
-    // roll back the orphan poll, so nothing they typed is lost.
+  const text = trimText(title, 150);
+  // Can't post (e.g. bot not in channel) — DM the creator the recreate command +
+  // roll back the orphan poll, so nothing they typed is lost.
+  const recoveryFail = async () => {
     const dm = `${stri18n(lang, 'mq_post_failed')}\n${stri18n(lang, 'mq_recover_dm')}\n\`\`\`${cmd}\`\`\``;
     try { await client.chat.postMessage({ token, channel: userId, text: dm }); } catch (_) { /* noop */ }
     await pollCol().deleteOne({ _id: pollData._id });
     return { ok: false };
-  }
-  if (posted && posted.ts) {
-    await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || channel } });
-    await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
+  };
+  if (canUseResponseUrl(responseUrl)) {
+    // Reuse the single-question poll's response_url posting: posts to the command's
+    // channel WITHOUT the bot needing to be a member. No ts is returned — poll_data.ts
+    // stays null and the votes doc is created lazily on the first interaction (by poll_id,
+    // keyed by the real (channel,ts) from the interaction body) — same model as single.
+    let r = null;
+    try { r = await _opts.postChat(responseUrl, 'post', { token, channel, blocks, text }); } catch (e) { r = null; }
+    if (!r || r.status === false) return recoveryFail();
+  } else {
+    let posted = null;
+    try { posted = await client.chat.postMessage({ token, channel, text, blocks }); }
+    catch (e) { return recoveryFail(); }
+    if (posted && posted.ts) {
+      await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || channel } });
+      await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
+    }
   }
   return { ok: true };
 }
@@ -575,7 +606,7 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
 /** Create a form directly from a slash command: `/<cmd> multi [anonymous] [hidden] Q: … | …`.
  *  Returns { ok, formText, errors } — on parse error the caller opens the builder
  *  pre-filled with formText so the user's typing is never lost. */
-async function createFromCommand({ client, token, teamId, userId, channel, dsl }) {
+async function createFromCommand({ client, token, teamId, userId, channel, dsl, responseUrl }) {
   const defs = await teamDefaults(teamId);
   const lang = defs.app_lang || 'en';
   let text = String(dsl || '').trim();
@@ -592,7 +623,7 @@ async function createFromCommand({ client, token, teamId, userId, channel, dsl }
   paraIn.show_command_info = defs.show_command_info;
   paraIn.show_dashboard_link = defs.show_dashboard_link;
   paraIn.display_poller_name = defs.display_poller_name;
-  const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang });
+  const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang, responseUrl });
   return { ok: r.ok, formText };
 }
 
@@ -615,7 +646,12 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
     await ack({ response_action: 'errors', errors: { mq_form: parsed.errors.join(' • ').slice(0, 2000) } });
     return;
   }
-  if (!parsed.channel) { await ack({ response_action: 'errors', errors: { mq_channel: t('mq_err_pick_channel') } }); return; }
+  // In response_url mode the modal has NO channel selector (posts to the command's
+  // channel, carried in private_metadata) — fall back to pm.channel. Same as single.
+  let pm = {}; try { pm = JSON.parse(view.private_metadata || '{}'); } catch (e) { pm = {}; }
+  const responseUrl = pm.response_url || '';
+  const channel = parsed.channel || pm.channel || null;
+  if (!channel) { await ack({ response_action: 'errors', errors: { mq_channel: t('mq_err_pick_channel') } }); return; }
   if (estimateBlocks(parsed.questions) > MAX_BLOCKS) {
     await ack({ response_action: 'errors', errors: { mq_form: t('mq_err_too_big', { max: MAX_BLOCKS }) } });
     return;
@@ -627,13 +663,13 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
   const pollLang = parsed.lang || lang; // per-poll language selector overrides the team default
   // Delegate to the shared create+post (same path the command uses).
   await createAndPost(client, token, {
-    teamOrEnt, userId, channel: parsed.channel, title: parsed.title, questions: parsed.questions,
+    teamOrEnt, userId, channel, title: parsed.title, questions: parsed.questions,
     paraIn: {
       anonymous: parsed.para.anonymous, true_anonymous: trueAnon, hidden: parsed.para.hidden,
       menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info,
       show_dashboard_link: defs.show_dashboard_link, display_poller_name: defs.display_poller_name,
     },
-    lang: pollLang,
+    lang: pollLang, responseUrl,
   });
 }
 
@@ -647,7 +683,7 @@ async function handleVote({ ack, body, action, client, context }) {
   const ts = body.message.ts;
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
-  if (await isPollClosed(channel, ts)) { await rebuildMessage(client, token, pollData, channel, ts); return; } // closed: re-render, no write
+  if (await isPollClosed(channel, ts)) { await rebuildMessage(client, token, pollData, channel, ts, body.response_url); return; } // closed: re-render, no write
   // Atomic, concurrency-safe toggle: target only this question/option path so two
   // people voting at once never clobber each other's writes (the old whole-`votes`
   // $set lost concurrent updates). $addToSet/$pull are idempotent per path.
@@ -671,7 +707,7 @@ async function handleVote({ ack, body, action, client, context }) {
     }
   }
   await votesCol().updateOne({ channel, ts }, update, { upsert: true });
-  await rebuildMessage(client, token, pollData, channel, ts);
+  await rebuildMessage(client, token, pollData, channel, ts, body.response_url);
 }
 
 /** Open the typed answer modal (action_id mq_answer). */
@@ -683,7 +719,7 @@ async function handleAnswerOpen({ ack, body, action, client, context }) {
   const userId = body.user.id;
   const vdoc = await loadVotes(value.poll_id, channel, ts);
   const current = vdoc && vdoc.answers && vdoc.answers[value.qid] && vdoc.answers[value.qid][userId];
-  await client.views.open({ trigger_id: body.trigger_id, view: buildAnswerModalView(value.poll_id, value.qid, value.type, value.text, current, channel, ts, value.user_lang) });
+  await client.views.open({ trigger_id: body.trigger_id, view: buildAnswerModalView(value.poll_id, value.qid, value.type, value.text, current, channel, ts, value.user_lang, body.response_url) });
 }
 
 /** Save a typed answer (callback_id mq_answer_submit). */
@@ -707,31 +743,34 @@ async function handleAnswerSubmit({ ack, body, view, client, context }) {
       { upsert: true },
     );
   }
-  if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts);
+  if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts, meta.response_url);
 }
 
 // Shared menu actions — used by mq_menu (new polls) AND the legacy mq_reveal/mq_close
 // buttons that already-posted polls still carry.
-async function doReveal(client, token, pollData, channel, ts, reveal) {
+async function doReveal(client, token, pollData, channel, ts, reveal, responseUrl) {
   // Flip the LIVE reveal state (para.revealed), not the immutable hide setting.
   await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.revealed': reveal === 1 } });
   pollData.para = { ...pollData.para, revealed: reveal === 1 };
-  await rebuildMessage(client, token, pollData, channel, ts);
+  await rebuildMessage(client, token, pollData, channel, ts, responseUrl);
 }
-async function doSetClosed(client, token, pollData, channel, ts, closed) {
+async function doSetClosed(client, token, pollData, channel, ts, closed, responseUrl) {
   try {
     if (closed) await _db.collection('closed').updateOne({ channel, ts }, { $setOnInsert: { team: pollData.team }, $set: { closed: true } }, { upsert: true });
     else await _db.collection('closed').deleteOne({ channel, ts });
   } catch (e) { /* best-effort */ }
-  await rebuildMessage(client, token, pollData, channel, ts);
+  await rebuildMessage(client, token, pollData, channel, ts, responseUrl);
 }
-async function doDelete(client, token, pollData, channel, ts) {
+async function doDelete(client, token, pollData, channel, ts, responseUrl) {
   // Remove the poll + all of its own data, then delete the message.
   try { await pollCol().deleteOne({ _id: pollData._id }); } catch (e) { /* noop */ }
   try { await votesCol().deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+  try { await votesCol().deleteMany({ poll_id: String(pollData._id) }); } catch (e) { /* noop */ } // response_url mode: votes doc keyed by poll_id
   try { await _db.collection('closed').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
   try { await _db.collection('hidden').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
-  try { await client.chat.delete({ token, channel, ts }); } catch (e) { /* noop */ }
+  // Delete via the interaction's response_url when bot membership isn't assumed.
+  if (canUseResponseUrl(responseUrl)) { try { await _opts.postChat(responseUrl, 'delete', { token, channel, ts }); } catch (e) { /* noop */ } }
+  else { try { await client.chat.delete({ token, channel, ts }); } catch (e) { /* noop */ } }
 }
 
 /** Legacy reveal button (mq_reveal) on already-posted polls. */
@@ -740,7 +779,7 @@ async function handleReveal({ ack, body, action, client, context }) {
   const value = JSON.parse(action.value);
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
-  await doReveal(client, context.botToken, pollData, body.channel.id, body.message.ts, value.reveal);
+  await doReveal(client, context.botToken, pollData, body.channel.id, body.message.ts, value.reveal, body.response_url);
 }
 
 /** Legacy close button (mq_close) on already-posted polls. */
@@ -749,7 +788,7 @@ async function handleClose({ ack, body, action, client, context }) {
   const value = JSON.parse(action.value);
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
-  await doSetClosed(client, context.botToken, pollData, body.channel.id, body.message.ts, true);
+  await doSetClosed(client, context.botToken, pollData, body.channel.id, body.message.ts, true, body.response_url);
 }
 
 // Open a MODAL for the menu info actions (Command Info / See your votes / See users
@@ -841,10 +880,10 @@ async function handleMenu({ ack, body, action, client, context }) {
     try { await client.chat.postEphemeral({ token, channel, user: body.user.id, text: stri18n(lang, 'err_action_other') }); } catch (e) { /* noop */ }
     return;
   }
-  if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal);
-  else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true);
-  else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false);
-  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts);
+  if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal, body.response_url);
+  else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true, body.response_url);
+  else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false, body.response_url);
+  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts, body.response_url);
   else if (a === 'cmdinfo') await sendCommandInfo(client, token, body, pollData, lang);
   else if (a === 'myvotes') await sendMyVotes(client, token, body, pollData, ts, lang);
   else if (a === 'allvotes') await sendAllVotes(client, token, body, pollData, ts, lang);
@@ -860,7 +899,7 @@ async function handleAddChoiceOpen({ ack, body, action, client }) {
     trigger_id: body.trigger_id,
     view: {
       type: 'modal', callback_id: 'mq_addchoice_submit',
-      private_metadata: JSON.stringify({ poll_id: value.poll_id, qid: value.qid, channel: body.channel.id, ts: body.message.ts, user_lang: L }),
+      private_metadata: JSON.stringify({ poll_id: value.poll_id, qid: value.qid, channel: body.channel.id, ts: body.message.ts, user_lang: L, response_url: body.response_url || '' }),
       title: { type: 'plain_text', text: trimText(stri18n(L, 'mq_add_choice_title'), 24) }, submit: { type: 'plain_text', text: trimText(stri18n(L, 'mq_add_choice_submit'), 24) }, close: { type: 'plain_text', text: trimText(stri18n(L, 'btn_cancel'), 24) },
       blocks: [{ type: 'input', block_id: 'mq_newopt', label: { type: 'plain_text', text: trimText(stri18n(L, 'mq_new_choice'), 2000) }, element: { type: 'plain_text_input', action_id: 'v', max_length: 150 } }],
     },
@@ -889,7 +928,7 @@ async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
   await pollCol().updateOne({ _id: pollData._id }, update, { arrayFilters: [{ 'q.id': meta.qid }] });
   q.options = [...(q.options || []), opt]; // reflect for the immediate re-render
   if (pollData.questions[0] && pollData.questions[0].id === meta.qid) pollData.options = [...(pollData.options || []), opt];
-  await rebuildMessage(client, context.botToken, pollData, meta.channel, meta.ts);
+  await rebuildMessage(client, context.botToken, pollData, meta.channel, meta.ts, meta.response_url);
 }
 
 /** Register all mq_* handlers on the Bolt app. Call once from index.js. */

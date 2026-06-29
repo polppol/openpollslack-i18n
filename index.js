@@ -551,6 +551,12 @@ try {
   // single-question modal does.
   mq.init(db, {
     slackCommand,
+    // Reuse the single-question poll's response_url posting so forms can post to the
+    // command's channel without the bot being a member. postChat is a thunk because it's
+    // declared later in this file (avoids the const TDZ at this call site).
+    isUseResponseUrl,
+    postChat: (url, type, requestBody) => postChat(url, type, requestBody),
+    botName,
     resolveTeamDefaults: async (teamId) => {
       let tc = {};
       try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
@@ -1298,7 +1304,7 @@ app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   }
   try {
     if (val === 'multi') {
-      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang, undefined, langSelectable) });
+      await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang, undefined, langSelectable, isUseResponseUrl) });
     } else {
       // swap back to single-question — update THIS modal in place (no new modal).
       await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);
@@ -1920,7 +1926,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
         } else {
           // "/poll multi <DSL>" → create directly; on a parse error open the builder
           // PRE-FILLED with what they typed so nothing is lost.
-          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest });
+          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest, responseUrl: mqResp });
           if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText);
         }
       } catch (e) { await respond('Could not open the multi-question builder.'); }
