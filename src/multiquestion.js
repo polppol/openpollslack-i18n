@@ -284,15 +284,21 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
     blocks.push(divider());
   });
 
-  // menu (reveal/hide + close) — own action ids, handled in this module.
-  const menu = [];
-  if (pollData.para && pollData.para.hidden && !opts.isClosed) {
-    menu.push({ type: 'button', action_id: 'mq_reveal', text: { type: 'plain_text', emoji: true, text: hidden ? (stri18n(userLang, 'menu_reveal_vote') || 'Reveal') : (stri18n(userLang, 'menu_hide_vote') || 'Hide') }, value: JSON.stringify({ poll_id: pollId, reveal: hidden ? 1 : 0 }) });
-  }
-  if (!opts.isClosed) {
-    menu.push({ type: 'button', style: 'danger', action_id: 'mq_close', text: { type: 'plain_text', emoji: true, text: stri18n(userLang, 'menu_close_poll') || 'Close' }, value: JSON.stringify({ poll_id: pollId }) });
-  }
-  if (menu.length) blocks.push({ type: 'actions', elements: menu });
+  // Management menu — one static_select dispatched by mq_menu (mirrors the single-
+  // question poll's menu). Reveal/hide (if hideable), close/reopen, delete. Placement
+  // (top vs end) + command-info follow the config STAMPED on para (config-safe).
+  const para = pollData.para || {};
+  const mtext = (k) => ({ type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, k), 75) });
+  const menuOpts = [];
+  if (para.hidden) menuOpts.push({ text: mtext(hidden ? 'menu_reveal_vote' : 'menu_hide_vote'), value: JSON.stringify({ a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }) });
+  menuOpts.push({ text: mtext(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll'), value: JSON.stringify({ a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }) });
+  menuOpts.push({ text: mtext('menu_delete_poll'), value: JSON.stringify({ a: 'delete', poll_id: pollId }) });
+  const menuBlocks = [{ type: 'actions', elements: [{ type: 'static_select', action_id: 'mq_menu', placeholder: { type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, 'menu_poll_action'), 150) }, options: menuOpts }] }];
+  // blocks[0]=header, [1]=sub-context, [2]=divider — insert the menu after the header
+  // unless menu_at_the_end is set.
+  if (para.menu_at_the_end) blocks.push(...menuBlocks); else blocks.splice(2, 0, ...menuBlocks);
+  // Command info: the command that recreates this poll (when the workspace enables it).
+  if (para.show_command_info && pollData.cmd) blocks.push(contextMd('`' + trimText(pollData.cmd, 2900) + '`'));
   blocks.push(contextMd(`poll_id: ${pollId}`));
   return blocks;
 }
@@ -659,29 +665,66 @@ async function handleAnswerSubmit({ ack, body, view, client, context }) {
   if (pollData) await rebuildMessage(client, token, pollData, meta.channel, meta.ts);
 }
 
-/** Reveal/hide a hidden multi-question poll (action_id mq_reveal). */
-async function handleReveal({ ack, body, action, client, context }) {
-  await ack();
-  const token = context.botToken;
-  const value = JSON.parse(action.value);
-  const pollData = await loadPoll(value.poll_id);
-  if (!pollData) return;
+// Shared menu actions — used by mq_menu (new polls) AND the legacy mq_reveal/mq_close
+// buttons that already-posted polls still carry.
+async function doReveal(client, token, pollData, channel, ts, reveal) {
   // Flip the LIVE reveal state (para.revealed), not the immutable hide setting.
-  const newRevealed = (value.reveal === 1); // reveal=1 -> show results; 0 -> hide again
-  await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.revealed': newRevealed } });
-  pollData.para = { ...pollData.para, revealed: newRevealed };
-  await rebuildMessage(client, token, pollData, body.channel.id, body.message.ts);
+  await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.revealed': reveal === 1 } });
+  pollData.para = { ...pollData.para, revealed: reveal === 1 };
+  await rebuildMessage(client, token, pollData, channel, ts);
+}
+async function doSetClosed(client, token, pollData, channel, ts, closed) {
+  try {
+    if (closed) await _db.collection('closed').updateOne({ channel, ts }, { $setOnInsert: { team: pollData.team }, $set: { closed: true } }, { upsert: true });
+    else await _db.collection('closed').deleteOne({ channel, ts });
+  } catch (e) { /* best-effort */ }
+  await rebuildMessage(client, token, pollData, channel, ts);
+}
+async function doDelete(client, token, pollData, channel, ts) {
+  // Remove the poll + all of its own data, then delete the message.
+  try { await pollCol().deleteOne({ _id: pollData._id }); } catch (e) { /* noop */ }
+  try { await votesCol().deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+  try { await _db.collection('closed').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+  try { await _db.collection('hidden').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
+  try { await client.chat.delete({ token, channel, ts }); } catch (e) { /* noop */ }
 }
 
-/** Close a multi-question poll (action_id mq_close). */
-async function handleClose({ ack, body, action, client, context }) {
+/** Legacy reveal button (mq_reveal) on already-posted polls. */
+async function handleReveal({ ack, body, action, client, context }) {
   await ack();
-  const token = context.botToken;
   const value = JSON.parse(action.value);
   const pollData = await loadPoll(value.poll_id);
   if (!pollData) return;
-  try { await _db.collection('closed').updateOne({ channel: body.channel.id, ts: body.message.ts }, { $setOnInsert: { team: pollData.team }, $set: { closed: true } }, { upsert: true }); } catch (e) { /* best-effort */ }
-  await rebuildMessage(client, token, pollData, body.channel.id, body.message.ts); // reads closed=true just set
+  await doReveal(client, context.botToken, pollData, body.channel.id, body.message.ts, value.reveal);
+}
+
+/** Legacy close button (mq_close) on already-posted polls. */
+async function handleClose({ ack, body, action, client, context }) {
+  await ack();
+  const value = JSON.parse(action.value);
+  const pollData = await loadPoll(value.poll_id);
+  if (!pollData) return;
+  await doSetClosed(client, context.botToken, pollData, body.channel.id, body.message.ts, true);
+}
+
+/** Management menu dispatcher (mq_menu): reveal/hide · close/reopen · delete.
+ *  Creator-only (mirrors the single-question poll owner guard). */
+async function handleMenu({ ack, body, action, client, context }) {
+  await ack();
+  const token = context.botToken;
+  const value = JSON.parse(action.selected_option.value);
+  const pollData = await loadPoll(value.poll_id);
+  if (!pollData) return;
+  const channel = body.channel.id; const ts = body.message.ts;
+  const lang = (pollData.para && pollData.para.user_lang) || 'en';
+  if (pollData.user_id && body.user.id !== pollData.user_id) {
+    try { await client.chat.postEphemeral({ token, channel, user: body.user.id, text: stri18n(lang, 'err_action_other') }); } catch (e) { /* noop */ }
+    return;
+  }
+  if (value.a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal);
+  else if (value.a === 'close') await doSetClosed(client, token, pollData, channel, ts, true);
+  else if (value.a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false);
+  else if (value.a === 'delete') await doDelete(client, token, pollData, channel, ts);
 }
 
 /** Per-question "add choice" (action_id mq_addchoice) → small modal. */
@@ -729,8 +772,9 @@ async function handleAddChoiceSubmit({ ack, body, view, client, context }) {
 function register(app) {
   app.action('mq_vote', wrap(handleVote, 'mq_vote'));
   app.action('mq_answer', wrap(handleAnswerOpen, 'mq_answer'));
-  app.action('mq_reveal', wrap(handleReveal, 'mq_reveal'));
-  app.action('mq_close', wrap(handleClose, 'mq_close'));
+  app.action('mq_menu', wrap(handleMenu, 'mq_menu'));
+  app.action('mq_reveal', wrap(handleReveal, 'mq_reveal')); // legacy (already-posted polls)
+  app.action('mq_close', wrap(handleClose, 'mq_close'));    // legacy (already-posted polls)
   app.action('mq_addchoice', wrap(handleAddChoiceOpen, 'mq_addchoice'));
   app.view('mq_create_submit', wrap(handleCreateSubmit, 'mq_create_submit'));
   app.view('mq_answer_submit', wrap(handleAnswerSubmit, 'mq_answer_submit'));
