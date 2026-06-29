@@ -1289,7 +1289,13 @@ app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
   await ack();
   const val = (action && action.selected_option && action.selected_option.value) || 'single';
   let channel = null; let responseUrl = ''; let userLang = 'en'; let langSelectable = false;
-  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; langSelectable = !!pm.lang_selectable; } catch (e) { /* ignore */ }
+  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; langSelectable = pm.hasOwnProperty('lang_selectable') ? !!pm.lang_selectable : null; } catch (e) { /* ignore */ }
+  // The single-question modal's metadata doesn't carry lang_selectable, so resolve it
+  // from team config when swapping single→multi (else the lang selector goes missing).
+  if (langSelectable === null) {
+    try { const tc = await getTeamOverride(getTeamOrEnterpriseId(context)); langSelectable = tc.hasOwnProperty('app_lang_user_selectable') ? !!tc.app_lang_user_selectable : !!gIsAppLangSelectable; }
+    catch (e) { langSelectable = !!gIsAppLangSelectable; }
+  }
   try {
     if (val === 'multi') {
       await client.views.update({ token: context.botToken, view_id: body.view.id, view: mq.buildCreateModalView(channel, responseUrl, userLang, undefined, langSelectable) });

@@ -216,13 +216,37 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   const votes = (votesDoc && votesDoc.votes) || {};
   const answers = (votesDoc && votesDoc.answers) || {};
   const pollId = String(pollData._id);
+  const para = pollData.para || {};
   const blocks = [];
 
-  blocks.push({ type: 'header', text: { type: 'plain_text', text: trimText(pollData.question || 'Poll', 150), emoji: true } });
+  // Management menu — a RIGHT-ALIGNED section accessory with option_groups (Poll
+  // actions / User actions), mirroring the single-question poll. Command Info + See
+  // your votes are ALWAYS available (User actions); mutating actions (reveal/close/
+  // reopen/delete) are creator-guarded in handleMenu.
+  const mtext = (k) => ({ type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, k), 75) });
+  const mopt = (k, val) => ({ text: mtext(k), value: JSON.stringify(val) });
+  const pollActions = [];
+  if (para.hidden) pollActions.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
+  if (!(anonymous && para.true_anonymous)) pollActions.push(mopt('menu_all_user_vote', { a: 'allvotes', poll_id: pollId }));
+  pollActions.push(mopt(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll', { a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }));
+  pollActions.push(mopt('menu_delete_poll', { a: 'delete', poll_id: pollId }));
+  if (para.show_dashboard_link) pollActions.push(mopt('menu_view_on_dashboard', { a: 'dashboard', poll_id: pollId }));
+  const userActions = [mopt('menu_user_self_vote', { a: 'myvotes', poll_id: pollId }), mopt('menu_command_info', { a: 'cmdinfo', poll_id: pollId })];
+  const menuAccessory = {
+    type: 'static_select', action_id: 'mq_menu',
+    placeholder: { type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, 'info_menu_placeholder'), 150) },
+    option_groups: [
+      { label: { type: 'plain_text', text: trimText(stri18n(userLang, 'menu_poll_action'), 75) }, options: pollActions },
+      { label: { type: 'plain_text', text: trimText(stri18n(userLang, 'menu_user_action'), 75) }, options: userActions },
+    ],
+  };
+
+  // Title as a section with the menu accessory on the right (unless menu_at_the_end),
+  // exactly like the single-question poll.
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*${trimText(pollData.question || 'Poll', 150)}*` }, ...(para.menu_at_the_end ? {} : { accessory: menuAccessory }) });
 
   // Flags + creator + question-count context, mirroring the single-question poll
   // (same i18n keys; creator shown per display_poller_name "tag"/"none", not a bool).
-  const para = pollData.para || {};
   const els = [];
   if (anonymous) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_anonymous') });
   if (para.hidden) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_hidden') });
@@ -297,25 +321,9 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
     blocks.push(divider());
   });
 
-  // Management menu — one static_select dispatched by mq_menu, mirroring the
-  // single-question poll's menu + honoring the same config (all on para, config-safe):
-  // reveal/hide · see users votes · see your votes · close/reopen · delete · view on
-  // dashboard · command info. poll_id/cmd are NOT visible blocks — they live under
-  // "Command Info" (like the single-question poll).
-  const mtext = (k) => ({ type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, k), 75) });
-  const mopt = (k, val) => ({ text: mtext(k), value: JSON.stringify(val) });
-  const menuOpts = [];
-  if (para.hidden) menuOpts.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
-  if (!(anonymous && para.true_anonymous)) menuOpts.push(mopt('menu_all_user_vote', { a: 'allvotes', poll_id: pollId }));
-  menuOpts.push(mopt('menu_user_self_vote', { a: 'myvotes', poll_id: pollId }));
-  menuOpts.push(mopt(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll', { a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }));
-  menuOpts.push(mopt('menu_delete_poll', { a: 'delete', poll_id: pollId }));
-  if (para.show_dashboard_link) menuOpts.push(mopt('menu_view_on_dashboard', { a: 'dashboard', poll_id: pollId }));
-  if (para.show_command_info) menuOpts.push(mopt('menu_command_info', { a: 'cmdinfo', poll_id: pollId }));
-  const menuBlocks = [{ type: 'actions', elements: [{ type: 'static_select', action_id: 'mq_menu', placeholder: mtext('menu_poll_action'), options: menuOpts }] }];
-  // Place after the lead divider (top) unless menu_at_the_end → at the very end.
-  if (para.menu_at_the_end) { blocks.push(...menuBlocks); }
-  else { const di = blocks.findIndex((b) => b.type === 'divider'); blocks.splice(di >= 0 ? di + 1 : blocks.length, 0, ...menuBlocks); }
+  // When menu_at_the_end, the menu lives on a trailing section accessory (the title
+  // section above carries no accessory in that case) — same as the single-question poll.
+  if (para.menu_at_the_end) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ' ' }, accessory: menuAccessory });
   return blocks;
 }
 
@@ -359,8 +367,9 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSel
       { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: trimText(t('mq_field_questions'), 2000) },
         element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...(initialForm ? { initial_value: String(initialForm).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } },
       { type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] },
-      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: trimText(t('mq_field_channel'), 2000) },
+      { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: trimText(t('modal_ch_manual_select'), 2000) },
         element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: t('modal_ch_warn') }] },
       // Per-poll language selector (single-question parity) — only when the team
       // allows it (app_lang_user_selectable). Options come from the loaded languages.
       ...((langSelectable && Object.keys(langList).length) ? [{
