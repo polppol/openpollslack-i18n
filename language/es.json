@@ -175,5 +175,8 @@
   "mq_err_no_questions": "no se encontraron preguntas",
   "mq_err_enter_choice": "Introduce una opción.",
   "mq_post_failed": "No se pudo publicar tu encuesta multipregunta (¿está el bot en ese canal?).",
-  "mq_recover_dm": "No se pudo publicar tu encuesta multipregunta. Puedes volver a crearla con este comando:"
+  "mq_recover_dm": "No se pudo publicar tu encuesta multipregunta. Puedes volver a crearla con este comando:",
+  "mq_yes": "Sí",
+  "mq_no": "No",
+  "btn_answer": "Responder"
 }

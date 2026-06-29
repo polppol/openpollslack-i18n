@@ -28,7 +28,6 @@
   "btn_vote": "Vote",
   "btn_add_choice": "+ Add choice",
   "btn_answer": "Answer",
-  "info_poll_closed": "closed",
   "mq_modal_title": "Multi-question poll",
   "mq_field_title": "Title",
   "mq_field_title_ph": "e.g. Friday team lunch",
@@ -245,5 +244,7 @@
   "emoji_13": ":one::three:",
   "emoji_14": ":one::four:",
   "emoji_15": ":one::five:",
-  "emoji_16": ":one::six:"
+  "emoji_16": ":one::six:",
+  "mq_yes": "Yes",
+  "mq_no": "No"
 }

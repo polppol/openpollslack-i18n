@@ -173,5 +173,8 @@
   "mq_err_no_questions": "找不到任何問題",
   "mq_err_enter_choice": "請輸入選項。",
   "mq_post_failed": "無法發佈您的多題投票（機器人是否已加入該頻道？）。",
-  "mq_recover_dm": "無法發佈您的多題投票。您可以使用以下指令重新建立："
+  "mq_recover_dm": "無法發佈您的多題投票。您可以使用以下指令重新建立：",
+  "mq_yes": "是",
+  "mq_no": "否",
+  "btn_answer": "回答"
 }

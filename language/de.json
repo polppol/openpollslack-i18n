@@ -175,5 +175,8 @@
   "mq_err_no_questions": "keine Fragen gefunden",
   "mq_err_enter_choice": "Gib eine Option ein.",
   "mq_post_failed": "Deine Mehrfragen-Umfrage konnte nicht gepostet werden (ist der Bot in diesem Channel?).",
-  "mq_recover_dm": "Deine Mehrfragen-Umfrage konnte nicht gepostet werden. Du kannst sie mit diesem Befehl neu erstellen:"
+  "mq_recover_dm": "Deine Mehrfragen-Umfrage konnte nicht gepostet werden. Du kannst sie mit diesem Befehl neu erstellen:",
+  "mq_yes": "Ja",
+  "mq_no": "Nein",
+  "btn_answer": "Antworten"
 }

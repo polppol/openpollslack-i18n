@@ -76,7 +76,7 @@ function parseForm(text, lang) {
   let cur = null;
   const pushCur = () => {
     if (!cur) return;
-    if (cur.type === 'yesno') cur.options = ['Yes', 'No'];
+    if (cur.type === 'yesno') cur.options = [t('mq_yes'), t('mq_no')];
     if (isChoice(cur.type) && (!cur.options || cur.options.length < 2) && cur.type !== 'yesno') {
       // a choice needs ≥2 options — surfaced here and blocked at submit (handleCreateSubmit)
       errors.push(t('mq_err_choice_2opts', { q: cur.text.slice(0, 40) }));
@@ -123,7 +123,7 @@ function parseForm(text, lang) {
     if (!type) type = (q.options && q.options.length >= 2) ? 'choice' : 'text';
     const item = { id: `q${i + 1}`, type, text: q.text || `Question ${i + 1}` };
     if (isChoice(type)) {
-      item.options = q.type === 'yesno' ? ['Yes', 'No'] : (q.options || []).slice(0, MAX_OPTIONS);
+      item.options = q.type === 'yesno' ? [t('mq_yes'), t('mq_no')] : (q.options || []).slice(0, MAX_OPTIONS);
       item.multi = type === 'yesno' ? false : !!q.multi; // yes/no is always single-select
       if (q.user_add_choice) item.user_add_choice = true;
     }
@@ -256,7 +256,7 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   if (pollData.user_id && showPoller) els.push({ type: 'mrkdwn', text: parameterizedString(stri18n(userLang, 'info_by'), { user_id: pollData.user_id }) });
   const nq = pollData.questions.length;
   els.push({ type: 'mrkdwn', text: parameterizedString(stri18n(userLang, nq === 1 ? 'mq_n_questions_one' : 'mq_n_questions_many'), { count: nq }) });
-  if (opts.isClosed) els.push({ type: 'mrkdwn', text: `:lock: ${stri18n(userLang, 'info_poll_closed')}` });
+  if (opts.isClosed) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_closed') }); // reuse single's closed badge (":x: Closed")
   blocks.push({ type: 'context', elements: els });
 
   // Mobile "View Full Message" hint (info_addon — per-language, empty in en) + the
@@ -335,6 +335,10 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
 
 function trimText(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
+// Multi-question is BETA — append a literal " (BETA)" marker (same in every language)
+// to the create-modal title, keeping it within Slack's 24-char title cap.
+function betaTitle(s) { const b = ' (BETA)'; const full = String(s == null ? '' : s) + b; return full.length <= 24 ? full : trimText(s, 24 - b.length) + b; }
+
 // ───────────────────────── create modal + submit ────────────────────────────
 
 // All user-facing strings come from the language files (stri18n), same as the
@@ -351,7 +355,7 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSel
     // channel/response_url/lang/lang_selectable kept in private_metadata so the
     // poll-type selector can preserve them when swapping back to single-question.
     private_metadata: JSON.stringify({ channel: channelId || null, response_url: responseUrl || '', user_lang: L, lang_selectable: !!langSelectable }),
-    title: { type: 'plain_text', text: trimText(t('mq_modal_title'), 24) },
+    title: { type: 'plain_text', text: betaTitle(t('mq_modal_title')) },
     submit: { type: 'plain_text', text: trimText(t('btn_create'), 24) },
     close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) },
     blocks: [

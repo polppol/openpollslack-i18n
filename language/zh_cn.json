@@ -173,5 +173,8 @@
   "mq_err_no_questions": "未找到任何问题",
   "mq_err_enter_choice": "请输入一个选项。",
   "mq_post_failed": "无法发布您的多问题投票（机器人是否已加入该频道？）。",
-  "mq_recover_dm": "无法发布您的多问题投票。您可以使用以下命令重新创建："
+  "mq_recover_dm": "无法发布您的多问题投票。您可以使用以下命令重新创建：",
+  "mq_yes": "是",
+  "mq_no": "否",
+  "btn_answer": "回答"
 }

@@ -175,5 +175,8 @@
   "mq_err_no_questions": "kysymyksiä ei löytynyt",
   "mq_err_enter_choice": "Syötä vaihtoehto.",
   "mq_post_failed": "Monikysymyskyselyn julkaisu epäonnistui (onko botti kyseisellä kanavalla?).",
-  "mq_recover_dm": "Monikysymyskyselyäsi ei voitu julkaista. Voit luoda sen uudelleen tällä komennolla:"
+  "mq_recover_dm": "Monikysymyskyselyäsi ei voitu julkaista. Voit luoda sen uudelleen tällä komennolla:",
+  "mq_yes": "Kyllä",
+  "mq_no": "Ei",
+  "btn_answer": "Vastaa"
 }

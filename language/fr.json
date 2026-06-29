@@ -203,5 +203,8 @@
   "mq_err_no_questions": "aucune question trouvée",
   "mq_err_enter_choice": "Saisissez un choix.",
   "mq_post_failed": "Impossible de publier votre sondage multi-questions (le bot est-il dans ce canal ?).",
-  "mq_recover_dm": "Impossible de publier votre sondage multi-questions. Vous pouvez le recréer avec cette commande :"
+  "mq_recover_dm": "Impossible de publier votre sondage multi-questions. Vous pouvez le recréer avec cette commande :",
+  "mq_yes": "Oui",
+  "mq_no": "Non",
+  "btn_answer": "Répondre"
 }
