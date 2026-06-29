@@ -178,7 +178,9 @@ function formatAnswer(type, value) {
 // ───────────────────────── Slack block rendering (pure) ─────────────────────
 
 function divider() { return { type: 'divider' }; }
-function sectionMd(text) { return { type: 'section', text: { type: 'mrkdwn', text } }; }
+// Slack caps a section's text at 3000 chars — trim with a margin (parity with the
+// single-question poll's truncateForSection).
+function sectionMd(text) { return { type: 'section', text: { type: 'mrkdwn', text: trimText(text, 2990) } }; }
 function contextMd(text) { return { type: 'context', elements: [{ type: 'mrkdwn', text }] }; }
 
 // Cap how many voter mentions we render per option so a popular non-anonymous
@@ -750,57 +752,76 @@ async function handleClose({ ack, body, action, client, context }) {
   await doSetClosed(client, context.botToken, pollData, body.channel.id, body.message.ts, true);
 }
 
-// Command Info — ephemeral poll id + created-via + recreate command (single-poll parity).
-async function sendCommandInfo(client, token, pollData, channel, userId, lang) {
-  const lines = [parameterizedString(stri18n(lang, 'info_poll_id_label'), { value: String(pollData._id) })];
-  if (pollData.cmd_via) lines.push(parameterizedString(stri18n(lang, 'info_created_via_label'), { value: pollData.cmd_via }));
-  if (pollData.cmd) lines.push('```' + trimText(pollData.cmd, 2900) + '```');
-  try { await client.chat.postEphemeral({ token, channel, user: userId, text: lines.join('\n') }); } catch (e) { /* noop */ }
+// Open a MODAL for the menu info actions (Command Info / See your votes / See users
+// votes), exactly like the single-question poll — not an ephemeral message. Falls back
+// to an ephemeral if views.open fails (expired trigger_id / content too large).
+async function openInfoModal(client, token, body, titleKey, blocks, lang) {
+  const view = {
+    type: 'modal',
+    title: { type: 'plain_text', text: trimText(stri18n(lang, titleKey), 24) },
+    close: { type: 'plain_text', text: trimText(stri18n(lang, 'btn_close'), 24) },
+    blocks: blocks.slice(0, 100),
+  };
+  try { await client.views.open({ token, trigger_id: body.trigger_id, view }); }
+  catch (e) { try { await client.chat.postEphemeral({ token, channel: body.channel.id, user: body.user.id, text: stri18n(lang, 'err_modal_open_failed') }); } catch (_) { /* noop */ } }
 }
-// "See your votes" — ephemeral per-question summary of THIS user's choices/answers.
-async function sendMyVotes(client, token, pollData, channel, ts, userId, lang) {
-  const vdoc = await loadVotes(pollData._id, channel, ts);
+
+// Command Info — modal with poll id + recreate command + created-via (single-poll parity).
+async function sendCommandInfo(client, token, body, pollData, lang) {
+  const blocks = [sectionMd(parameterizedString(stri18n(lang, 'info_poll_id_label'), { value: String(pollData._id) }))];
+  if (pollData.cmd_via) blocks.push(sectionMd(parameterizedString(stri18n(lang, 'info_created_via_label'), { value: pollData.cmd_via })));
+  if (pollData.cmd) blocks.push(divider(), sectionMd('```' + trimText(pollData.cmd, 2900) + '```'));
+  await openInfoModal(client, token, body, 'menu_command_info', blocks, lang);
+}
+// "See your votes" — modal with a per-question summary of THIS user's choices/answers.
+async function sendMyVotes(client, token, body, pollData, ts, lang) {
+  const userId = body.user.id;
+  const vdoc = await loadVotes(pollData._id, body.channel.id, ts);
   const votes = (vdoc && vdoc.votes) || {}; const answers = (vdoc && vdoc.answers) || {};
-  const lines = [];
+  const blocks = [];
   for (const q of (pollData.questions || [])) {
+    let val = '—';
     if (isChoice(q.type)) {
       const qv = votes[q.id] || {}; const chosen = [];
       (q.options || []).forEach((opt, oi) => { if ((qv[String(oi)] || []).includes(userId)) chosen.push(opt); });
-      lines.push(`*${trimText(q.text, 120)}*: ${chosen.length ? chosen.join(', ') : '—'}`);
+      if (chosen.length) val = chosen.join(', ');
     } else {
       const ans = (answers[q.id] || {})[userId];
-      lines.push(`*${trimText(q.text, 120)}*: ${(ans != null && ans !== '') ? formatAnswer(q.type, ans) : '—'}`);
+      if (ans != null && ans !== '') val = formatAnswer(q.type, ans);
     }
+    blocks.push(sectionMd(`*${trimText(q.text, 150)}*\n${val}`));
   }
-  try { await client.chat.postEphemeral({ token, channel, user: userId, text: `*${stri18n(lang, 'menu_user_self_vote')}*\n${lines.join('\n') || '—'}`.slice(0, 38000) }); } catch (e) { /* noop */ }
+  if (!blocks.length) blocks.push(sectionMd('—'));
+  await openInfoModal(client, token, body, 'menu_user_self_vote', blocks, lang);
 }
-// "See users votes" — ephemeral per-question voter breakdown. Honors anonymity the
-// same way the single-question poll does: blocked for true-anonymous; anonymous polls
-// are creator-only; public polls are visible to anyone.
-async function sendAllVotes(client, token, pollData, channel, ts, userId, lang) {
-  const para = pollData.para || {};
-  if (para.anonymous && para.true_anonymous) { try { await client.chat.postEphemeral({ token, channel, user: userId, text: stri18n(lang, 'err_see_all_vote_true_anonymous') }); } catch (e) { /* noop */ } return; }
-  // Anonymous (not true-anon): creator-only. A missing/falsy creator blocks EVERYONE
-  // (never widen visibility when there's no owner to match against).
-  if (para.anonymous && (!pollData.user_id || userId !== pollData.user_id)) { try { await client.chat.postEphemeral({ token, channel, user: userId, text: stri18n(lang, 'err_see_all_vote_other') }); } catch (e) { /* noop */ } return; }
-  const vdoc = await loadVotes(pollData._id, channel, ts);
+// "See users votes" — modal with a per-question voter breakdown. Anonymity mirrors the
+// single poll: blocked for true-anonymous (ephemeral reject); anonymous = creator-only
+// (a missing creator blocks everyone); public is visible to anyone.
+async function sendAllVotes(client, token, body, pollData, ts, lang) {
+  const userId = body.user.id; const para = pollData.para || {};
+  const reject = async (k) => { try { await client.chat.postEphemeral({ token, channel: body.channel.id, user: userId, text: stri18n(lang, k) }); } catch (e) { /* noop */ } };
+  if (para.anonymous && para.true_anonymous) return reject('err_see_all_vote_true_anonymous');
+  if (para.anonymous && (!pollData.user_id || userId !== pollData.user_id)) return reject('err_see_all_vote_other');
+  const vdoc = await loadVotes(pollData._id, body.channel.id, ts);
   const votes = (vdoc && vdoc.votes) || {}; const answers = (vdoc && vdoc.answers) || {};
-  const lines = [];
+  const blocks = [];
   for (const q of (pollData.questions || [])) {
-    lines.push(`*${trimText(q.text, 150)}*`);
+    const lines = [];
     if (isChoice(q.type)) {
       const qv = votes[q.id] || {};
       (q.options || []).forEach((opt, oi) => {
         const voters = qv[String(oi)] || [];
-        lines.push(`  ${slackNumToEmoji(oi + 1, lang)} ${opt}: ${voters.length ? voters.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>`).join(' ') + (voters.length > MAX_VOTER_MENTIONS ? ` ${parameterizedString(stri18n(lang, 'mq_more'), { count: voters.length - MAX_VOTER_MENTIONS })}` : '') : '—'}`);
+        lines.push(`${slackNumToEmoji(oi + 1, lang)} ${opt}: ${voters.length ? voters.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>`).join(' ') + (voters.length > MAX_VOTER_MENTIONS ? ` ${parameterizedString(stri18n(lang, 'mq_more'), { count: voters.length - MAX_VOTER_MENTIONS })}` : '') : '—'}`);
       });
     } else {
       const qa = answers[q.id] || {}; const ks = Object.keys(qa);
-      if (!ks.length) lines.push('  —');
-      else ks.slice(0, MAX_VOTER_MENTIONS).forEach((u) => lines.push(`  <@${u}>: ${formatAnswer(q.type, qa[u])}`));
+      if (!ks.length) lines.push('—');
+      else ks.slice(0, MAX_VOTER_MENTIONS).forEach((u) => lines.push(`<@${u}>: ${formatAnswer(q.type, qa[u])}`));
     }
+    blocks.push(sectionMd(`*${trimText(q.text, 150)}*\n${lines.join('\n')}`));
   }
-  try { await client.chat.postEphemeral({ token, channel, user: userId, text: lines.join('\n').slice(0, 38000) }); } catch (e) { /* noop */ }
+  if (!blocks.length) blocks.push(sectionMd('—'));
+  await openInfoModal(client, token, body, 'menu_all_user_vote', blocks, lang);
 }
 
 /** Management menu dispatcher (mq_menu). Mutating actions (reveal/close/reopen/delete)
@@ -824,9 +845,9 @@ async function handleMenu({ ack, body, action, client, context }) {
   else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true);
   else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false);
   else if (a === 'delete') await doDelete(client, token, pollData, channel, ts);
-  else if (a === 'cmdinfo') await sendCommandInfo(client, token, pollData, channel, body.user.id, lang);
-  else if (a === 'myvotes') await sendMyVotes(client, token, pollData, channel, ts, body.user.id, lang);
-  else if (a === 'allvotes') await sendAllVotes(client, token, pollData, channel, ts, body.user.id, lang);
+  else if (a === 'cmdinfo') await sendCommandInfo(client, token, body, pollData, lang);
+  else if (a === 'myvotes') await sendMyVotes(client, token, body, pollData, ts, lang);
+  else if (a === 'allvotes') await sendAllVotes(client, token, body, pollData, ts, lang);
   else if (a === 'dashboard' && _opts.dashboardLinkAction) await _opts.dashboardLinkAction(body, client, context, { poll_id: value.poll_id, p_id: value.poll_id, user: body.user.id, user_lang: lang });
 }
 
