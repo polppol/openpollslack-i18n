@@ -1925,15 +1925,15 @@ async function processCommand(ack, body, client, command, context, say, respond)
       try {
         if (!rest) {
           // "/poll multi" with no args → open the empty builder modal
-          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam);
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, undefined, mqUser);
         } else if (prev) {
           // "/poll multi preview …" → always open the builder PRE-FILLED (review before posting)
-          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, rest.slice(prev[0].length).replace(/\s+\|\s+/g, '\n'));
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, rest.slice(prev[0].length).replace(/\s+\|\s+/g, '\n'), mqUser);
         } else {
           // "/poll multi <DSL>" → create directly; on a parse error open the builder
           // PRE-FILLED with what they typed so nothing is lost.
           const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest, responseUrl: mqResp });
-          if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText);
+          if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText, mqUser);
         }
       } catch (e) { await respond('Could not open the multi-question builder.'); }
       return;

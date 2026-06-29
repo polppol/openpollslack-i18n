@@ -1114,11 +1114,15 @@ function buildQuestionView(ctx, q) {
   // Removing = clear a row (empty rows are dropped on the next render / on save).
   let optRows = 0;
   if (q.type === 'choice') {
-    optRows = Math.min(MAX_OPTIONS, Math.max(2, ctx.optRows || (q.options || []).length || 2));
+    // Seed from the live options, else from a stash kept across a type swap-away (so
+    // choice→text→choice doesn't lose typed options — the rows aren't rendered while
+    // a non-choice type is selected, so the values must survive in private_metadata).
+    const seed = (q.options && q.options.length) ? q.options : (ctx.optsStash || []);
+    optRows = Math.min(MAX_OPTIONS, Math.max(2, ctx.optRows || seed.length || 2));
     blocks.push(contextMd(`*${t('mq_b_q_options_label')}*`));
     for (let i = 0; i < optRows; i++) {
       blocks.push({ type: 'input', block_id: `mq_q_opt_${i}`, optional: true, label: { type: 'plain_text', text: `${i + 1}.` },
-        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...((q.options && q.options[i]) ? { initial_value: q.options[i] } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_options_ph'), 150) } } });
+        element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...(seed[i] ? { initial_value: seed[i] } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_b_q_options_ph'), 150) } } });
     }
     if (optRows < MAX_OPTIONS) blocks.push({ type: 'actions', elements: [{ type: 'button', action_id: 'mq_q_add_opt', text: { type: 'plain_text', emoji: true, text: trimText('➕ ' + t('mq_b_add_option'), 75) } }] });
     blocks.push(contextMd(t('mq_b_q_options_hint')));
@@ -1136,6 +1140,7 @@ function buildQuestionView(ctx, q) {
     element: { type: 'checkboxes', action_id: 'v', options: flagOpts, ...(flagSel.filter(Boolean).length ? { initial_options: flagSel.filter(Boolean) } : {}) } });
 
   const pm = { draft_id: ctx.draft_id, root_view_id: ctx.root_view_id, qIndex: ctx.qIndex, lang: ctx.lang, optRows };
+  if (ctx.optsStash && ctx.optsStash.length) pm.optsStash = ctx.optsStash; // carry typed options across a type swap-away
   return { type: 'modal', callback_id: 'mq_q_submit', private_metadata: JSON.stringify(pm),
     title: { type: 'plain_text', text: trimText(t('mq_b_q_title'), 24) }, submit: { type: 'plain_text', text: trimText(t('mq_b_q_save'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
 }
@@ -1235,7 +1240,16 @@ async function handleQType({ ack, body, action, client, context }) {
   await ack();
   let ctx = {}; try { ctx = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
   const q = readQuestionFromView(body.view); // preserve current entries
+  // Stash any typed option rows so swapping type away and back doesn't lose them
+  // (option rows aren't rendered for non-choice types). readQuestionFromView already
+  // gives q.options when leaving choice; fall back to it. ctx.optsStash carries across.
+  const vs = (body.view.state && body.view.state.values) || {};
+  const stash = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) { const c = vs[`mq_q_opt_${i}`]; const val = ((c && c.v && c.v.value) || '').trim(); if (val) stash.push(val.slice(0, 150)); }
+  if (stash.length) ctx.optsStash = stash;
+  else if (q.options && q.options.length) ctx.optsStash = q.options.slice();
   q.type = (action.selected_option && action.selected_option.value) || q.type;
+  if (q.type === 'choice' && (!q.options || !q.options.length) && ctx.optsStash && ctx.optsStash.length) q.options = ctx.optsStash.slice();
   try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
 }
 
@@ -1255,7 +1269,7 @@ async function handleQuestionSubmit({ ack, body, view, client, context }) {
   const q = readQuestionFromView(view);
   if (q.type === 'yesno') { q.options = [stri18n(lang, 'mq_yes'), stri18n(lang, 'mq_no')]; q.multi = false; } // keep the draft consistent (ids normalized at final submit)
   if (!q.text) { await ack({ response_action: 'errors', errors: { mq_q_text: stri18n(lang, 'mq_b_err_need_text') } }); return; }
-  if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { mq_q_opts: stri18n(lang, 'mq_b_err_2opts') } }); return; }
+  if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { mq_q_opt_0: stri18n(lang, 'mq_b_err_2opts') } }); return; } // mq_q_opt_0 is always rendered (optRows>=2)
   await ack(); // pops the sub-modal back to the root
   const draft = await loadDraft(ctx.draft_id); if (!draft) return;
   const qs = draft.questions || [];
