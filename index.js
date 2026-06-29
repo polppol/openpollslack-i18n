@@ -546,7 +546,19 @@ try {
   hiddenCol = db.collection('hidden');
   pollCol = db.collection('poll_data');
   scheduleCol = db.collection('poll_schedule');
-  mq.init(db); // wire the multi-question module to the same DB handle
+  // Wire the multi-question module to the same DB handle + a resolver so forms
+  // respect each team's config defaults (language + true-anonymous), like the
+  // single-question modal does.
+  mq.init(db, {
+    resolveTeamDefaults: async (teamId) => {
+      let tc = {};
+      try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
+      return {
+        app_lang: tc.hasOwnProperty('app_lang') ? tc.app_lang : gAppLang,
+        true_anonymous: tc.hasOwnProperty('true_anonymous') ? tc.true_anonymous : gTrueAnonymous,
+      };
+    },
+  });
 
   migrations = new Migrations(db);
 } catch (e) {
@@ -1261,7 +1273,7 @@ mq.register(app);
 
 // Poll-type selector shared by the single-question modal (createModal) and the
 // multi-question builder: swap between them in place. "multi" updates the current
-// modal to the form builder; "single" re-opens the legacy single-question modal
+// modal to the form builder; "single" re-opens the single-question modal
 // via the action's trigger. Channel is carried in private_metadata so it survives
 // the swap. Lives here (not in the mq module) because it bridges createModal.
 app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
@@ -1874,7 +1886,10 @@ async function processCommand(ack, body, client, command, context, say, respond)
     // Multi-question poll: "/<cmd> multi" opens the form builder modal. The whole
     // multi-question feature is self-contained in src/multiquestion.js.
     if (cmdBody && /^multi(\b|$)/i.test(cmdBody)) {
-      try { await mq.openCreateModal(client, body.trigger_id, body.channel_id); }
+      // Auto-detect the channel the command was run in — same source the
+      // single-question modal uses below (command.channel_id).
+      const mqChannel = (command && command.channel_id) ? command.channel_id : ((body && body.channel_id) || null);
+      try { await mq.openCreateModal(client, body.trigger_id, mqChannel); }
       catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }

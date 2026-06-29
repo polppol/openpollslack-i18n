@@ -5,17 +5,17 @@
  * questions of mixed type (choice / yes-no / text / number / date / time /
  * datetime / email / url) in a single Slack message.
  *
- * DESIGN: additive and fully backward-compatible. Legacy single-question polls
- * NEVER touch this module — none of the legacy functions are modified. A poll is
- * "multi-question" iff its poll_data carries a non-empty `questions` array; all
+ * DESIGN: additive and fully backward-compatible. Single-question polls (the core
+ * feature) NEVER touch this module — none of their functions are modified. A poll
+ * is "multi-question" iff its poll_data carries a non-empty `questions` array; all
  * interactions use dedicated `mq_*` action/callback ids handled here, so the
- * existing single-question code path is left exactly as-is.
+ * single-question code path is left exactly as-is.
  *
  * STORAGE (poll_data, additive): questions:[{id,type,text,options?,multi?,
  * user_add_choice?,required?,min?,max?}] plus a compat mirror of question #1 into
- * the legacy `question`/`options` fields so older readers degrade instead of break.
+ * the standard `question`/`options` fields so other readers degrade instead of break.
  * (votes doc): votes:{ "<qid>":{ "<optIdx>":[userId] } } and answers:{ "<qid>":
- * { "<userId>": value } } — distinct from the legacy flat votes map. No migration.
+ * { "<userId>": value } } — distinct from the single-question flat votes map. No migration.
  *
  * SECURITY: this is a PUBLIC repo. This module embeds and logs NO real workspace
  * ids, user ids, tokens, hostnames, or any other live data — only generic code.
@@ -25,8 +25,15 @@ const { ObjectId } = require('mongodb');
 const { stri18n, parameterizedString, slackNumToEmoji } = require('./i18n');
 
 let _db = null;
-/** Wire up the Mongo handle (called once from index.js after connect). */
-function init(db) { _db = db; }
+let _opts = {};
+/** Wire up the Mongo handle + options (called once from index.js after connect).
+ *  opts.resolveTeamDefaults(teamId) -> { app_lang, true_anonymous } lets forms
+ *  honor each team's config defaults, the same way the single-question modal does. */
+function init(db, opts) { _db = db; _opts = opts || {}; }
+async function teamDefaults(teamId) {
+  try { if (_opts.resolveTeamDefaults) return (await _opts.resolveTeamDefaults(teamId)) || {}; } catch (e) { /* use built-in defaults */ }
+  return {};
+}
 const pollCol = () => _db.collection('poll_data');
 const votesCol = () => _db.collection('votes');
 
@@ -298,7 +305,7 @@ function buildCreateModalView(channelId) {
     close: { type: 'plain_text', text: 'Cancel' },
     blocks: [
       { // Poll-type selector (this modal = multi). Switching to "Single question"
-        // re-opens the legacy single-question modal (app.action('mq_poll_type')).
+        // re-opens the single-question modal (app.action('mq_poll_type')).
         type: 'section', block_id: 'mq_poll_type_blk', text: { type: 'mrkdwn', text: '*Poll type*' },
         accessory: { type: 'static_select', action_id: 'mq_poll_type',
           initial_option: { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
@@ -317,7 +324,7 @@ function buildCreateModalView(channelId) {
         element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: 'e.g. Friday team lunch' } } },
       { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: 'Questions' },
         element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, initial_value: '', placeholder: { type: 'plain_text', text: FORM_PLACEHOLDER } } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text: 'One question per `Q:` line. Options on `-` lines. Tag a type in `[...]`: choice · yesno · text · number · date · time · datetime · email · url. Flags: `multi` `add` `required`.' }] },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'One question per `Q:` line. Options on `-` lines. Tag a type in `[...]`: choice · yesno · text · number · date · time · datetime · email · url. Flags: `multi` `add` `required`.  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|How to use ↗>' }] },
       { type: 'input', block_id: 'mq_channel', label: { type: 'plain_text', text: 'Post to channel' },
         element: { type: 'conversations_select', action_id: 'v', default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
       { type: 'input', block_id: 'mq_settings', optional: true, label: { type: 'plain_text', text: 'Settings' },
@@ -351,7 +358,7 @@ function parseCreateSubmit(view) {
 function answerElement(type, qmin, qmax) {
   const a = { action_id: 'v' };
   switch (type) {
-    case 'number': return { type: 'number_input', is_decimal: true, ...a, ...(qmin != null ? { min_value: String(qmin) } : {}), ...(qmax != null ? { max_value: String(qmax) } : {}) };
+    case 'number': return { type: 'number_input', is_decimal_allowed: true, ...a, ...(qmin != null ? { min_value: String(qmin) } : {}), ...(qmax != null ? { max_value: String(qmax) } : {}) };
     case 'date': return { type: 'datepicker', ...a };
     case 'time': return { type: 'timepicker', ...a };
     case 'datetime': return { type: 'datetimepicker', ...a };
@@ -450,6 +457,12 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
   const token = context.botToken;
   const userId = body.user.id;
   const teamOrEnt = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id);
+  // Honor the team's config defaults (language + workspace true-anonymous), same
+  // as the single-question modal: an anonymous form is true-anonymous when the
+  // workspace defaults that way, and the posted poll renders in the team language.
+  const defs = await teamDefaults(teamOrEnt);
+  const lang = defs.app_lang || 'en';
+  const trueAnon = !!(parsed.para.anonymous && defs.true_anonymous);
   const q1 = parsed.questions[0];
   const pollData = {
     team: teamOrEnt,
@@ -461,11 +474,11 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
     question: parsed.title,                                   // compat mirror
     options: isChoice(q1.type) ? (q1.options || []) : [],    // compat mirror
     questions: parsed.questions,
-    para: { user_lang: 'en', anonymous: parsed.para.anonymous, hidden: parsed.para.hidden, form_version: 2 },
+    para: { user_lang: lang, anonymous: parsed.para.anonymous, true_anonymous: trueAnon, hidden: parsed.para.hidden, form_version: 2 },
   };
   const res = await pollCol().insertOne(pollData);
   pollData._id = res.insertedId;
-  const blocks = buildBlocks(pollData, null, { userLang: 'en' });
+  const blocks = buildBlocks(pollData, null, { userLang: lang });
   let posted = null;
   try { posted = await client.chat.postMessage({ token, channel: parsed.channel, text: trimText(parsed.title, 150), blocks }); }
   catch (e) {

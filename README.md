@@ -85,7 +85,7 @@ Q: Preferred day? [date]
 
 **Flags** (after the type, space-separated): `multi` (allow picking more than one choice), `add` (let voters add their own choice), `required`.
 
-Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. Legacy single-question polls are unchanged.
+Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. Regular single-question polls work exactly as before — this is an additional option, not a replacement.
 
 ### Simple poll via command
 ```
