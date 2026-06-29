@@ -57,6 +57,36 @@ Just type `/poll` (without any options) in the channel that you want to post!
 (If `/poll` is being used by other app you can also use `/openpoll`)
 ![poll-modal-en-v4.png](./assets/poll-modal-en-v4.png)
 
+At the top of that window there is a **Poll type** dropdown (default **Single question**). Switch it to **Multi-question form** to ask several questions of mixed types in one poll (see below).
+
+### Multi-question polls (forms)
+A multi-question poll ("form") asks several questions — of different types — in a single message. Open it either way:
+
+- Type `/poll`, then change the **Poll type** dropdown to **Multi-question form**, **or**
+- Type `/poll multi` to open the form builder directly.
+
+You describe the whole form in one text box, **one item per line**:
+
+- `Q: <your question>` starts a question. Add a type in square brackets, e.g. `[yesno]`.
+- `- <option>` lines (right under a question) are the choices for a choice question.
+
+```
+Q: Do you want to order food? [yesno]
+Q: Which food? [choice multi add]
+- Pizza
+- Sushi
+Q: Any comment? [text]
+Q: How many people? [number]
+Q: Preferred day? [date]
+```
+
+**Question types:** `choice` · `yesno` · `text` · `number` · `date` · `time` · `datetime` · `email` · `url`
+(if you give options but no type, it defaults to `choice`; with no options it defaults to `text`).
+
+**Flags** (after the type, space-separated): `multi` (allow picking more than one choice), `add` (let voters add their own choice), `required`.
+
+Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. Legacy single-question polls are unchanged.
+
 ### Simple poll via command
 ```
 /poll "What's your favourite color ?" "Red" "Green" "Blue" "Yellow"
