@@ -305,7 +305,14 @@ function buildCreateModalView(channelId) {
           options: [
             { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
             { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
-          ] } },
+          ],
+          // Warn before switching — swapping the modal clears the form. Deny = no change.
+          confirm: {
+            title: { type: 'plain_text', text: 'Switch poll type?' },
+            text: { type: 'mrkdwn', text: 'Anything you have entered here will be cleared.' },
+            confirm: { type: 'plain_text', text: 'Switch' },
+            deny: { type: 'plain_text', text: 'Keep editing' },
+          } } },
       { type: 'input', block_id: 'mq_title', label: { type: 'plain_text', text: 'Title' },
         element: { type: 'plain_text_input', action_id: 'v', max_length: 150, placeholder: { type: 'plain_text', text: 'e.g. Friday team lunch' } } },
       { type: 'input', block_id: 'mq_form', label: { type: 'plain_text', text: 'Questions' },

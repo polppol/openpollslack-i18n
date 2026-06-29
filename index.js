@@ -5080,6 +5080,14 @@ async function createModal(context, client, trigger_id,response_url,channel) {
             { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
             { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
           ],
+          // Warn before switching — swapping the modal clears whatever was entered.
+          // If the user denies, Slack reverts the dropdown and nothing is lost.
+          confirm: {
+            title: { type: 'plain_text', text: 'Switch poll type?' },
+            text: { type: 'mrkdwn', text: 'Anything you have entered here will be cleared.' },
+            confirm: { type: 'plain_text', text: 'Switch' },
+            deny: { type: 'plain_text', text: 'Keep editing' },
+          },
         },
       },
       {
