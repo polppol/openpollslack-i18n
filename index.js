@@ -550,6 +550,7 @@ try {
   // respect each team's config defaults (language + true-anonymous), like the
   // single-question modal does.
   mq.init(db, {
+    slackCommand,
     resolveTeamDefaults: async (teamId) => {
       let tc = {};
       try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
@@ -1894,8 +1895,25 @@ async function processCommand(ack, body, client, command, context, say, respond)
       // Auto-detect the channel the command was run in — same source the
       // single-question modal uses below (command.channel_id).
       const mqChannel = (command && command.channel_id) ? command.channel_id : ((body && body.channel_id) || null);
-      try { await mq.openCreateModal(client, body.trigger_id, mqChannel, (body && body.response_url) || '', getTeamOrEnterpriseId(context)); }
-      catch (e) { await respond('Could not open the multi-question builder.'); }
+      const mqTeam = getTeamOrEnterpriseId(context);
+      const mqResp = (body && body.response_url) || '';
+      const mqUser = (command && command.user_id) || (body && body.user_id) || null;
+      const rest = cmdBody.replace(/^multi\b\s*/i, '').trim();
+      const prev = rest.match(/^preview\b\s*/i);
+      try {
+        if (!rest) {
+          // "/poll multi" with no args → open the empty builder modal
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam);
+        } else if (prev) {
+          // "/poll multi preview …" → always open the builder PRE-FILLED (review before posting)
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, rest.slice(prev[0].length).replace(/\s+\|\s+/g, '\n'));
+        } else {
+          // "/poll multi <DSL>" → create directly; on a parse error open the builder
+          // PRE-FILLED with what they typed so nothing is lost.
+          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest });
+          if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText);
+        }
+      } catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }
     // Create a pattern for matching escaped quotes

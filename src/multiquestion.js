@@ -457,6 +457,96 @@ async function openCreateModal(client, triggerId, channelId, responseUrl, teamId
   await client.views.open({ trigger_id: triggerId, view: buildCreateModalView(channelId, responseUrl || '', defs.app_lang || 'en', initialForm) });
 }
 
+// Rebuild the single-line `/<cmd> multi …` command that recreates this form — used
+// for the command-info context block AND the error-recovery DM. Lines are joined
+// by " | " so it pastes back as one slash command.
+function formToCommandDSL(questions) {
+  const lines = [];
+  for (const q of (questions || [])) {
+    const flags = [];
+    if (q.multi) flags.push('multi');
+    if (q.user_add_choice) flags.push('add');
+    if (q.required) flags.push('required');
+    lines.push(`Q: ${q.text} [${[q.type, ...flags].join(' ')}]`);
+    if (isChoice(q.type) && q.type !== 'yesno') for (const o of (q.options || [])) lines.push(`- ${o}`);
+  }
+  return lines.join(' | ');
+}
+function commandString(questions, para) {
+  const cmd = _opts.slackCommand || 'poll';
+  const kws = [];
+  if (para && para.anonymous) kws.push('anonymous');
+  if (para && para.hidden) kws.push('hidden');
+  return `/${cmd} multi ${kws.length ? kws.join(' ') + ' ' : ''}${formToCommandDSL(questions)}`;
+}
+
+// Shared create+post for BOTH the modal submit and the command path. Stamps config
+// onto para (config-safe), stores the recreate-command on pollData.cmd, posts the
+// message, records the ts, and on a post failure DMs the creator the recovery command
+// so their work is never lost. Returns { ok }.
+async function createAndPost(client, token, { teamOrEnt, userId, channel, title, questions, paraIn, lang }) {
+  const q1 = questions[0];
+  const para = {
+    user_lang: lang,
+    anonymous: !!paraIn.anonymous,
+    true_anonymous: !!paraIn.true_anonymous,
+    hidden: !!paraIn.hidden,
+    menu_at_the_end: !!paraIn.menu_at_the_end,
+    show_command_info: !!paraIn.show_command_info,
+    display_poller_name: paraIn.display_poller_name !== false,
+    form_version: 2,
+  };
+  const cmd = commandString(questions, para);
+  const pollData = {
+    team: teamOrEnt, channel, ts: null, created_ts: new Date(), user_id: userId,
+    cmd, cmd_via: 'mq_modal',
+    question: title,                                     // compat mirror
+    options: isChoice(q1.type) ? (q1.options || []) : [], // compat mirror
+    questions, para,
+  };
+  const res = await pollCol().insertOne(pollData);
+  pollData._id = res.insertedId;
+  const blocks = buildBlocks(pollData, null, { userLang: lang });
+  let posted = null;
+  try { posted = await client.chat.postMessage({ token, channel, text: trimText(title, 150), blocks }); }
+  catch (e) {
+    // Can't post (e.g. bot not in channel) — DM the creator the recreate command +
+    // roll back the orphan poll, so nothing they typed is lost.
+    const dm = `${stri18n(lang, 'mq_post_failed')}\n${stri18n(lang, 'mq_recover_dm')}\n\`\`\`${cmd}\`\`\``;
+    try { await client.chat.postMessage({ token, channel: userId, text: dm }); } catch (_) { /* noop */ }
+    await pollCol().deleteOne({ _id: pollData._id });
+    return { ok: false };
+  }
+  if (posted && posted.ts) {
+    await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || channel } });
+    await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
+  }
+  return { ok: true };
+}
+
+/** Create a form directly from a slash command: `/<cmd> multi [anonymous] [hidden] Q: … | …`.
+ *  Returns { ok, formText, errors } — on parse error the caller opens the builder
+ *  pre-filled with formText so the user's typing is never lost. */
+async function createFromCommand({ client, token, teamId, userId, channel, dsl }) {
+  const defs = await teamDefaults(teamId);
+  const lang = defs.app_lang || 'en';
+  let text = String(dsl || '').trim();
+  const paraIn = { anonymous: false, hidden: false };
+  const kw = text.match(/^((?:anonymous|hidden)\b\s+)+/i);
+  if (kw) { const s = kw[0].toLowerCase(); if (s.includes('anonymous')) paraIn.anonymous = true; if (s.includes('hidden')) paraIn.hidden = true; text = text.slice(kw[0].length); }
+  const formText = text.replace(/\s+\|\s+/g, '\n');
+  const { questions, errors } = parseForm(formText, lang);
+  if (!questions.length || (errors && errors.length)) return { ok: false, formText, errors };
+  if (estimateBlocks(questions) > MAX_BLOCKS) return { ok: false, formText, errors: [parameterizedString(stri18n(lang, 'mq_err_too_big'), { max: MAX_BLOCKS })] };
+  if (!channel) return { ok: false, formText, errors: [stri18n(lang, 'mq_err_pick_channel')] };
+  paraIn.true_anonymous = !!(paraIn.anonymous && defs.true_anonymous);
+  paraIn.menu_at_the_end = defs.menu_at_the_end;
+  paraIn.show_command_info = defs.show_command_info;
+  paraIn.display_poller_name = defs.display_poller_name;
+  const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang });
+  return { ok: r.ok, formText };
+}
+
 /** Handle create-modal submit: build poll_data, post the message, store ts. */
 async function handleCreateSubmit({ ack, body, view, client, context }) {
   const teamOrEnt = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id);
@@ -485,45 +575,15 @@ async function handleCreateSubmit({ ack, body, view, client, context }) {
   const token = context.botToken;
   const userId = body.user.id;
   const trueAnon = !!(parsed.para.anonymous && defs.true_anonymous);
-  const q1 = parsed.questions[0];
-  const pollData = {
-    team: teamOrEnt,
-    channel: parsed.channel,
-    ts: null,
-    created_ts: new Date(),
-    user_id: userId,
-    cmd_via: 'mq_modal',
-    question: parsed.title,                                   // compat mirror
-    options: isChoice(q1.type) ? (q1.options || []) : [],    // compat mirror
-    questions: parsed.questions,
-    // Stamp config onto the poll so later config changes never alter/break it —
-    // the renderer reads ONLY para (same approach as single-question polls).
-    para: {
-      user_lang: lang,
-      anonymous: parsed.para.anonymous,
-      true_anonymous: trueAnon,
-      hidden: parsed.para.hidden,
-      menu_at_the_end: !!defs.menu_at_the_end,
-      show_command_info: !!defs.show_command_info,
-      display_poller_name: defs.display_poller_name !== false,
-      form_version: 2,
+  // Delegate to the shared create+post (same path the command uses).
+  await createAndPost(client, token, {
+    teamOrEnt, userId, channel: parsed.channel, title: parsed.title, questions: parsed.questions,
+    paraIn: {
+      anonymous: parsed.para.anonymous, true_anonymous: trueAnon, hidden: parsed.para.hidden,
+      menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info, display_poller_name: defs.display_poller_name,
     },
-  };
-  const res = await pollCol().insertOne(pollData);
-  pollData._id = res.insertedId;
-  const blocks = buildBlocks(pollData, null, { userLang: lang });
-  let posted = null;
-  try { posted = await client.chat.postMessage({ token, channel: parsed.channel, text: trimText(parsed.title, 150), blocks }); }
-  catch (e) {
-    // Can't show a modal error after ack — DM the creator + roll back the orphan poll.
-    try { await client.chat.postMessage({ token, channel: userId, text: t('mq_post_failed') }); } catch (_) { /* noop */ }
-    await pollCol().deleteOne({ _id: pollData._id });
-    return;
-  }
-  if (posted && posted.ts) {
-    await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || parsed.channel } });
-    await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || parsed.channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
-  }
+    lang,
+  });
 }
 
 /** Handle a vote on a multi-question option (action_id mq_vote). */
@@ -691,7 +751,7 @@ function wrap(fn, name) {
 }
 
 module.exports = {
-  init, register, isMulti, openCreateModal,
+  init, register, isMulti, openCreateModal, createFromCommand, formToCommandDSL,
   // exported for unit tests:
   parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit,
   buildCreateModalView, buildAnswerModalView, answerElement, readAnswerValue, estimateBlocks,
