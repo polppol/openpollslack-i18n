@@ -119,11 +119,16 @@ function parseForm(text, lang) {
       const tag = qtext.match(/\[([^\]]*)\]\s*$/);
       if (tag) {
         qtext = qtext.slice(0, tag.index).trim();
+        let expectLimit = false;
         for (const tok of tag[1].trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+          if (expectLimit && /^\d+$/.test(tok)) { flags.limit = parseInt(tok, 10); expectLimit = false; continue; }
+          expectLimit = false;
           if (ALL_TYPES.includes(tok)) type = tok;
-          else if (tok === 'multi') flags.multi = true;
+          else if (tok === 'multi') flags.multi = true; // accepted for back-compat; choice is multi-select by default now
           else if (tok === 'add') flags.user_add_choice = true;
           else if (tok === 'required') flags.required = true;
+          else if (tok === 'limit') expectLimit = true; // "limit 3"
+          else { const m = tok.match(/^limit[=:]?(\d+)$/); if (m) flags.limit = parseInt(m[1], 10); } // "limit=3" / "limit3"
         }
       }
       cur = { text: qtext.slice(0, 300), type: type, options: [], ...flags };
@@ -147,7 +152,12 @@ function parseForm(text, lang) {
     const item = { id: `q${i + 1}`, type, text: q.text || `Question ${i + 1}` };
     if (isChoice(type)) {
       item.options = q.type === 'yesno' ? [t('mq_yes'), t('mq_no')] : (q.options || []).slice(0, MAX_OPTIONS);
-      item.multi = type === 'yesno' ? false : !!q.multi; // yes/no is always single-select
+      if (type === 'yesno') { item.limit = 1; item.multi = false; } // yes/no is always single-select
+      else {
+        const lim = (typeof q.limit === 'number' && q.limit >= 1) ? q.limit : 0; // 0 / absent = unlimited multi-select
+        item.limit = lim;
+        item.multi = lim !== 1; // back-compat / dashboard mirror (limit 1 == single-select)
+      }
       if (q.user_add_choice) item.user_add_choice = true;
     }
     if (q.required) item.required = true;
@@ -160,8 +170,23 @@ function parseForm(text, lang) {
 
 // ───────────────────────── vote / answer logic (pure) ───────────────────────
 
-/** Toggle a voter on a nested votes map. Returns '+', '-' (or 'limit' is N/A here). */
-function applyVote(votesMap, qid, oid, userId, multi) {
+/** Max selections a voter may pick for a CHOICE question. 0 = unlimited (the default, so
+ *  choice is multi-select like the single-question poll). yes/no is single-select by type
+ *  (returns 0 here; the type-switch handles it). Back-compat: an OLD single-select choice
+ *  poll (multi===false, no q.limit) maps to 1. */
+function effectiveLimit(q) {
+  if (!q || q.type === 'yesno') return 0;
+  if (typeof q.limit === 'number' && q.limit >= 1) return q.limit;
+  if (q.multi === false) return 1; // legacy single-select choice
+  return 0; // unlimited (new default / legacy multi:true)
+}
+
+/** Toggle a voter on a nested votes map (pure mirror of handleVote for unit tests).
+ *  opts: { isYesNo } → single-select auto-switch (yes/no); { limit>0 } → choice ceiling
+ *  (returns 'limit' WITHOUT modifying when the add would exceed it — caller alerts; no
+ *  auto-switch). Returns '+', '-', or 'limit'. */
+function applyVote(votesMap, qid, oid, userId, opts = {}) {
+  const { isYesNo = false, limit = 0 } = (typeof opts === 'boolean') ? { isYesNo: !opts } : opts;
   if (!votesMap[qid]) votesMap[qid] = {};
   const q = votesMap[qid];
   const key = String(oid);
@@ -171,9 +196,16 @@ function applyVote(votesMap, qid, oid, userId, multi) {
     q[key] = q[key].filter((u) => u !== userId);
     return '-';
   }
-  // single-select: clear the voter from the question's other options first
-  if (!multi) {
+  if (isYesNo) {
+    // yes/no single-select: clear the voter from the question's other options first
     for (const k of Object.keys(q)) q[k] = (q[k] || []).filter((u) => u !== userId);
+    q[key].push(userId);
+    return '+';
+  }
+  if (limit > 0) {
+    let count = 0;
+    for (const k of Object.keys(q)) if ((q[k] || []).includes(userId)) count++;
+    if (count >= limit) return 'limit'; // over the ceiling — do NOT add, do NOT switch
   }
   q[key].push(userId);
   return '+';
@@ -302,6 +334,8 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
 
   pollData.questions.forEach((q, qi) => {
     blocks.push(sectionMd(`*${qi + 1}. ${trimText(q.text, 300)}*`));
+    const _qLimit = effectiveLimit(q); // choice selection cap (0 = unlimited; yes/no = N/A)
+    if (_qLimit > 0 && q.type !== 'yesno') blocks.push(contextMd(parameterizedString(stri18n(userLang, 'info_limited'), { limit: _qLimit }) + stri18n(userLang, 'info_s')));
     if (isChoice(q.type)) {
       const qVotes = votes[q.id] || {};
       (q.options || []).forEach((opt, oi) => {
@@ -553,7 +587,7 @@ async function rebuildMessage(client, token, pollData, channel, ts, responseUrl)
 function estimateBlocks(questions) {
   let n = 5; // header + sub-context + lead divider + menu + poll_id context
   for (const q of (questions || [])) {
-    if (isChoice(q.type)) n += 1 + ((q.options && q.options.length) || 0) + (q.user_add_choice ? 1 : 0) + 1;
+    if (isChoice(q.type)) n += 1 + ((q.options && q.options.length) || 0) + (q.user_add_choice ? 1 : 0) + 1 + (effectiveLimit(q) > 0 ? 1 : 0); // +1 for the info_limited badge
     else n += 3; // header + answer section + divider
   }
   return n;
@@ -575,7 +609,8 @@ function formToLines(questions) {
   const lines = [];
   for (const q of (questions || [])) {
     const flags = [];
-    if (q.multi) flags.push('multi');
+    // choice multi-select is the default; only a real limit (>=1) round-trips (as "limit N").
+    if (q.type !== 'yesno' && typeof q.limit === 'number' && q.limit >= 1) flags.push('limit ' + q.limit);
     if (q.user_add_choice) flags.push('add');
     if (q.required) flags.push('required');
     lines.push(`Q: ${q.text} [${[q.type, ...flags].join(' ')}]`);
@@ -599,7 +634,7 @@ function commandString(questions, para) {
 // onto para (config-safe), stores the recreate-command on pollData.cmd, posts the
 // message, records the ts, and on a post failure DMs the creator the recovery command
 // so their work is never lost. Returns { ok }.
-async function createAndPost(client, token, { teamOrEnt, userId, channel, title, questions, paraIn, lang, responseUrl }) {
+async function createAndPost(client, token, { teamOrEnt, userId, channel, title, questions, paraIn, lang, responseUrl, body }) {
   const q1 = questions[0];
   const para = {
     user_lang: lang,
@@ -627,6 +662,11 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
   // Can't post (e.g. bot not in channel) — DM the creator the recreate command +
   // roll back the orphan poll, so nothing they typed is lost.
   const recoveryFail = async () => {
+    // Surface the failure per app_user_notification_method (modal/ephemeral) so the user
+    // SEES it immediately — never a silent error — AND always DM the recreate command so the
+    // form they typed is never lost (a DM persists + reaches them even when the channel is the
+    // very thing that failed; a modal/ephemeral is transient and may ride a dead response_url).
+    try { if (_opts.notify && body) await _opts.notify(body, token, stri18n(lang, 'mq_post_failed'), lang); } catch (_) { /* noop */ }
     const dm = `${stri18n(lang, 'mq_post_failed')}\n${stri18n(lang, 'mq_recover_dm')}\n\`\`\`${cmd}\`\`\``;
     try { await client.chat.postMessage({ token, channel: userId, text: dm }); } catch (_) { /* noop */ }
     await pollCol().deleteOne({ _id: pollData._id });
@@ -657,7 +697,7 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
 /** Create a form directly from a slash command: `/<cmd> multi [anonymous] [hidden] Q: … | …`.
  *  Returns { ok, formText, errors } — on parse error the caller opens the builder
  *  pre-filled with formText so the user's typing is never lost. */
-async function createFromCommand({ client, token, teamId, userId, channel, dsl, responseUrl }) {
+async function createFromCommand({ client, token, teamId, userId, channel, dsl, responseUrl, body }) {
   const defs = await teamDefaults(teamId);
   const lang = defs.app_lang || 'en';
   let text = String(dsl || '').trim();
@@ -674,7 +714,7 @@ async function createFromCommand({ client, token, teamId, userId, channel, dsl, 
   paraIn.show_command_info = defs.show_command_info;
   paraIn.show_dashboard_link = defs.show_dashboard_link;
   paraIn.display_poller_name = defs.display_poller_name;
-  const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang, responseUrl });
+  const r = await createAndPost(client, token, { teamOrEnt: teamId, userId, channel, title: questions[0].text, questions, paraIn, lang, responseUrl, body });
   return { ok: r.ok, formText };
 }
 
@@ -738,31 +778,49 @@ async function handleVote({ ack, body, action, client, context }) {
   // Serialize the probe+upsert per message (same mutex single's btn_vote uses) so the
   // lazy votes-doc create (response_url mode) can't duplicate under concurrent first votes.
   const release = _opts.lock ? await _opts.lock(`${pollData.team}/${channel}/${ts}`) : null;
+  let overLimit = null; // {limit} when a choice add was blocked by the selection limit
   try {
     // Atomic, concurrency-safe toggle: target only this question/option path so two
     // people voting at once never clobber each other's writes (the old whole-`votes`
     // $set lost concurrent updates). $addToSet/$pull are idempotent per path.
     const qid = value.qid; const oid = value.oid;
     const base = `votes.${qid}.${oid}`;
-    const probe = await votesCol().findOne({ channel, ts }, { projection: { [base]: 1 } });
-    const had = !!(probe && probe.votes && probe.votes[qid] && Array.isArray(probe.votes[qid][oid]) && probe.votes[qid][oid].includes(userId));
+    // Probe the WHOLE question's votes (not just this option) so we can compute `had` AND
+    // count the voter's current selections for the choice selection limit.
+    const probe = await votesCol().findOne({ channel, ts }, { projection: { [`votes.${qid}`]: 1 } });
+    const qmap = (probe && probe.votes && probe.votes[qid]) || {};
+    const had = Array.isArray(qmap[oid]) && qmap[oid].includes(userId);
+    const q = (pollData.questions || []).find((x) => x.id === qid);
     const ev = { u: userId, q: qid, o: oid, t: new Date(), a: had ? '-' : '+' };
     const update = { $push: { vote_events: ev }, $setOnInsert: { team: pollData.team, poll_id: String(value.poll_id) } };
     if (had) {
-      update.$pull = { [base]: userId }; // toggle off
+      update.$pull = { [base]: userId }; // toggle off — always allowed
+    } else if (q && q.type === 'yesno') {
+      // yes/no: single-select auto-switch (remove the voter from the other option)
+      update.$addToSet = { [base]: userId };
+      const n = Array.isArray(q.options) ? q.options.length : 0;
+      const pull = {};
+      for (let i = 0; i < n; i++) if (i !== oid) pull[`votes.${qid}.${i}`] = userId;
+      if (Object.keys(pull).length) update.$pull = pull;
     } else {
-      update.$addToSet = { [base]: userId }; // toggle on
-      if (!value.multi) {
-        // single-select: remove this voter from the question's OTHER options
-        const q = (pollData.questions || []).find((x) => x.id === qid);
-        const n = (q && Array.isArray(q.options)) ? q.options.length : 0;
-        const pull = {};
-        for (let i = 0; i < n; i++) if (i !== oid) pull[`votes.${qid}.${i}`] = userId;
-        if (Object.keys(pull).length) update.$pull = pull;
+      // choice: multi-select with an optional ceiling (0 = unlimited). Mirror the single
+      // poll — when over the limit, ALERT and do NOT add/auto-switch (the user deselects first).
+      const limit = effectiveLimit(q);
+      if (limit > 0) {
+        let count = 0;
+        for (const k of Object.keys(qmap)) if (Array.isArray(qmap[k]) && qmap[k].includes(userId)) count++;
+        if (count >= limit) overLimit = { limit };
       }
+      if (!overLimit) update.$addToSet = { [base]: userId };
     }
-    await votesCol().updateOne({ channel, ts }, update, { upsert: true });
+    if (!overLimit) await votesCol().updateOne({ channel, ts }, update, { upsert: true });
   } finally { if (release) release(); }
+  if (overLimit) {
+    // Notify AFTER releasing the lock (don't hold the mutex during a Slack API call).
+    const lang = (pollData.para && pollData.para.user_lang) || 'en';
+    if (_opts.notify) await _opts.notify(body, token, parameterizedString(stri18n(lang, 'err_vote_over_limit'), { limit: overLimit.limit }), lang);
+    return; // selection unchanged — no rebuild needed
+  }
   await rebuildMessage(client, token, pollData, channel, ts, body.response_url);
 }
 
@@ -850,6 +908,17 @@ async function doDelete(client, token, pollData, channel, ts, responseUrl, userI
     try { await _db.collection('closed').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
     try { await _db.collection('hidden').deleteMany({ channel, ts }); } catch (e) { /* noop */ }
   }
+}
+
+/** Confirm-modal submit for deleting a multi-question poll (callback_id mq_delete_confirm).
+ *  Mirrors single's deletePollConfirm: re-check creator ownership, then doDelete. */
+async function handleDeleteConfirm({ ack, body, view, client, context }) {
+  await ack(); // close the confirm modal
+  let pm = {}; try { pm = JSON.parse(view.private_metadata || '{}'); } catch (e) { return; }
+  const pollData = await loadPoll(pm.poll_id);
+  if (!pollData) return;
+  if (pollData.user_id && body.user.id !== pollData.user_id) return; // creator-only (fresh re-check)
+  await doDelete(client, context.botToken, pollData, pm.channel, pm.ts, pm.response_url || '', body.user.id);
 }
 
 /** Legacy reveal button (mq_reveal) on already-posted polls. */
@@ -965,7 +1034,22 @@ async function handleMenu({ ack, body, action, client, context }) {
   if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal, body.response_url);
   else if (a === 'close') await doSetClosed(client, token, pollData, channel, ts, true, body.response_url);
   else if (a === 'reopen') await doSetClosed(client, token, pollData, channel, ts, false, body.response_url);
-  else if (a === 'delete') await doDelete(client, token, pollData, channel, ts, body.response_url, body.user.id);
+  else if (a === 'delete') {
+    // Confirm via a MODAL (mirrors single — a `confirm` on a select option is invalid Slack
+    // and 500s the posted message). Ownership was checked above; mq_delete_confirm deletes on submit.
+    const pmDel = JSON.stringify({ poll_id: value.poll_id, channel, ts, response_url: body.response_url || '', lang });
+    const view = {
+      type: 'modal', callback_id: 'mq_delete_confirm', private_metadata: pmDel,
+      title: { type: 'plain_text', text: trimText(stri18n(lang, 'menu_title_confirm'), 24) },
+      submit: { type: 'plain_text', text: trimText(stri18n(lang, 'menu_delete_poll'), 24) },
+      close: { type: 'plain_text', text: trimText(stri18n(lang, 'btn_cancel'), 24) },
+      blocks: [
+        { type: 'section', text: { type: 'mrkdwn', text: trimText(stri18n(lang, 'menu_are_you_sure'), 2990) } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: trimText(stri18n(lang, 'task_delete_refer_warn'), 2990) }] },
+      ],
+    };
+    try { await client.views.open({ token, trigger_id: body.trigger_id, view }); } catch (e) { logBuilderErr('handleMenu delete-confirm views.open', e); }
+  }
   else if (a === 'cmdinfo') await sendCommandInfo(client, token, body, pollData, lang);
   else if (a === 'myvotes') await sendMyVotes(client, token, body, pollData, ts, lang);
   else if (a === 'allvotes') await sendAllVotes(client, token, body, pollData, ts, lang);
@@ -1147,15 +1231,22 @@ function buildQuestionView(ctx, q) {
   } else if (q.type === 'yesno') {
     blocks.push(contextMd(`${t('mq_b_q_yesno_hint')} — *${t('mq_yes')}* / *${t('mq_no')}*`));
   }
+  // Choice is MULTI-SELECT by default (like the single poll). Mirror single's UI: a "Limited"
+  // toggle (reuse single's `modal_option_limited`) + a number box (reuse `modal_input_limit_*`).
+  // 0 / empty = unlimited. yes/no is single-select by type (no limit shown).
   const flagOpts = [];
-  if (q.type === 'choice') { flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_multi') }, value: 'multi' }); flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_addown') }, value: 'addown' }); }
+  if (q.type === 'choice') { flagOpts.push({ text: { type: 'mrkdwn', text: t('modal_option_limited') }, value: 'limit' }); flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_addown') }, value: 'addown' }); }
   flagOpts.push({ text: { type: 'mrkdwn', text: t('mq_b_opt_required') }, value: 'required' });
   const flagSel = [];
-  if (q.type === 'choice' && q.multi) flagSel.push(flagOpts.find((o) => o.value === 'multi'));
+  if (q.type === 'choice' && q.limit >= 1) flagSel.push(flagOpts.find((o) => o.value === 'limit'));
   if (q.type === 'choice' && q.user_add_choice) flagSel.push(flagOpts.find((o) => o.value === 'addown'));
   if (q.required) flagSel.push(flagOpts.find((o) => o.value === 'required'));
   blocks.push({ type: 'input', block_id: 'mq_q_flags', optional: true, label: { type: 'plain_text', text: trimText(t('mq_b_q_flags_label'), 2000) },
     element: { type: 'checkboxes', action_id: 'v', options: flagOpts, ...(flagSel.filter(Boolean).length ? { initial_options: flagSel.filter(Boolean) } : {}) } });
+  if (q.type === 'choice') { // the selection-limit number box (mirrors single's Limited+number; 0/empty = unlimited)
+    blocks.push({ type: 'input', block_id: 'mq_q_limit', optional: true, label: { type: 'plain_text', text: trimText(t('modal_input_limit_text'), 2000) },
+      element: { type: 'plain_text_input', action_id: 'v', max_length: 6, ...(q.limit >= 1 ? { initial_value: String(q.limit) } : {}), placeholder: { type: 'plain_text', text: trimText(t('modal_input_limit_hint'), 150) } } });
+  }
 
   // Carry the selected type in private_metadata: after a views.update, an UNtouched
   // static_select is NOT reported in view.state.values, so on submit the type would read
@@ -1187,8 +1278,16 @@ function readQuestionFromView(view) {
   }
   const flags = ((v.mq_q_flags && v.mq_q_flags.v && v.mq_q_flags.v.selected_options) || []).map((o) => o.value);
   const q = { type, text };
-  if (type === 'choice') { q.options = options; q.multi = flags.includes('multi'); if (flags.includes('addown')) q.user_add_choice = true; }
-  else if (type === 'yesno') { q.multi = false; }
+  if (type === 'choice') {
+    q.options = options;
+    // Selection limit: only when "Limited" is checked AND a positive number is given.
+    // 0 / empty / unchecked = unlimited (multi-select). multi mirror kept for the dashboard.
+    const numRaw = ((v.mq_q_limit && v.mq_q_limit.v && v.mq_q_limit.v.value) || '').trim();
+    const num = /^\d+$/.test(numRaw) ? parseInt(numRaw, 10) : 0;
+    q.limit = (flags.includes('limit') && num >= 1) ? num : 0;
+    q.multi = q.limit !== 1;
+    if (flags.includes('addown')) q.user_add_choice = true;
+  } else if (type === 'yesno') { q.limit = 1; q.multi = false; }
   if (flags.includes('required')) q.required = true;
   return q;
 }
@@ -1372,7 +1471,7 @@ async function handleBuilderSubmit({ ack, body, view, client, context }) {
   await createAndPost(client, context.botToken, {
     teamOrEnt: teamId, userId, channel, title: draft.title || (questions[0] && questions[0].text) || 'Poll', questions,
     paraIn: { anonymous: !!draft.settings.anonymous, true_anonymous: trueAnon, hidden: !!draft.settings.hidden, menu_at_the_end: defs.menu_at_the_end, show_command_info: defs.show_command_info, show_dashboard_link: defs.show_dashboard_link, display_poller_name: defs.display_poller_name },
-    lang, responseUrl,
+    lang, responseUrl, body,
   });
   await deleteDraft(draft._id);
 }
@@ -1396,6 +1495,7 @@ function register(app) {
   app.action('mq_q_add_opt', wrap(handleQAddOpt, 'mq_q_add_opt'));
   app.view('mq_q_submit', wrap(handleQuestionSubmit, 'mq_q_submit'));
   app.view('mq_build_submit', wrap(handleBuilderSubmit, 'mq_build_submit'));
+  app.view('mq_delete_confirm', wrap(handleDeleteConfirm, 'mq_delete_confirm'));
 }
 
 // Wrap a handler so an exception never crashes Bolt; ack on error to avoid a hang.
@@ -1415,7 +1515,7 @@ module.exports = {
   init, register, isMulti, openCreateModal, openBuilder, createFromCommand, formToCommandDSL,
   buildBuilderView, buildQuestionView, readQuestionFromView, // exported for structural tests
   // exported for unit tests:
-  parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit,
+  parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit, effectiveLimit,
   buildCreateModalView, buildAnswerModalView, answerElement, readAnswerValue, estimateBlocks,
   MAX_QUESTIONS, MAX_OPTIONS, MAX_BLOCKS, ALL_TYPES,
 };

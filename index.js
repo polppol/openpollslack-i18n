@@ -2014,7 +2014,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
         } else {
           // "/poll multi <DSL>" → create directly; on a parse error open the builder
           // PRE-FILLED with what they typed so nothing is lost.
-          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest, responseUrl: mqResp });
+          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest, responseUrl: mqResp, body });
           if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText, mqUser);
         }
       } catch (e) { await respond('Could not open the multi-question builder.'); }
