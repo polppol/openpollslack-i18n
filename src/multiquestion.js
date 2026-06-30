@@ -290,15 +290,16 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   const userLang = opts.userLang || (pollData.para && pollData.para.user_lang) || 'en';
   const anonymous = !!(pollData.para && pollData.para.anonymous);
   // `hidden` (immutable) = this poll supports hide/reveal; `revealed` (live) =
-  // results currently shown. Effective hidden = hidden && !revealed && !closed.
-  // (Kept separate so reveal/hide is a true two-way toggle.)
+  // results currently shown. (Kept separate so reveal/hide is a true two-way toggle.)
   const revealed = !!(pollData.para && pollData.para.revealed);
   const _pp = pollData.para || {};
   // Effective "votes hidden right now". Single-question lets ANY poll hide/reveal votes
   // anytime, so the multi must too: a live `para.hide_active` flag drives it (set by the
   // menu toggle). Backward-compat for polls created before this: fall back to the old
-  // (created-hidden && !revealed) model when hide_active was never set.
-  const hidden = (_pp.hide_active !== undefined ? !!_pp.hide_active : (!!_pp.hidden && !revealed)) && !opts.isClosed;
+  // (created-hidden && !revealed) model when hide_active was never set. CLOSING does NOT
+  // reveal — single's closePoll never touches the hidden votes, so hidden stays hidden
+  // after close until the creator explicitly reveals (was a bug: `&& !opts.isClosed`).
+  const hidden = (_pp.hide_active !== undefined ? !!_pp.hide_active : (!!_pp.hidden && !revealed));
   const votes = (votesDoc && votesDoc.votes) || {};
   const answers = (votesDoc && votesDoc.answers) || {};
   const pollId = String(pollData._id);
