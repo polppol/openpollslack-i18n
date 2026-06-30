@@ -1157,7 +1157,12 @@ function buildQuestionView(ctx, q) {
   blocks.push({ type: 'input', block_id: 'mq_q_flags', optional: true, label: { type: 'plain_text', text: trimText(t('mq_b_q_flags_label'), 2000) },
     element: { type: 'checkboxes', action_id: 'v', options: flagOpts, ...(flagSel.filter(Boolean).length ? { initial_options: flagSel.filter(Boolean) } : {}) } });
 
-  const pm = { draft_id: ctx.draft_id, root_view_id: ctx.root_view_id, qIndex: ctx.qIndex, lang: ctx.lang, optRows };
+  // Carry the selected type in private_metadata: after a views.update, an UNtouched
+  // static_select is NOT reported in view.state.values, so on submit the type would read
+  // back as the 'choice' default — making a yes/no submit fail the choice-validation and
+  // try to error on a non-existent option block ("trouble connecting"). pm is always
+  // submitted, so it's the reliable carrier.
+  const pm = { draft_id: ctx.draft_id, root_view_id: ctx.root_view_id, qIndex: ctx.qIndex, lang: ctx.lang, optRows, type: q.type };
   if (ctx.optsStash && ctx.optsStash.length) pm.optsStash = ctx.optsStash; // carry typed options across a type swap-away
   return { type: 'modal', callback_id: 'mq_q_submit', private_metadata: JSON.stringify(pm),
     title: { type: 'plain_text', text: trimText(t('mq_b_q_title'), 24) }, submit: { type: 'plain_text', text: trimText(t('mq_b_q_save'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
@@ -1166,7 +1171,12 @@ function buildQuestionView(ctx, q) {
 /** Read a question object out of the sub-modal's current state. */
 function readQuestionFromView(view) {
   const v = (view.state && view.state.values) || {};
-  const type = (v.mq_q_type && v.mq_q_type.v && v.mq_q_type.v.selected_option && v.mq_q_type.v.selected_option.value) || 'choice';
+  // Prefer the live select value; fall back to private_metadata.type (set by buildQuestionView)
+  // because a static_select set via initial_option after a views.update is absent from
+  // view.state.values until the user touches it again — without this the type defaults to
+  // 'choice' and a yes/no (or any switched-to) submit breaks.
+  let _pmType; try { _pmType = JSON.parse(view.private_metadata || '{}').type; } catch (e) { /* noop */ }
+  const type = (v.mq_q_type && v.mq_q_type.v && v.mq_q_type.v.selected_option && v.mq_q_type.v.selected_option.value) || _pmType || 'choice';
   const text = ((v.mq_q_text && v.mq_q_text.v && v.mq_q_text.v.value) || '').trim();
   // Collect option ROWS (mq_q_opt_0..N) in order, dropping blanks (clear-to-remove).
   let options = [];
