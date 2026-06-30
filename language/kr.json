@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: 익명 투표",
   "info_anonymous_vote": "당신은 설문조사에서 익명으로 투표하였습니다.",
   "info_anonymous_unvote": "당신은 설문조사에서 익명 투표를 취소하였습니다.",
+  "info_hidden_vote": "당신의 투표가 기록되었습니다.",
+  "info_hidden_unvote": "당신의 투표가 취소되었습니다.",
   "info_anonymous_notice": "참고 : 투표 작성자는 여전히 누가 어떤 옵션을 선택했는지 볼 수 있습니다",
   "info_limited": ":warning: {{limit}}투표로 제한됨",
   "info_s": "",

@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Anonymous poll",
   "info_anonymous_vote": "You have anonymously voted in the poll.",
   "info_anonymous_unvote": "You have anonymously unvoted in the poll.",
+  "info_hidden_vote": "Your vote has been recorded.",
+  "info_hidden_unvote": "Your vote has been removed.",
   "info_anonymous_notice": "NOTE: Poll creator still can see who voted which options",
   "info_limited": ":warning: Limited to `{{limit}}` vote",
   "info_s": "s",

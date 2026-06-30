@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Anonyme Umfrage",
   "info_anonymous_vote": "Sie haben anonym in der Umfrage abgestimmt.",
   "info_anonymous_unvote": "Sie haben Ihre anonyme Stimme in der Umfrage zurückgezogen.",
+  "info_hidden_vote": "Ihre Stimme wurde gespeichert.",
+  "info_hidden_unvote": "Ihre Stimme wurde entfernt.",
   "info_anonymous_notice": "HINWEIS: Der Umfrageersteller kann trotzdem sehen, wer welche Optionen gewählt hat",
   "info_limited": ":warning: Begrenzt auf {{limit}} Stimmen",
   "info_s": "s",

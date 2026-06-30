@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: 匿名投票",
   "info_anonymous_vote": "あなたはアンケートで匿名で投票しました。",
   "info_anonymous_unvote": "あなたはアンケートで匿名の投票を取り消しました。",
+  "info_hidden_vote": "あなたの投票を受け付けました。",
+  "info_hidden_unvote": "あなたの投票を取り消しました。",
   "info_anonymous_notice": "注意：投票作成者は誰がどの選択肢に投票したかを見ることができます",
   "info_limited": ":warning: 投票数は {{limit}} 回に制限されています",
   "info_s": "",

@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Nimetön kysely",
   "info_anonymous_vote": "Olet äänestänyt anonyymisti kyselyssä.",
   "info_anonymous_unvote": "Olet perunut anonyymin äänesi kyselyssä.",
+  "info_hidden_vote": "Äänesi on tallennettu.",
+  "info_hidden_unvote": "Äänesi on poistettu.",
   "info_anonymous_notice": "HUOM: Kyselyn luoja voi silti nähdä kuka äänesti mitäkin vaihtoehtoa",
   "info_limited": ":warning: Rajoitettu {{limit}} ääneen",
   "info_s": "s",

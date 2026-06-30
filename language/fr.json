@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Sondage anonyme",
   "info_anonymous_vote": "Vous avez voté anonymement dans le sondage.",
   "info_anonymous_unvote": "Vous avez annulé votre vote anonyme dans le sondage.",
+  "info_hidden_vote": "Votre vote a été enregistré.",
+  "info_hidden_unvote": "Votre vote a été supprimé.",
   "info_anonymous_notice": "REMARQUE : Le créateur du sondage peut toujours voir qui a voté pour quelles options",
   "info_limited": ":warning: Limité à {{limit}} vote",
   "info_s": "s",

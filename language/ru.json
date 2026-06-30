@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Анонимный опрос",
   "info_anonymous_vote": "Вы проголосовали анонимно в опросе.",
   "info_anonymous_unvote": "Вы отменили свой анонимный голос в опросе.",
+  "info_hidden_vote": "Ваш голос учтён.",
+  "info_hidden_unvote": "Ваш голос удалён.",
   "info_anonymous_notice": "ПРИМЕЧАНИЕ: Создатель опроса по-прежнему может видеть, кто проголосовал за какие варианты",
   "info_limited": ":warning: Ограничено {{limit}} голосов",
   "info_s": "",

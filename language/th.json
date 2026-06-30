@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: โหวตแบบไม่ระบุตัวตน",
   "info_anonymous_vote": "คุณได้ลงคะแนนโดยไม่ระบุชื่อในโพลนี้.",
   "info_anonymous_unvote": "คุณได้ยกเลิกการลงคะแนนโดยไม่ระบุชื่อในโพลนี้.",
+  "info_hidden_vote": "บันทึกการลงคะแนนของคุณแล้ว.",
+  "info_hidden_unvote": "ลบการลงคะแนนของคุณแล้ว.",
   "info_anonymous_notice": "NOTE: ผู้สร้างคำถามยังสามารถเห็นว่าใครเลือกตัวเลือกใหนได้!",
   "info_limited": ":pencil2: กรุณาเลือก `{{limit}}` ตัวเลือก",
   "info_s": "",

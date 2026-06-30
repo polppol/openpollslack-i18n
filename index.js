@@ -4775,12 +4775,13 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         };
         await postChat(body.response_url, 'update', mRequestBody);
 
-        if (isAnonymous) {
-          // Anonymous votes show no name in the poll, so this is the voter's ONLY feedback
-          // that their (un)vote registered — surface it as a modal popup when enabled
+        if (isAnonymous || isHidden) {
+          // Anonymous votes show no name, and hidden polls show no counts — so this is the voter's
+          // ONLY feedback that their (un)vote registered. Surface it as a modal popup when enabled
           // (right after the vote action, so a trigger_id is in hand), ephemeral otherwise.
-          let mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_vote'), {choice: ""});
-          if (removeVote) mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_unvote'), {choice: ""});
+          let mesStr;
+          if (isAnonymous) mesStr = parameterizedString(stri18n(userLang, removeVote ? 'info_anonymous_unvote' : 'info_anonymous_vote'), {choice: ""});
+          else mesStr = stri18n(userLang, removeVote ? 'info_hidden_unvote' : 'info_hidden_vote');
           await notifyUser(body, context, mesStr, userLang);
         }
 

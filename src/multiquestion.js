@@ -811,6 +811,7 @@ async function handleVote({ ack, body, action, client, context }) {
   // lazy votes-doc create (response_url mode) can't duplicate under concurrent first votes.
   const release = _opts.lock ? await _opts.lock(`${pollData.team}/${channel}/${ts}`) : null;
   let overLimit = null; // {limit} when a choice add was blocked by the selection limit
+  let removed = false;  // true when the (successful) toggle was an UNvote — drives the feedback text
   try {
     // Atomic, concurrency-safe toggle: target only this question/option path so two
     // people voting at once never clobber each other's writes (the old whole-`votes`
@@ -845,7 +846,7 @@ async function handleVote({ ack, body, action, client, context }) {
       }
       if (!overLimit) update.$addToSet = { [base]: userId };
     }
-    if (!overLimit) await votesCol().updateOne({ channel, ts }, update, { upsert: true });
+    if (!overLimit) { await votesCol().updateOne({ channel, ts }, update, { upsert: true }); removed = had; }
   } finally { if (release) release(); }
   if (overLimit) {
     // Notify AFTER releasing the lock (don't hold the mutex during a Slack API call).
@@ -854,6 +855,18 @@ async function handleVote({ ack, body, action, client, context }) {
     return; // selection unchanged — no rebuild needed
   }
   await rebuildMessage(client, token, pollData, channel, ts, body.response_url);
+  // Anonymous OR hidden polls show the voter no visible change, so their (un)vote needs explicit
+  // feedback — mirrors single (which does this for anonymous) and ALSO covers hidden (single's blind
+  // spot). Routed via app_user_notification_method (modal/ephemeral), like single.
+  const _pp = pollData.para || {};
+  const anon = !!_pp.anonymous;
+  const hiddenNow = (_pp.hide_active !== undefined) ? !!_pp.hide_active : (!!_pp.hidden && !_pp.revealed);
+  if ((anon || hiddenNow) && _opts.notify) {
+    const lang = _pp.user_lang || 'en';
+    const key = anon ? (removed ? 'info_anonymous_unvote' : 'info_anonymous_vote')
+                     : (removed ? 'info_hidden_unvote' : 'info_hidden_vote');
+    await _opts.notify(body, token, stri18n(lang, key), lang);
+  }
 }
 
 /** Open the typed answer modal (action_id mq_answer). */

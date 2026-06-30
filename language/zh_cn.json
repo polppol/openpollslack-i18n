@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: 匿名投票",
   "info_anonymous_vote": "您已在投票中匿名投票。",
   "info_anonymous_unvote": "您已在投票中撤销匿名投票。",
+  "info_hidden_vote": "您的投票已记录。",
+  "info_hidden_unvote": "您的投票已撤销。",
   "info_anonymous_notice": "注意：投票创建者仍然可以看到谁投了哪些选项",
   "info_limited": ":warning: 限制投票 {{limit}} 次",
   "info_s": "",

@@ -5,6 +5,8 @@
   "info_anonymous": ":shushing_face: Encuesta anónima",
   "info_anonymous_vote": "Has votado anónimamente en la encuesta.",
   "info_anonymous_unvote": "Has retirado tu voto anónimo en la encuesta.",
+  "info_hidden_vote": "Tu voto ha sido registrado.",
+  "info_hidden_unvote": "Tu voto ha sido eliminado.",
   "info_anonymous_notice": "NOTA: El creador de la encuesta todavía puede ver quién votó por qué opciones",
   "info_limited": ":warning: Limitado a {{limit}} voto",
   "info_s": "s",
