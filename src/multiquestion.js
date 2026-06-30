@@ -627,6 +627,9 @@ function commandString(questions, para) {
   const kws = [];
   if (para && para.anonymous) kws.push('anonymous');
   if (para && para.hidden) kws.push('hidden');
+  // Mirror single's `lang <code>` token so Command Info shows the language + a pasted command round-trips
+  // it. LEADING (with anonymous/hidden) — a trailing token would corrupt the last free-text option line.
+  if (para && para.user_lang) kws.push(`lang ${para.user_lang}`);
   return `/${cmd} multi ${kws.length ? kws.join(' ') + ' ' : ''}${formToCommandDSL(questions)}`;
 }
 
@@ -699,11 +702,21 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
  *  pre-filled with formText so the user's typing is never lost. */
 async function createFromCommand({ client, token, teamId, userId, channel, dsl, responseUrl, body }) {
   const defs = await teamDefaults(teamId);
-  const lang = defs.app_lang || 'en';
   let text = String(dsl || '').trim();
   const paraIn = { anonymous: false, hidden: false };
-  const kw = text.match(/^((?:anonymous|hidden)\b\s+)+/i);
-  if (kw) { const s = kw[0].toLowerCase(); if (s.includes('anonymous')) paraIn.anonymous = true; if (s.includes('hidden')) paraIn.hidden = true; text = text.slice(kw[0].length); }
+  // Leading keywords (mirror single + commandString): anonymous / hidden / lang <code>. lang must
+  // resolve BEFORE parseForm (it drives yes/no option naming). Keeps commandString ⇄ createFromCommand symmetric.
+  let langOverride = null;
+  const kw = text.match(/^((?:anonymous|hidden|lang\s+[a-z_]+)\b\s+)+/i);
+  if (kw) {
+    const s = kw[0].toLowerCase();
+    if (/\banonymous\b/.test(s)) paraIn.anonymous = true;
+    if (/\bhidden\b/.test(s)) paraIn.hidden = true;
+    const lm = s.match(/\blang\s+([a-z_]+)/);
+    if (lm && langList[lm[1]]) langOverride = lm[1];
+    text = text.slice(kw[0].length);
+  }
+  const lang = langOverride || defs.app_lang || 'en';
   const formText = text.replace(/\s+\|\s+/g, '\n');
   const { questions, errors } = parseForm(formText, lang);
   if (!questions.length || (errors && errors.length)) return { ok: false, formText, errors };
@@ -1154,12 +1167,29 @@ function buildBuilderView(draft, useResponseUrl, langSelectable) {
   blocks.push({ type: 'input', block_id: 'mq_b_title', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_title'), 2000) },
     element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...(draft.title ? { initial_value: draft.title } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_title_ph'), 150) } } });
 
+  // Channel + language — at the TOP (before the questions), mirroring the single create modal so the
+  // user always sees WHERE it posts + which language. Same logic/keys as createModal.
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } });
+  if (useResponseUrl && draft.response_url) {
+    blocks.push(contextMd(t('modal_ch_response_url_auto')));
+  } else {
+    blocks.push({ type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
+      element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(draft.channel ? { initial_conversation: draft.channel } : {}) } });
+    blocks.push(contextMd(useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn')));
+  }
+  if (langSelectable && Object.keys(langList).length) {
+    blocks.push({ type: 'input', block_id: 'mq_lang', optional: true, label: { type: 'plain_text', text: trimText(t('info_lang_select_label'), 2000) },
+      element: { type: 'static_select', action_id: 'v', placeholder: { type: 'plain_text', text: trimText(t('info_lang_select_hint'), 150) },
+        ...(langList[lang] ? { initial_option: { text: { type: 'plain_text', text: trimText(langList[lang] || lang, 75) }, value: lang } } : {}),
+        options: Object.keys(langList).map((k) => ({ text: { type: 'plain_text', text: trimText(langList[k] || k, 75) }, value: k })) } });
+  }
+  blocks.push(divider());
+
   if (draft.mode === 'advanced') {
     blocks.push({ type: 'input', block_id: 'mq_form', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_questions'), 2000) },
       element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...((draft.questions && draft.questions.length) ? { initial_value: String(formToModalDSL(draft.questions)).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } });
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] });
   } else {
-    blocks.push(divider());
     const qs = draft.questions || [];
     if (!qs.length) blocks.push(contextMd(t('mq_b_no_questions')));
     qs.forEach((q, i) => {
@@ -1179,22 +1209,6 @@ function buildBuilderView(draft, useResponseUrl, langSelectable) {
   // Settings (anonymous/hidden)
   blocks.push({ type: 'input', block_id: 'mq_b_settings', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_settings'), 2000) },
     element: { type: 'checkboxes', action_id: 'v', options: [{ text: { type: 'mrkdwn', text: t('mq_opt_anonymous') }, value: 'anonymous' }, { text: { type: 'mrkdwn', text: t('mq_opt_hidden') }, value: 'hidden' }], ...buildInitialSettings(draft, lang) } });
-
-  // Channel + language — same logic/keys as the create modal.
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } });
-  if (useResponseUrl && draft.response_url) {
-    blocks.push(contextMd(t('modal_ch_response_url_auto')));
-  } else {
-    blocks.push({ type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
-      element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(draft.channel ? { initial_conversation: draft.channel } : {}) } });
-    blocks.push(contextMd(useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn')));
-  }
-  if (langSelectable && Object.keys(langList).length) {
-    blocks.push({ type: 'input', block_id: 'mq_lang', optional: true, label: { type: 'plain_text', text: trimText(t('info_lang_select_label'), 2000) },
-      element: { type: 'static_select', action_id: 'v', placeholder: { type: 'plain_text', text: trimText(t('info_lang_select_hint'), 150) },
-        ...(langList[lang] ? { initial_option: { text: { type: 'plain_text', text: trimText(langList[lang] || lang, 75) }, value: lang } } : {}),
-        options: Object.keys(langList).map((k) => ({ text: { type: 'plain_text', text: trimText(langList[k] || k, 75) }, value: k })) } });
-  }
 
   return { type: 'modal', callback_id: 'mq_build_submit', private_metadata: JSON.stringify({ draft_id: String(draft._id) }),
     title: { type: 'plain_text', text: betaTitle(t('mq_modal_title')) }, submit: { type: 'plain_text', text: trimText(t('btn_create'), 24) }, close: { type: 'plain_text', text: trimText(t('btn_cancel'), 24) }, blocks };
@@ -1435,10 +1449,12 @@ async function handleBuilderSubmit({ ack, body, view, client, context }) {
   const draft = await loadDraft(pm.draft_id);
   const teamId = (body.team && body.team.id) || (body.enterprise && body.enterprise.id) || (view.team_id) || (draft && draft.team);
   const defs = await teamDefaults(teamId);
-  const lang = (draft && draft.settings && draft.settings.user_lang) || defs.app_lang || 'en';
-  const t = (k, p) => (p ? parameterizedString(stri18n(lang, k), p) : stri18n(lang, k));
-  if (!draft) { await ack({ response_action: 'errors', errors: { mq_b_title: t('mq_b_err_expired') } }); return; }
+  if (!draft) { await ack({ response_action: 'errors', errors: { mq_b_title: stri18n(defs.app_lang || 'en', 'mq_b_err_expired') } }); return; }
+  // syncRootState writes the just-picked mq_lang into draft.settings.user_lang — must run BEFORE we
+  // read `lang`, else the poll posts (+ Command Info) in the STALE/default language (was the bug).
   await syncRootState(view, draft);
+  const lang = (draft.settings && draft.settings.user_lang) || defs.app_lang || 'en';
+  const t = (k, p) => (p ? parameterizedString(stri18n(lang, k), p) : stri18n(lang, k));
   // Advanced mode: surface DSL parse errors (visual questions were validated per-sub-modal).
   if (draft.mode === 'advanced') {
     const dsl = (view.state.values.mq_form && view.state.values.mq_form.v && view.state.values.mq_form.v.value) || '';
