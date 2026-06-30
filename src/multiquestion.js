@@ -327,15 +327,18 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
       else if (answeredBy.length === 0) summary = stri18n(userLang, 'info_no_vote');
       else if (anonymous) summary = parameterizedString(stri18n(userLang, 'mq_answered'), { count: answeredBy.length });
       else {
-        // Cap rendered answers so a popular question can't push the section past
-        // Slack's 3000-char limit (which would make chat.update fail).
-        const shown = answeredBy.slice(0, MAX_VOTER_MENTIONS).map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
-        const extra = answeredBy.length - Math.min(answeredBy.length, MAX_VOTER_MENTIONS);
+        // Cap rendered answers (long free text) so the section can't exceed Slack's
+        // 3000-char limit. A dedicated, smaller cap than option-voter @mentions: each
+        // answer line is ~80+ chars, so 25 × ~95 ≈ 2375 stays comfortably under.
+        const ANS_CAP = 25;
+        const shown = answeredBy.slice(0, ANS_CAP).map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
+        const extra = answeredBy.length - Math.min(answeredBy.length, ANS_CAP);
         summary = shown + (extra > 0 ? `\n${parameterizedString(stri18n(userLang, 'mq_more'), { count: extra })}` : '');
       }
       blocks.push({
         type: 'section',
-        text: { type: 'mrkdwn', text: summary || ' ' },
+        // Hard backstop: section text must be <=3000 or chat.update rejects (freezes the poll).
+        text: { type: 'mrkdwn', text: trimText(summary || ' ', 2990) },
         accessory: opts.isClosed ? undefined : {
           type: 'button', action_id: 'mq_answer',
           text: { type: 'plain_text', emoji: true, text: '✏️ ' + stri18n(userLang, 'btn_answer') },
