@@ -127,10 +127,13 @@ const gTrueAnonymous = config.get('true_anonymous');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 const gIsDeleteDataOnRequest = config.get('delete_data_on_poll_delete');
-// Show system/error notices as a Slack MODAL popup (more visible — some users miss the
-// in-channel ephemeral) instead of an ephemeral message. Workspace-overridable. config.has
-// guard + default true so adding this key never crashes an existing config that lacks it.
-const gSystemMessageViaModal = config.has('system_message_via_modal') ? config.get('system_message_via_modal') : true;
+// How to deliver system/error notices to the acting user: 'both' (a modal popup AND the
+// in-channel ephemeral — the default, so a missed ephemeral is still surfaced), 'modal'
+// (modal only; falls back to ephemeral when no fresh trigger is available), or 'text'
+// (ephemeral only — the original behavior). Invalid/absent → 'both'. Workspace-overridable.
+// config.has guard so adding this key never crashes a config that lacks it.
+const normNotifyMethod = (v) => (v === 'modal' || v === 'text' || v === 'both') ? v : 'both';
+const gAppUserNotificationMethod = normNotifyMethod(config.has('app_user_notification_method') ? config.get('app_user_notification_method') : 'both');
 const gLogLevelApp = config.get('log_level_app');
 const gLogLevelAppFile = config.get('log_level_app_file');
 const gLogLevelBolt = config.get('log_level_bolt');
@@ -152,7 +155,7 @@ const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? con
 // the same mrkdwn-string storage shape (DB schema unchanged).
 const gIsRichTextInput = config.has('enable_rich_text_input') ? config.get('enable_rich_text_input') : false;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input","show_dashboard_link","show_csv_export","system_message_via_modal"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input","show_dashboard_link","show_csv_export"];
 
 // Integer-valued team overrides. Separate from the true/false list so the
 // /poll config write dispatcher knows to parse the value as a non-negative
@@ -184,6 +187,7 @@ const serverDefaultsForConfig = () => ({
   show_dashboard_link: gIsShowDashboardLink,
   show_csv_export: gIsShowCsvExport,
   enable_poll_edit_max_mins: gEnablePollEditMaxMins,
+  app_user_notification_method: gAppUserNotificationMethod,
 });
 
 // SSOT for "is /poll edit allowed?" — server flag is the default, team override
@@ -2892,6 +2896,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           for (const eachOverrideable of validTeamOverrideConfigInt) {
             validWritePara += `\n/${slackCommand} config write ${eachOverrideable} [number]`;
           }
+          validWritePara += `\n/${slackCommand} config write app_user_notification_method [both/modal/text]`;
 
           validWritePara += '\n' + parameterizedString(stri18n(userLang, 'info_need_help'), {
             email: helpEmail,
@@ -2964,7 +2969,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           } else if (cmdBody.startsWith("reset")) {
             cmdBody = cmdBody.substring(5).trim();
             const resetKey = cmdBody.indexOf(' ') === -1 ? cmdBody : cmdBody.substring(0, cmdBody.indexOf(' '));
-            const resettableKeys = [...validTeamOverrideConfigTF, ...validTeamOverrideConfigInt, 'app_lang', 'display_poller_name'];
+            const resettableKeys = [...validTeamOverrideConfigTF, ...validTeamOverrideConfigInt, 'app_lang', 'display_poller_name', 'app_user_notification_method'];
             let resetTxt;
             if (resetKey === 'all') {
               await orgCol.updateOne(teamFilter, { $unset: { openPollConfig: "" } });
@@ -3006,6 +3011,11 @@ async function processCommand(ack, body, client, command, context, say, respond)
               isWriteValid = true;
             }
 
+            if (inputPara === "app_user_notification_method") {
+              cmdBody = cmdBody.substring(inputPara.length).trim();
+              isWriteValid = true;
+            }
+
             if (isWriteValid) {
               let inputVal = cmdBody.trim();
               if (inputPara === "app_lang") {
@@ -3034,6 +3044,23 @@ async function processCommand(ack, body, client, command, context, say, respond)
                       user: userId,
                       //blocks: blocks,
                       text: `Usage: display_poller_name [tag/none]`,
+                    };
+                    await postChat(body.response_url, 'ephemeral', mRequestBody);
+                    return;
+                }
+              } else if (inputPara === "app_user_notification_method") {
+                // String enum: both (modal + ephemeral) / modal / text. Invalid rejected.
+                switch (inputVal) {
+                  case "both":
+                  case "modal":
+                  case "text":
+                    break;
+                  default:
+                    let mRequestBody = {
+                      token: context.botToken,
+                      channel: channel,
+                      user: userId,
+                      text: `Usage: app_user_notification_method [both/modal/text]`,
                     };
                     await postChat(body.response_url, 'ephemeral', mRequestBody);
                     return;
@@ -7370,7 +7397,7 @@ async function supportAction(body, client, context) {
 // bot is not a member of the channel (Web API postEphemeral would fail).
 const makeEphemeralReject = (body, context, userLang) => async (msgKey) => {
   if (!body.channel?.id && !body.response_url && !body.trigger_id) return;
-  // Routes through notifyUser → modal popup (system_message_via_modal) or ephemeral fallback.
+  // Routes through notifyUser → modal/text per app_user_notification_method (both default).
   await notifyUser(body, context, stri18n(userLang, msgKey), userLang);
 };
 
@@ -7399,20 +7426,25 @@ async function openModalOrWarn(client, context, body, view, userLang) {
   }
 }
 
-// Show a system/error NOTICE to the acting user. When system_message_via_modal is on
-// (server default true, workspace-overridable) AND a fresh trigger_id is in hand, show a
-// small MODAL popup (more visible — some users miss the in-channel ephemeral); otherwise,
-// or if views.open fails (expired/used trigger, content too big), FALL BACK to the
-// ephemeral (the original behavior) so there's never a regression. `text` is already
-// localized. Use this for user-facing error/notice ephemerals (NOT DMs / recovery msgs).
+// Show a system/error NOTICE to the acting user, per app_user_notification_method
+// (server default 'both', workspace-overridable; invalid → 'both'):
+//   both  → a MODAL popup (when a fresh trigger_id is in hand) AND the ephemeral text,
+//           so a missed ephemeral is still surfaced;
+//   modal → modal only, but FALL BACK to the ephemeral when no trigger / views.open fails
+//           (expired/used trigger, content too big) so there's never a silent drop;
+//   text  → the ephemeral only (original behavior).
+// A modal can only be shown right after a user interaction (a live, single-use trigger_id);
+// for unattended/async calls (no trigger) this always degrades to the ephemeral.
+// `text` is already localized. Use for user-facing notices (NOT DMs / recovery msgs).
 async function notifyUser(body, context, text, userLang) {
   const lang = userLang || gAppLang;
-  let viaModal = gSystemMessageViaModal;
+  let method = gAppUserNotificationMethod;
   try {
     const tc = await getTeamOverride(getTeamOrEnterpriseId(body));
-    if (tc && tc.hasOwnProperty('system_message_via_modal')) viaModal = tc.system_message_via_modal;
+    if (tc && tc.hasOwnProperty('app_user_notification_method')) method = normNotifyMethod(tc.app_user_notification_method);
   } catch (e) { /* use server default */ }
-  if (viaModal && body && body.trigger_id) {
+  let modalShown = false;
+  if ((method === 'both' || method === 'modal') && body && body.trigger_id) {
     try {
       await app.client.views.open({
         token: context.botToken,
@@ -7424,15 +7456,19 @@ async function notifyUser(body, context, text, userLang) {
           blocks: [{ type: 'section', text: { type: 'mrkdwn', text: truncateForSection(text) } }],
         },
       });
-      return;
-    } catch (e) { /* fall back to ephemeral below */ }
+      modalShown = true;
+    } catch (e) { modalShown = false; }
   }
-  try {
-    await postChat(body && body.response_url ? body.response_url : '', 'ephemeral', {
-      token: context.botToken, channel: body && body.channel ? body.channel.id : undefined,
-      user: body && body.user ? body.user.id : undefined, text,
-    });
-  } catch (e2) { logger.warn(`notifyUser ephemeral fallback failed: ${e2.message}`); }
+  // Ephemeral when the method includes text ('both'/'text'), OR as a fallback when a modal
+  // was wanted ('modal') but couldn't be shown (no trigger / views.open failed).
+  if (method === 'both' || method === 'text' || !modalShown) {
+    try {
+      await postChat(body && body.response_url ? body.response_url : '', 'ephemeral', {
+        token: context.botToken, channel: body && body.channel ? body.channel.id : undefined,
+        user: body && body.user ? body.user.id : undefined, text,
+      });
+    } catch (e2) { logger.warn(`notifyUser ephemeral fallback failed: ${e2.message}`); }
+  }
 }
 
 // Slack caps a section block's text at 3000 chars; keep a margin.
