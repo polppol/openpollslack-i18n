@@ -1163,12 +1163,9 @@ function buildBuilderView(draft, useResponseUrl, langSelectable) {
       initial_option: draft.mode === 'advanced' ? modeOpt('advanced', 'mq_b_mode_advanced') : modeOpt('visual', 'mq_b_mode_visual'),
       options: [modeOpt('visual', 'mq_b_mode_visual'), modeOpt('advanced', 'mq_b_mode_advanced')],
       confirm: { title: { type: 'plain_text', text: trimText(t('mq_switch_title'), 100) }, text: { type: 'mrkdwn', text: trimText(t('mq_b_mode_switch'), 300) }, confirm: { type: 'plain_text', text: trimText(t('mq_switch_ok'), 30) }, deny: { type: 'plain_text', text: trimText(t('mq_switch_deny'), 30) } } } });
-  // Title
-  blocks.push({ type: 'input', block_id: 'mq_b_title', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_title'), 2000) },
-    element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...(draft.title ? { initial_value: draft.title } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_title_ph'), 150) } } });
-
-  // Channel + language — at the TOP (before the questions), mirroring the single create modal so the
-  // user always sees WHERE it posts + which language. Same logic/keys as createModal.
+  // Channel + language at the TOP (mirroring the single create modal so the user always sees WHERE it
+  // posts + which language). Same logic/keys as createModal. The TITLE follows them, just above the
+  // questions (owner pref — keeps the title grouped with the question content).
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } });
   if (useResponseUrl && draft.response_url) {
     blocks.push(contextMd(t('modal_ch_response_url_auto')));
@@ -1183,6 +1180,9 @@ function buildBuilderView(draft, useResponseUrl, langSelectable) {
         ...(langList[lang] ? { initial_option: { text: { type: 'plain_text', text: trimText(langList[lang] || lang, 75) }, value: lang } } : {}),
         options: Object.keys(langList).map((k) => ({ text: { type: 'plain_text', text: trimText(langList[k] || k, 75) }, value: k })) } });
   }
+  // Title — below the language, right above the questions.
+  blocks.push({ type: 'input', block_id: 'mq_b_title', optional: true, label: { type: 'plain_text', text: trimText(t('mq_field_title'), 2000) },
+    element: { type: 'plain_text_input', action_id: 'v', max_length: 150, ...(draft.title ? { initial_value: draft.title } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_title_ph'), 150) } } });
   blocks.push(divider());
 
   if (draft.mode === 'advanced') {
