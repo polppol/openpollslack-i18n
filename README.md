@@ -355,6 +355,7 @@ Usage:
 /poll config write enable_rich_text_input [true/false]
 /poll config write show_dashboard_link [true/false]
 /poll config write show_csv_export [true/false]
+/poll config write app_user_notification_method [both/modal/text]
 ```
 - `read` (alias `list`) shows every setting with its **effective value** and whether it comes from a team override or the server default.
 - `reset [config_name]` removes one team override (the setting falls back to the server default); `reset all` removes every override.
@@ -395,6 +396,7 @@ Usage:
 - `dashboard_link_ttl_s` (default `300`): lifetime in seconds of a minted dashboard token.
 - `show_dashboard_link` (default `false`): show the **View on dashboard** menu entry (requires `dashboard_url` + `dashboard_link_secret`). Per-team overridable via `/poll config write show_dashboard_link [true/false]`.
 - `show_csv_export` (default `true`): show the **Export to CSV** menu entry. Per-team overridable via `/poll config write show_csv_export [true/false]`.
+- `app_user_notification_method` (default `both`): how system/error notices — and the **anonymous vote/unvote feedback** (an anonymous vote shows no name, so this is the voter's only confirmation it registered) — are delivered to the acting user. `both` = a **modal popup AND** the in-channel ephemeral (so a notice some users miss as an ephemeral is still surfaced); `modal` = modal only (falls back to the ephemeral when there's no live interaction trigger, e.g. an async message); `text` = ephemeral only (the original behavior). Any invalid value falls back to `both`. A modal can only be shown right after a user interaction, so notices without a live trigger always degrade to the ephemeral. Per-team overridable via `/poll config write app_user_notification_method [both/modal/text]`.
 - `log_level_app` Log level of app(console); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_app_file` Log level of app(file); valid options are: `debug` `verbose` `info` `warn` `error`
 - `log_level_bolt` Log level of Bolt(console); valid options are: `debug` `verbose` `info` `warn` `error`
