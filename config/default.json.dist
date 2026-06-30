@@ -50,5 +50,5 @@
   "schedule_max_run": 365,
   "schedule_auto_delete_invalid_day": 30,
   "display_poller_name": "tag",
-  "system_message_via_modal": true
+  "app_user_notification_method": "both"
 }
