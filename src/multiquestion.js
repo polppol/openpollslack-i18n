@@ -238,6 +238,30 @@ function divider() { return { type: 'divider' }; }
 function sectionMd(text) { return { type: 'section', text: { type: 'mrkdwn', text: trimText(text, 2990) } }; }
 function contextMd(text) { return { type: 'context', elements: [{ type: 'mrkdwn', text }] }; }
 
+/** Channel section, mirroring the single poll's create modal (SSOT for both the builder and the
+ *  legacy DSL modal). NO default_to_current_conversation — the user picks (single doesn't auto-guess,
+ *  esp. wrong from a shortcut). `check` ('ok'|'no'|'err'|null) renders single's bot-in-channel result
+ *  line under the picker, reusing single's i18n keys. response_url mode → the "current channel" notice,
+ *  no picker (unchanged). `dispatch` makes the select fire a block_action so we can validate on pick. */
+function mqChannelBlocks(channel, useResponseUrl, responseUrl, lang, { dispatch = false, check = null } = {}) {
+  const t = (k) => stri18n(lang, k);
+  const out = [{ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } }];
+  if (useResponseUrl && responseUrl) { out.push(contextMd(t('modal_ch_response_url_auto'))); return out; }
+  out.push({
+    type: 'input', block_id: 'mq_channel', optional: true, ...(dispatch ? { dispatch_action: true } : {}),
+    label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
+    element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, ...(channel ? { initial_conversation: channel } : {}) },
+  });
+  const params = { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' };
+  let line;
+  if (check === 'ok') line = t('modal_bot_in_ch');                                            // ✅ can post (single's key)
+  else if (check === 'no') line = parameterizedString(t('modal_bot_not_in_ch'), params);      // ✖️ invite the bot
+  else if (check === 'err') line = t('err_poll_ch_exception');                                // couldn't check
+  else line = useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), params) : t('modal_ch_warn');
+  out.push(contextMd(line));
+  return out;
+}
+
 // Cap how many voter mentions we render per option so a popular non-anonymous
 // option can't push a section past Slack's 3000-char limit (which would make the
 // whole chat.update fail on the next interaction). Excess are summarized.
@@ -449,16 +473,10 @@ function buildCreateModalView(channelId, responseUrl, lang, initialForm, langSel
         element: { type: 'plain_text_input', action_id: 'v', multiline: true, max_length: 3000, ...(initialForm ? { initial_value: String(initialForm).slice(0, 3000) } : {}), placeholder: { type: 'plain_text', text: trimText(t('mq_field_questions_ph'), 150) } } },
       { type: 'context', elements: [{ type: 'mrkdwn', text: `${t('mq_field_questions_hint')}  📖 <https://github.com/polppol/openpollslack-i18n/blob/main/README.md#multi-question-polls-forms|${t('mq_howto')} ↗>` }] },
       // Channel section — mirrors the single-question poll exactly (same i18n keys):
-      // in response_url mode the poll auto-posts to the command's channel (no selector,
-      // no bot membership needed); otherwise a channel picker + the bot-invite warning.
-      { type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } },
-      ...((useResponseUrl && responseUrl) ? [
-        { type: 'context', elements: [{ type: 'mrkdwn', text: t('modal_ch_response_url_auto') }] },
-      ] : [
-        { type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
-          element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(channelId ? { initial_conversation: channelId } : {}) } },
-        { type: 'context', elements: [{ type: 'mrkdwn', text: useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn') }] },
-      ]),
+      // Channel section via the shared mqChannelBlocks helper (SSOT — same as the builder): in
+      // response_url mode the poll auto-posts to the command's channel (no selector); otherwise a
+      // channel picker (no auto-guess) + the bot-invite warning. No live validation here (no dispatch).
+      ...mqChannelBlocks(channelId, useResponseUrl, responseUrl, lang),
       // Per-poll language selector (single-question parity) — only when the team
       // allows it (app_lang_user_selectable). Options come from the loaded languages.
       ...((langSelectable && Object.keys(langList).length) ? [{
@@ -1128,6 +1146,9 @@ async function syncRootState(view, draft) {
   if (v.mq_b_title && v.mq_b_title.v) patch.title = (v.mq_b_title.v.value || '').trim();
   if (v.mq_b_settings && v.mq_b_settings.v) { const sel = (v.mq_b_settings.v.selected_options || []).map((o) => o.value); patch['settings.anonymous'] = sel.includes('anonymous'); patch['settings.hidden'] = sel.includes('hidden'); }
   if (v.mq_channel && v.mq_channel.v && v.mq_channel.v.selected_conversation) patch.channel = v.mq_channel.v.selected_conversation;
+  // Drop a stale bot-in-channel result if the channel changed (so a re-render from another action
+  // never shows a check that belongs to a different channel; the channel-pick handler re-sets it).
+  if ('channel' in patch && patch.channel !== draft.channel) patch.channelCheck = null;
   if (v.mq_lang && v.mq_lang.v && v.mq_lang.v.selected_option) patch['settings.user_lang'] = v.mq_lang.v.selected_option.value;
   if (draft.mode === 'advanced' && v.mq_form && v.mq_form.v) {
     const lang = (draft.settings && draft.settings.user_lang) || 'en';
@@ -1139,6 +1160,7 @@ async function syncRootState(view, draft) {
   if ('settings.anonymous' in patch) draft.settings.anonymous = patch['settings.anonymous'];
   if ('settings.hidden' in patch) draft.settings.hidden = patch['settings.hidden'];
   if ('channel' in patch) draft.channel = patch.channel;
+  if ('channelCheck' in patch) draft.channelCheck = patch.channelCheck;
   if ('settings.user_lang' in patch) draft.settings.user_lang = patch['settings.user_lang'];
   if ('questions' in patch) draft.questions = patch.questions;
 }
@@ -1164,16 +1186,10 @@ function buildBuilderView(draft, useResponseUrl, langSelectable) {
       options: [modeOpt('visual', 'mq_b_mode_visual'), modeOpt('advanced', 'mq_b_mode_advanced')],
       confirm: { title: { type: 'plain_text', text: trimText(t('mq_switch_title'), 100) }, text: { type: 'mrkdwn', text: trimText(t('mq_b_mode_switch'), 300) }, confirm: { type: 'plain_text', text: trimText(t('mq_switch_ok'), 30) }, deny: { type: 'plain_text', text: trimText(t('mq_switch_deny'), 30) } } } });
   // Channel + language at the TOP (mirroring the single create modal so the user always sees WHERE it
-  // posts + which language). Same logic/keys as createModal. The TITLE follows them, just above the
-  // questions (owner pref — keeps the title grouped with the question content).
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t('modal_ch_manual_select') } });
-  if (useResponseUrl && draft.response_url) {
-    blocks.push(contextMd(t('modal_ch_response_url_auto')));
-  } else {
-    blocks.push({ type: 'input', block_id: 'mq_channel', optional: true, label: { type: 'plain_text', text: trimText(t('modal_ch_select'), 2000) },
-      element: { type: 'conversations_select', action_id: 'v', filter: { include: ['private', 'public'] }, default_to_current_conversation: true, ...(draft.channel ? { initial_conversation: draft.channel } : {}) } });
-    blocks.push(contextMd(useResponseUrl ? parameterizedString(t('modal_ch_warn_with_response_url'), { slack_command: _opts.slackCommand || 'poll', bot_name: _opts.botName || 'Open Poll Plus' }) : t('modal_ch_warn')));
-  }
+  // posts + which language). The TITLE follows them, just above the questions (owner pref — keeps the
+  // title grouped with the question content). Channel section via the shared mqChannelBlocks helper
+  // (SSOT) — user picks (no auto-guess), validates the bot can post on selection (dispatch:true).
+  blocks.push(...mqChannelBlocks(draft.channel, useResponseUrl, draft.response_url, lang, { dispatch: true, check: draft.channelCheck || null }));
   if (langSelectable && Object.keys(langList).length) {
     blocks.push({ type: 'input', block_id: 'mq_lang', optional: true, label: { type: 'plain_text', text: trimText(t('info_lang_select_label'), 2000) },
       element: { type: 'static_select', action_id: 'v', placeholder: { type: 'plain_text', text: trimText(t('info_lang_select_hint'), 150) },
@@ -1376,6 +1392,31 @@ async function handleAddQuestion({ ack, body, client, context }) {
   try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, null) }); } catch (e) { logBuilderErr('handleAddQuestion views.push', e); }
 }
 
+/** A channel was picked in the builder: validate the bot can post (mirrors single's
+ *  modal_poll_channel check — conversations.info) and re-render the root with the ✅/✖️ result. */
+async function handleChannelPick({ ack, body, action, client, context }) {
+  await ack();
+  const picked = action && (action.selected_conversation || action.selected_channel);
+  if (!picked) return;
+  let pm = {}; try { pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
+  const draft = await loadDraft(pm.draft_id); if (!draft) return; // legacy modal has no draft → no-op
+  if (draft.user_id && body.user.id !== draft.user_id) return;
+  await syncRootState(body.view, draft); // capture title/questions/settings/lang FIRST — don't lose typing
+  draft.channel = picked;
+  let isChFound = true, isChErr = false;
+  try {
+    await client.conversations.info({ token: context.botToken, channel: picked }); // same check as single
+  } catch (e) {
+    const m = (e && e.message) || '';
+    if (m.includes('channel_not_found') || m.includes('team_not_found') || m.includes('team_access_not_granted')) isChFound = false;
+    else isChErr = true; // transient / unknown — tell the user to retry, don't claim "not in channel"
+  }
+  draft.channelCheck = isChErr ? 'err' : (isChFound ? 'ok' : 'no');
+  await patchDraft(draft._id, { channel: draft.channel, channelCheck: draft.channelCheck });
+  dbg('handleChannelPick', { draft: String(draft._id), channel: picked, check: draft.channelCheck });
+  await rerenderBuilder(client, context.botToken, draft, body.view.id);
+}
+
 async function handleQMenu({ ack, body, action, client, context }) {
   await ack();
   let pm = {}; try { pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); } catch (e) { /* noop */ }
@@ -1506,6 +1547,9 @@ function register(app) {
   // Visual builder
   app.action('mq_b_mode', wrap(handleBuilderMode, 'mq_b_mode'));
   app.action('mq_b_add_q', wrap(handleAddQuestion, 'mq_b_add_q'));
+  // mq_channel uses the generic action_id 'v' (input element) but dispatches on pick — constrain by
+  // block_id+action_id so it doesn't collide with the other 'v' inputs (which don't dispatch).
+  app.action({ block_id: 'mq_channel', action_id: 'v' }, wrap(handleChannelPick, 'mq_channel'));
   app.action('mq_b_qmenu', wrap(handleQMenu, 'mq_b_qmenu'));
   app.action('mq_q_type', wrap(handleQType, 'mq_q_type'));
   app.action('mq_q_add_opt', wrap(handleQAddOpt, 'mq_q_add_opt'));
