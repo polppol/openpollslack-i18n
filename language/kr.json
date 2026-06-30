@@ -215,5 +215,7 @@
   "mq_qtype_datetime": "날짜 및 시간",
   "mq_qtype_email": "이메일",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "선택지 추가"
+  "mq_b_add_option": "선택지 추가",
+  "info_vote_count_one": "{{count}}표",
+  "info_vote_count_many": "{{count}}표"
 }

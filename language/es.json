@@ -215,5 +215,7 @@
   "mq_qtype_datetime": "Fecha y hora",
   "mq_qtype_email": "Correo electrónico",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "Añadir opción"
+  "mq_b_add_option": "Añadir opción",
+  "info_vote_count_one": "{{count}} voto",
+  "info_vote_count_many": "{{count}} votos"
 }

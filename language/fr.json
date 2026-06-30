@@ -243,5 +243,7 @@
   "mq_qtype_datetime": "Date et heure",
   "mq_qtype_email": "E-mail",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "Ajouter une option"
+  "mq_b_add_option": "Ajouter une option",
+  "info_vote_count_one": "{{count}} vote",
+  "info_vote_count_many": "{{count}} votes"
 }

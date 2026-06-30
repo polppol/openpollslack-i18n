@@ -215,5 +215,7 @@
   "mq_qtype_datetime": "日付と時刻",
   "mq_qtype_email": "メール",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "選択肢を追加"
+  "mq_b_add_option": "選択肢を追加",
+  "info_vote_count_one": "{{count}} 票",
+  "info_vote_count_many": "{{count}} 票"
 }

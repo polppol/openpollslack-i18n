@@ -215,5 +215,7 @@
   "mq_qtype_datetime": "Päivämäärä ja aika",
   "mq_qtype_email": "Sähköposti",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "Lisää vaihtoehto"
+  "mq_b_add_option": "Lisää vaihtoehto",
+  "info_vote_count_one": "{{count}} ääni",
+  "info_vote_count_many": "{{count}} ääntä"
 }

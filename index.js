@@ -5130,22 +5130,23 @@ async function createModal(context, client, trigger_id,response_url,channel,exis
         // It's a SECTION accessory (not an input), so the legacy submit never sees it.
         type: 'section',
         block_id: 'mq_poll_type_blk',
-        text: { type: 'mrkdwn', text: '*Poll type*' },
+        text: { type: 'mrkdwn', text: `*${stri18n(appLang, 'mq_poll_type')}*` },
         accessory: {
           type: 'static_select',
           action_id: 'mq_poll_type',
-          initial_option: { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
+          // Reuse the translated multi-question keys (present in all 11 langs).
+          initial_option: { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_single') }, value: 'single' },
           options: [
-            { text: { type: 'plain_text', text: 'Single question' }, value: 'single' },
-            { text: { type: 'plain_text', text: 'Multi-question form' }, value: 'multi' },
+            { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_single') }, value: 'single' },
+            { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_multi') }, value: 'multi' },
           ],
           // Warn before switching — swapping the modal clears whatever was entered.
           // If the user denies, Slack reverts the dropdown and nothing is lost.
           confirm: {
-            title: { type: 'plain_text', text: 'Switch poll type?' },
-            text: { type: 'mrkdwn', text: 'Anything you have entered here will be cleared.' },
-            confirm: { type: 'plain_text', text: 'Switch' },
-            deny: { type: 'plain_text', text: 'Keep editing' },
+            title: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_title') },
+            text: { type: 'mrkdwn', text: stri18n(appLang, 'mq_switch_text') },
+            confirm: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_ok') },
+            deny: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_deny') },
           },
         },
       },

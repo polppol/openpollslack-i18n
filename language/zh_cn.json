@@ -213,5 +213,7 @@
   "mq_qtype_datetime": "日期和时间",
   "mq_qtype_email": "电子邮件",
   "mq_qtype_url": "网址",
-  "mq_b_add_option": "添加选项"
+  "mq_b_add_option": "添加选项",
+  "info_vote_count_one": "{{count}} 票",
+  "info_vote_count_many": "{{count}} 票"
 }

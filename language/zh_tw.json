@@ -213,5 +213,7 @@
   "mq_qtype_datetime": "日期與時間",
   "mq_qtype_email": "電子郵件",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "新增選項"
+  "mq_b_add_option": "新增選項",
+  "info_vote_count_one": "{{count}} 票",
+  "info_vote_count_many": "{{count}} 票"
 }

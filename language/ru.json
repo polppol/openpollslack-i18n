@@ -215,5 +215,7 @@
   "mq_qtype_datetime": "Дата и время",
   "mq_qtype_email": "Эл. почта",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "Добавить вариант"
+  "mq_b_add_option": "Добавить вариант",
+  "info_vote_count_one": "{{count}} голос",
+  "info_vote_count_many": "{{count}} голосов"
 }
