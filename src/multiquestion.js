@@ -254,7 +254,14 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   if (para.hidden) pollActions.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
   if (!(anonymous && para.true_anonymous)) pollActions.push(mopt('menu_all_user_vote', { a: 'allvotes', poll_id: pollId }));
   pollActions.push(mopt(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll', { a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }));
-  pollActions.push(mopt('menu_delete_poll', { a: 'delete', poll_id: pollId }));
+  // Delete is destructive — guard with a native confirm dialog (mirrors the single-poll
+  // delete-confirm; handleMenu also re-checks creator ownership). Reuses single's keys.
+  pollActions.push({ ...mopt('menu_delete_poll', { a: 'delete', poll_id: pollId }), confirm: {
+    title: { type: 'plain_text', text: trimText(stri18n(userLang, 'menu_are_you_sure'), 100) },
+    text: { type: 'mrkdwn', text: trimText(stri18n(userLang, 'task_delete_refer_warn'), 300) },
+    confirm: { type: 'plain_text', text: trimText(stri18n(userLang, 'menu_delete_poll'), 30) },
+    deny: { type: 'plain_text', text: trimText(stri18n(userLang, 'btn_cancel'), 30) },
+  } });
   if (para.show_dashboard_link) pollActions.push(mopt('menu_view_on_dashboard', { a: 'dashboard', poll_id: pollId }));
   const userActions = [mopt('menu_user_self_vote', { a: 'myvotes', poll_id: pollId }), mopt('menu_command_info', { a: 'cmdinfo', poll_id: pollId })];
   const menuAccessory = {
