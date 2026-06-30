@@ -1210,7 +1210,18 @@ async function openBuilder({ client, triggerId, viewId, channel, responseUrl, te
 function logBuilderErr(where, e) {
   const d = e && e.data;
   const detail = d ? `${d.error}${d.response_metadata && d.response_metadata.messages ? ' :: ' + d.response_metadata.messages.join(' | ') : ''}` : (e && e.message);
-  console.error(`[mq builder] ${where} failed: ${detail}`);
+  const msg = `[mq builder] ${where} failed: ${detail}`;
+  if (_opts.logger) _opts.logger.error(msg); else console.error(msg);
+}
+
+// Deep trace — only emitted at the 'debug' log level (set log_level_app/app_file: "debug").
+// Silent at info+, so it never spams normal logs. Routes through winston so it reaches the
+// log files + the debug-interface ring.
+function dbg(msg, obj) {
+  if (!_opts.logger) return;
+  let s = '[mq] ' + msg;
+  if (obj !== undefined) { try { s += ' ' + JSON.stringify(obj); } catch (e) { s += ' (unserializable)'; } }
+  _opts.logger.debug(s);
 }
 
 async function rerenderBuilder(client, token, draft, viewId) {
@@ -1238,6 +1249,7 @@ async function handleAddQuestion({ ack, body, client, context }) {
   if ((draft.questions || []).length >= MAX_QUESTIONS) return;
   const lang = (draft.settings && draft.settings.user_lang) || 'en';
   const ctx = { draft_id: String(draft._id), root_view_id: body.view.id, qIndex: -1, lang };
+  dbg('handleAddQuestion', { draft: String(draft._id), qcount: (draft.questions || []).length });
   try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, null) }); } catch (e) { logBuilderErr('handleAddQuestion views.push', e); }
 }
 
@@ -1277,6 +1289,7 @@ async function handleQType({ ack, body, action, client, context }) {
   else if (q.options && q.options.length) ctx.optsStash = q.options.slice();
   q.type = (action.selected_option && action.selected_option.value) || q.type;
   if (q.type === 'choice' && (!q.options || !q.options.length) && ctx.optsStash && ctx.optsStash.length) q.options = ctx.optsStash.slice();
+  dbg('handleQType', { to: q.type, text: q.text, opts: (q.options || []).length, optsStash: (ctx.optsStash || []).length });
   try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { logBuilderErr('handleQType views.update', e); }
 }
 
@@ -1295,6 +1308,7 @@ async function handleQuestionSubmit({ ack, body, view, client, context }) {
   const lang = ctx.lang || 'en';
   const q = readQuestionFromView(view);
   if (q.type === 'yesno') { q.options = [stri18n(lang, 'mq_yes'), stri18n(lang, 'mq_no')]; q.multi = false; } // keep the draft consistent (ids normalized at final submit)
+  dbg('handleQuestionSubmit', { type: q.type, hasText: !!q.text, opts: (q.options || []).length, qIndex: ctx.qIndex });
   if (!q.text) { await ack({ response_action: 'errors', errors: { mq_q_text: stri18n(lang, 'mq_b_err_need_text') } }); return; }
   if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { mq_q_opt_0: stri18n(lang, 'mq_b_err_2opts') } }); return; } // mq_q_opt_0 is always rendered (optRows>=2)
   await ack(); // pops the sub-modal back to the root
@@ -1380,8 +1394,8 @@ function wrap(fn, name) {
     try { await fn(args); }
     catch (e) {
       try { if (args.ack) await args.ack(); } catch (_) { /* already acked */ }
-      // eslint-disable-next-line no-console
-      console.error(`[multiquestion] ${name} failed: ${e && e.message}`);
+      const msg = `[multiquestion] ${name} failed: ${e && e.message}${e && e.stack ? '\n' + e.stack : ''}`;
+      if (_opts.logger) _opts.logger.error(msg); else console.error(msg); // eslint-disable-line no-console
     }
   };
 }

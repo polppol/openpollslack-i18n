@@ -88,6 +88,8 @@ const { createLogger, format, transports } = require('winston');
 require('winston-daily-rotate-file'); // side-effect: registers transports.DailyRotateFile
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const WinstonTransport = require('winston-transport');
 const crypto = require('node:crypto');
 //const moment = require('moment');
 const moment = require('moment-timezone');
@@ -131,6 +133,20 @@ const gTrueAnonymous = config.get('true_anonymous');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 const gIsDeleteDataOnRequest = config.get('delete_data_on_poll_delete');
+// Debug log HTTP interface: a read-only port that serves the app's logs over plain HTTP so
+// they can be fetched remotely while debugging (pair with log_level_*: "debug"). 0 = OFF
+// (default). DEBUG ONLY — exposes logs (may contain ids/payloads); keep it firewalled / LAN.
+// config.has guard + default 0 so adding the key never crashes a config that lacks it.
+const gDebugInterface = config.has('debug_interface') ? (Number(config.get('debug_interface')) || 0) : 0;
+// In-memory ring of recent log lines, populated only when the debug interface is on, so the
+// port can serve a live tail even when log_to_file is off. Bounded (no unbounded growth).
+const DEBUG_RING_MAX = 5000;
+const _debugRing = [];
+const _RING_MSG = Symbol.for('message');
+function _ringPush(line) { _debugRing.push(line); if (_debugRing.length > DEBUG_RING_MAX) _debugRing.shift(); }
+class RingTransport extends WinstonTransport {
+  log(info, callback) { try { _ringPush(info[_RING_MSG] || `${info.level}: ${info.message}`); } catch (e) { /* never let logging throw */ } callback(); }
+}
 // How to deliver system/error notices to the acting user: 'both' (a modal popup AND the
 // in-channel ephemeral — the default, so a missed ephemeral is still surfaced), 'modal'
 // (modal only; falls back to ephemeral when no fresh trigger is available), or 'text'
@@ -472,6 +488,13 @@ const boltTransportsArray = [
   })
 ];
 
+// When the debug interface is on, mirror BOTH loggers into the in-memory ring (level
+// 'silly' so it captures everything the logger lets through — set log_level_* to "debug").
+if (gDebugInterface) {
+  appTransportsArray.push(new RingTransport({ level: 'silly' }));
+  boltTransportsArray.push(new RingTransport({ level: 'silly' }));
+}
+
 if (gLogToFile) {
   const gLogDir = path.normalize(config.get('log_dir').toString());
   // Create the log directory if it does not exist
@@ -539,6 +562,46 @@ const loggerBolt = createLogger({
   transports: boltTransportsArray
 });
 
+// Strip obvious live secrets from anything served by the debug interface (tokens, Mongo
+// creds). Keeps the trace useful for debugging while not handing out a live bot token.
+function redactDebug(s) {
+  return String(s)
+    .replace(/xox[bpsar]-[A-Za-z0-9-]+/g, 'xox?-REDACTED')
+    .replace(/(mongodb(?:\+srv)?:\/\/[^:@\s]+:)[^@\s]+@/g, '$1REDACTED@')
+    .replace(/(signing_secret|client_secret|state_secret|dashboard_link_secret)("?\s*[:=]\s*"?)[^",\s]+/gi, '$1$2REDACTED');
+}
+// Read-only debug log server (debug_interface port). DEBUG ONLY — plain HTTP, no auth;
+// keep it firewalled / on a trusted LAN. Serves the in-memory ring + the on-disk log files.
+function startDebugInterface() {
+  if (!gDebugInterface) return;
+  const logDir = config.has('log_dir') ? path.normalize(String(config.get('log_dir'))) : 'logs';
+  const esc = (t) => t.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const srv = http.createServer((req, res) => {
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      const send = (code, type, body) => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(body); };
+      if (u.pathname === '/log') {
+        const n = Number(u.searchParams.get('n')) || _debugRing.length;
+        return send(200, 'text/plain; charset=utf-8', redactDebug(_debugRing.slice(-n).join('\n')) + '\n');
+      }
+      if (u.pathname === '/file') {
+        const name = path.basename(String(u.searchParams.get('name') || '')); // basename blocks path traversal
+        if (!name.endsWith('.log')) return send(400, 'text/plain', 'bad name (must be *.log)');
+        let data; try { data = fs.readFileSync(path.join(logDir, name), 'utf8'); } catch (e) { return send(404, 'text/plain', 'not found'); }
+        return send(200, 'text/plain; charset=utf-8', redactDebug(data));
+      }
+      // index
+      const n = Math.min(Number(u.searchParams.get('n')) || 500, _debugRing.length);
+      let files = []; try { files = fs.readdirSync(logDir).filter((f) => f.endsWith('.log')).sort(); } catch (e) { /* no dir */ }
+      const links = files.map((f) => `<a href="/file?name=${encodeURIComponent(f)}">${f}</a>`).join('<br>') || '(none — log_to_file is off; ring buffer only)';
+      const tail = esc(redactDebug(_debugRing.slice(-n).join('\n')));
+      send(200, 'text/html; charset=utf-8', `<!doctype html><meta charset="utf-8"><title>Open Poll debug</title><body style="font-family:monospace;background:#111;color:#ddd"><h3>Open Poll — debug interface</h3><p><b>DEBUG ONLY</b> · plain HTTP · no auth · keep firewalled.</p><p>Log files: ${links}</p><p>Ring: <a href="/log">full</a> · <a href="/log?n=500">last 500</a> · <a href="/?n=2000">2000 inline</a></p><h4>Last ${n} ring lines</h4><pre style="white-space:pre-wrap">${tail}</pre></body>`);
+    } catch (e) { try { res.writeHead(500); res.end('debug interface error'); } catch (_) { /* noop */ } }
+  });
+  srv.on('error', (e) => logger.error(`Debug interface FAILED on port ${gDebugInterface}: ${e.message}`));
+  srv.listen(gDebugInterface, '0.0.0.0', () => logger.info(`DEBUG INTERFACE listening on :${gDebugInterface} (logs over plain HTTP — DEBUG ONLY, keep firewalled / LAN)`));
+}
+
 logger.info('Server starting...');
 
 try {
@@ -559,6 +622,9 @@ try {
   // single-question modal does.
   mq.init(db, {
     slackCommand,
+    // Winston logger so the builder's traces (logger.debug — show at log_level_*: "debug")
+    // and swallowed-API errors land in the log files + the debug-interface ring.
+    logger,
     // Reuse the single-question poll's response_url posting so forms can post to the
     // command's channel without the bot being a member. postChat is a thunk because it's
     // declared later in this file (avoids the const TDZ at this call site).
@@ -4276,6 +4342,8 @@ const createModalBlockInputDelete = (userLang)  => {
   await app.start(process.env.PORT || port);
 
   logger.info('Bolt app is running!');
+
+  startDebugInterface(); // no-op unless debug_interface > 0
 
   logger.info('Check and start cron jobs.');
   // Verify every stored cron_string still parses under the current
