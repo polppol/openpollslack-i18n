@@ -136,5 +136,6 @@
   "poll_export_not_found": "Encuesta no encontrada. Verifica el Poll ID desde `Command info` en el menú de la encuesta.",
   "poll_export_no_permission": "Solo el creador de la encuesta puede exportar los resultados.",
   "poll_export_header": "Exportación de la encuesta `{{poll_id}}`:",
-  "poll_export_truncated": ":warning: La salida superó `{{max}}` caracteres y fue truncada."
+  "poll_export_truncated": ":warning: La salida superó `{{max}}` caracteres y fue truncada.",
+  "info_notice_title": "Aviso"
 }

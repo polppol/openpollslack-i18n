@@ -164,5 +164,6 @@
   "poll_export_not_found": "Sondage introuvable. Vérifiez le Poll ID dans `Command info` du menu du sondage.",
   "poll_export_no_permission": "Seul le créateur du sondage peut exporter les résultats.",
   "poll_export_header": "Export du sondage `{{poll_id}}` :",
-  "poll_export_truncated": ":warning: La sortie a dépassé `{{max}}` caractères et a été tronquée."
+  "poll_export_truncated": ":warning: La sortie a dépassé `{{max}}` caractères et a été tronquée.",
+  "info_notice_title": "Avis"
 }

@@ -134,5 +134,6 @@
   "poll_export_not_found": "未找到投票。请从投票菜单的 `Command info` 中检查 Poll ID。",
   "poll_export_no_permission": "只有投票创建者才能导出结果。",
   "poll_export_header": "投票 `{{poll_id}}` 的导出：",
-  "poll_export_truncated": ":warning: 输出超过 `{{max}}` 个字符，已被截断。"
+  "poll_export_truncated": ":warning: 输出超过 `{{max}}` 个字符，已被截断。",
+  "info_notice_title": "提示"
 }

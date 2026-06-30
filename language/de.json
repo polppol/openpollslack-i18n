@@ -136,5 +136,6 @@
   "poll_export_not_found": "Umfrage nicht gefunden. Prüfen Sie die Poll ID unter `Command info` im Umfragemenü.",
   "poll_export_no_permission": "Nur der Ersteller der Umfrage kann Ergebnisse exportieren.",
   "poll_export_header": "Export der Umfrage `{{poll_id}}`:",
-  "poll_export_truncated": ":warning: Ausgabe überschritt `{{max}}` Zeichen und wurde gekürzt."
+  "poll_export_truncated": ":warning: Ausgabe überschritt `{{max}}` Zeichen und wurde gekürzt.",
+  "info_notice_title": "Hinweis"
 }

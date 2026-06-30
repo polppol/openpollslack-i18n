@@ -136,5 +136,6 @@
   "poll_export_not_found": "投票が見つかりません。投票メニューの `Command info` から Poll ID を確認してください。",
   "poll_export_no_permission": "投票の作成者のみが結果をエクスポートできます。",
   "poll_export_header": "投票 `{{poll_id}}` のエクスポート:",
-  "poll_export_truncated": ":warning: 出力が `{{max}}` 文字を超えたため、切り詰められました。"
+  "poll_export_truncated": ":warning: 出力が `{{max}}` 文字を超えたため、切り詰められました。",
+  "info_notice_title": "お知らせ"
 }

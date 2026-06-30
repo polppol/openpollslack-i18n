@@ -172,5 +172,6 @@
   "info_note_label": "หมายเหตุ: {{value}}",
   "info_schedule_close_failed": "การปิดโพลอัตโนมัติของคุณล้มเหลวสำหรับโพลด้านล่าง โพลยัง*ไม่ถูกปิด* หากจำเป็นกรุณาปิดเอง\n*คำถาม:* {{question}}\n*Poll ID:* `{{poll_id}}`\n*สาเหตุ:* {{reason}}",
   "task_scheduled_time_missing": "กรุณาเลือกวันที่และเวลา หากไม่เห็นตัวเลือกวันเวลา ให้ลองเลือก `{{task_scheduled_later}}` อีกครั้งแล้วรอสักครู่ให้ตัวเลือกแสดงขึ้นมา",
-  "task_scheduled_later": "ตั้งเวลา"
+  "task_scheduled_later": "ตั้งเวลา",
+  "info_notice_title": "แจ้งเตือน"
 }
