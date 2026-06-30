@@ -78,12 +78,18 @@ const { parseNextRun, humanizeCron, auditSchedules } = require('./src/util/cron'
 const { richTextToMrkdwn, mrkdwnToRichText, readInputAsMrkdwn } = require('./src/util/richtext');
 const { langDict, langList, parameterizedString, stri18n, slackNumToEmoji, loadLanguages } = require('./src/i18n');
 
+// Multi-question polls ("forms") — self-contained, additive, backward-compatible.
+// Legacy single-question polls never enter this module (it owns its own mq_* ids).
+const mq = require('./src/multiquestion');
+
 const cron = require('node-cron');
 
 const { createLogger, format, transports } = require('winston');
 require('winston-daily-rotate-file'); // side-effect: registers transports.DailyRotateFile
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const WinstonTransport = require('winston-transport');
 const crypto = require('node:crypto');
 //const moment = require('moment');
 const moment = require('moment-timezone');
@@ -127,6 +133,20 @@ const gTrueAnonymous = config.get('true_anonymous');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 const gIsDeleteDataOnRequest = config.get('delete_data_on_poll_delete');
+// Debug log HTTP interface: a read-only port that serves the app's logs over plain HTTP so
+// they can be fetched remotely while debugging (pair with log_level_*: "debug"). 0 = OFF
+// (default). DEBUG ONLY — exposes logs (may contain ids/payloads); keep it firewalled / LAN.
+// config.has guard + default 0 so adding the key never crashes a config that lacks it.
+const gDebugInterface = config.has('debug_interface') ? (Number(config.get('debug_interface')) || 0) : 0;
+// In-memory ring of recent log lines, populated only when the debug interface is on, so the
+// port can serve a live tail even when log_to_file is off. Bounded (no unbounded growth).
+const DEBUG_RING_MAX = 5000;
+const _debugRing = [];
+const _RING_MSG = Symbol.for('message');
+function _ringPush(line) { _debugRing.push(line); if (_debugRing.length > DEBUG_RING_MAX) _debugRing.shift(); }
+class RingTransport extends WinstonTransport {
+  log(info, callback) { try { _ringPush(info[_RING_MSG] || `${info.level}: ${info.message}`); } catch (e) { /* never let logging throw */ } callback(); }
+}
 // How to deliver system/error notices to the acting user: 'both' (a modal popup AND the
 // in-channel ephemeral — the default, so a missed ephemeral is still surfaced), 'modal'
 // (modal only; falls back to ephemeral when no fresh trigger is available), or 'text'
@@ -468,6 +488,13 @@ const boltTransportsArray = [
   })
 ];
 
+// When the debug interface is on, mirror BOTH loggers into the in-memory ring (level
+// 'silly' so it captures everything the logger lets through — set log_level_* to "debug").
+if (gDebugInterface) {
+  appTransportsArray.push(new RingTransport({ level: 'silly' }));
+  boltTransportsArray.push(new RingTransport({ level: 'silly' }));
+}
+
 if (gLogToFile) {
   const gLogDir = path.normalize(config.get('log_dir').toString());
   // Create the log directory if it does not exist
@@ -535,6 +562,46 @@ const loggerBolt = createLogger({
   transports: boltTransportsArray
 });
 
+// Strip obvious live secrets from anything served by the debug interface (tokens, Mongo
+// creds). Keeps the trace useful for debugging while not handing out a live bot token.
+function redactDebug(s) {
+  return String(s)
+    .replace(/xox[bpsar]-[A-Za-z0-9-]+/g, 'xox?-REDACTED')
+    .replace(/(mongodb(?:\+srv)?:\/\/[^:@\s]+:)[^@\s]+@/g, '$1REDACTED@')
+    .replace(/(signing_secret|client_secret|state_secret|dashboard_link_secret)("?\s*[:=]\s*"?)[^",\s]+/gi, '$1$2REDACTED');
+}
+// Read-only debug log server (debug_interface port). DEBUG ONLY — plain HTTP, no auth;
+// keep it firewalled / on a trusted LAN. Serves the in-memory ring + the on-disk log files.
+function startDebugInterface() {
+  if (!gDebugInterface) return;
+  const logDir = config.has('log_dir') ? path.normalize(String(config.get('log_dir'))) : 'logs';
+  const esc = (t) => t.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const srv = http.createServer((req, res) => {
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      const send = (code, type, body) => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(body); };
+      if (u.pathname === '/log') {
+        const n = Number(u.searchParams.get('n')) || _debugRing.length;
+        return send(200, 'text/plain; charset=utf-8', redactDebug(_debugRing.slice(-n).join('\n')) + '\n');
+      }
+      if (u.pathname === '/file') {
+        const name = path.basename(String(u.searchParams.get('name') || '')); // basename blocks path traversal
+        if (!name.endsWith('.log')) return send(400, 'text/plain', 'bad name (must be *.log)');
+        let data; try { data = fs.readFileSync(path.join(logDir, name), 'utf8'); } catch (e) { return send(404, 'text/plain', 'not found'); }
+        return send(200, 'text/plain; charset=utf-8', redactDebug(data));
+      }
+      // index
+      const n = Math.min(Number(u.searchParams.get('n')) || 500, _debugRing.length);
+      let files = []; try { files = fs.readdirSync(logDir).filter((f) => f.endsWith('.log')).sort(); } catch (e) { /* no dir */ }
+      const links = files.map((f) => `<a href="/file?name=${encodeURIComponent(f)}">${f}</a>`).join('<br>') || '(none — log_to_file is off; ring buffer only)';
+      const tail = esc(redactDebug(_debugRing.slice(-n).join('\n')));
+      send(200, 'text/html; charset=utf-8', `<!doctype html><meta charset="utf-8"><title>Open Poll debug</title><body style="font-family:monospace;background:#111;color:#ddd"><h3>Open Poll — debug interface</h3><p><b>DEBUG ONLY</b> · plain HTTP · no auth · keep firewalled.</p><p>Log files: ${links}</p><p>Ring: <a href="/log">full</a> · <a href="/log?n=500">last 500</a> · <a href="/?n=2000">2000 inline</a></p><h4>Last ${n} ring lines</h4><pre style="white-space:pre-wrap">${tail}</pre></body>`);
+    } catch (e) { try { res.writeHead(500); res.end('debug interface error'); } catch (_) { /* noop */ } }
+  });
+  srv.on('error', (e) => logger.error(`Debug interface FAILED on port ${gDebugInterface}: ${e.message}`));
+  srv.listen(gDebugInterface, '0.0.0.0', () => logger.info(`DEBUG INTERFACE listening on :${gDebugInterface} (logs over plain HTTP — DEBUG ONLY, keep firewalled / LAN)`));
+}
+
 logger.info('Server starting...');
 
 try {
@@ -550,6 +617,45 @@ try {
   hiddenCol = db.collection('hidden');
   pollCol = db.collection('poll_data');
   scheduleCol = db.collection('poll_schedule');
+  // Wire the multi-question module to the same DB handle + a resolver so forms
+  // respect each team's config defaults (language + true-anonymous), like the
+  // single-question modal does.
+  mq.init(db, {
+    slackCommand,
+    // Winston logger so the builder's traces (logger.debug — show at log_level_*: "debug")
+    // and swallowed-API errors land in the log files + the debug-interface ring.
+    logger,
+    // Reuse the single-question poll's response_url posting so forms can post to the
+    // command's channel without the bot being a member. postChat is a thunk because it's
+    // declared later in this file (avoids the const TDZ at this call site).
+    isUseResponseUrl,
+    postChat: (url, type, requestBody) => postChat(url, type, requestBody),
+    botName,
+    // Reuse the single-question poll's per-message in-process mutex so the lazy
+    // votes-doc create (response_url mode) is serialized — no duplicate votes docs
+    // under concurrent first-interactions. Same key shape btn_vote uses.
+    lock: async (key) => { if (!mutexes.hasOwnProperty(key)) mutexes[key] = new Mutex(); return await mutexes[key].acquire(); },
+    // System notice routing (app_user_notification_method: both/modal/text) —
+    // mirrors the single-poll path. mq passes (body, token, text, lang).
+    notify: (body, token, text, lang) => notifyUser(body, { botToken: token }, text, lang),
+    resolveTeamDefaults: async (teamId) => {
+      let tc = {};
+      try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
+      const pick = (k, g) => (tc.hasOwnProperty(k) ? tc[k] : g);
+      return {
+        app_lang: pick('app_lang', gAppLang),
+        app_lang_user_selectable: pick('app_lang_user_selectable', gIsAppLangSelectable),
+        true_anonymous: pick('true_anonymous', gTrueAnonymous),
+        menu_at_the_end: pick('menu_at_the_end', gIsMenuAtTheEnd),
+        show_command_info: pick('show_command_info', gIsShowCommandInfo),
+        show_dashboard_link: pick('show_dashboard_link', gIsShowDashboardLink),
+        display_poller_name: pick('display_poller_name', gDisplayPollerName),
+        delete_data_on_poll_delete: pick('delete_data_on_poll_delete', gIsDeleteDataOnRequest),
+      };
+    },
+    // Reuse the single-question poll's "View on dashboard" flow for forms.
+    dashboardLinkAction: (body, client, context, value) => dashboardLinkAction(body, client, context, value),
+  });
 
   migrations = new Migrations(db);
 } catch (e) {
@@ -1259,6 +1365,38 @@ const app = new App({
   receiver: receiver
 });
 
+// Register multi-question poll handlers (mq_* actions/views). Self-contained.
+mq.register(app);
+
+// Poll-type selector shared by the single-question modal (createModal) and the
+// multi-question builder: swap between them in place. "multi" updates the current
+// modal to the form builder; "single" re-opens the single-question modal
+// via the action's trigger. Channel is carried in private_metadata so it survives
+// the swap. Lives here (not in the mq module) because it bridges createModal.
+app.action('mq_poll_type', async ({ ack, body, action, client, context }) => {
+  await ack();
+  const val = (action && action.selected_option && action.selected_option.value) || 'single';
+  let channel = null; let responseUrl = ''; let userLang = 'en'; let langSelectable = false;
+  try { const pm = JSON.parse((body.view && body.view.private_metadata) || '{}'); channel = pm.channel || null; responseUrl = pm.response_url || ''; userLang = pm.user_lang || 'en'; langSelectable = pm.hasOwnProperty('lang_selectable') ? !!pm.lang_selectable : null; } catch (e) { /* ignore */ }
+  // The single-question modal's metadata doesn't carry lang_selectable, so resolve it
+  // from team config when swapping single→multi (else the lang selector goes missing).
+  if (langSelectable === null) {
+    try { const tc = await getTeamOverride(getTeamOrEnterpriseId(context)); langSelectable = tc.hasOwnProperty('app_lang_user_selectable') ? !!tc.app_lang_user_selectable : !!gIsAppLangSelectable; }
+    catch (e) { langSelectable = !!gIsAppLangSelectable; }
+  }
+  try {
+    if (val === 'multi') {
+      // Open the VISUAL builder in place (the DSL textarea lives on as the builder's "Advanced" mode).
+      await mq.openBuilder({ client, viewId: body.view.id, channel, responseUrl, teamId: getTeamOrEnterpriseId(context), userId: body.user && body.user.id });
+    } else {
+      // swap back to single-question — update THIS modal in place (no new modal).
+      await createModal(context, client, body.trigger_id, responseUrl, channel, body.view.id);
+    }
+  } catch (e) {
+    logger.error('mq_poll_type swap failed:', e && e.message);
+  }
+});
+
 const sendMessageUsingUrl = async (url,newMessage) => {
   return await fetch(url, {
     method: 'POST',
@@ -1303,8 +1441,13 @@ const postChat = async (url,type,requestBody) => {
       }
       ret.slack_response = await sendMessageUsingUrl(url,requestBody);
       if(ret.slack_response?.status!==200) {
+        // Capture Slack's response BODY — a non-200 from a response_url carries the real
+        // reason (e.g. invalid_blocks + which field); the status text alone is opaque.
+        let _body = '';
+        try { _body = await ret.slack_response.text(); } catch (e) { /* noop */ }
+        logger.error(`response_url POST non-200: status=${ret.slack_response?.status} statusText=${ret.slack_response?.statusText} body=${(_body||'').slice(0,800)}`);
         ret.status = false;
-        ret.message = ret.slack_response?.statusText+` ${addChNotFoundErr}`;
+        ret.message = `${ret.slack_response?.status} ${ret.slack_response?.statusText} :: ${(_body||'').slice(0,300)} ${addChNotFoundErr}`;
         return ret;
       }
     }
@@ -1847,6 +1990,34 @@ async function processCommand(ack, body, client, command, context, say, respond)
       const timeDiff = ackedTime - receivedTime;
       // Respond with the time difference
       await respond(`Time from receiving to acknowledging: ${timeDiff} ms`);
+      return;
+    }
+
+    // Multi-question poll: "/<cmd> multi" opens the form builder modal. The whole
+    // multi-question feature is self-contained in src/multiquestion.js.
+    if (cmdBody && /^multi(\b|$)/i.test(cmdBody)) {
+      // Auto-detect the channel the command was run in — same source the
+      // single-question modal uses below (command.channel_id).
+      const mqChannel = (command && command.channel_id) ? command.channel_id : ((body && body.channel_id) || null);
+      const mqTeam = getTeamOrEnterpriseId(context);
+      const mqResp = (body && body.response_url) || '';
+      const mqUser = (command && command.user_id) || (body && body.user_id) || null;
+      const rest = cmdBody.replace(/^multi\b\s*/i, '').trim();
+      const prev = rest.match(/^preview\b\s*/i);
+      try {
+        if (!rest) {
+          // "/poll multi" with no args → open the empty builder modal
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, undefined, mqUser);
+        } else if (prev) {
+          // "/poll multi preview …" → always open the builder PRE-FILLED (review before posting)
+          await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, rest.slice(prev[0].length).replace(/\s+\|\s+/g, '\n'), mqUser);
+        } else {
+          // "/poll multi <DSL>" → create directly; on a parse error open the builder
+          // PRE-FILLED with what they typed so nothing is lost.
+          const r = await mq.createFromCommand({ client, token: context.botToken, teamId: mqTeam, userId: mqUser, channel: mqChannel, dsl: rest, responseUrl: mqResp, body });
+          if (!r.ok) await mq.openCreateModal(client, body.trigger_id, mqChannel, mqResp, mqTeam, r.formText, mqUser);
+        }
+      } catch (e) { await respond('Could not open the multi-question builder.'); }
       return;
     }
     // Create a pattern for matching escaped quotes
@@ -4177,6 +4348,8 @@ const createModalBlockInputDelete = (userLang)  => {
 
   logger.info('Bolt app is running!');
 
+  startDebugInterface(); // no-op unless debug_interface > 0
+
   logger.info('Check and start cron jobs.');
   // Verify every stored cron_string still parses under the current
   // cron-parser version before the minute scheduler starts firing.
@@ -4602,12 +4775,13 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         };
         await postChat(body.response_url, 'update', mRequestBody);
 
-        if (isAnonymous) {
-          // Anonymous votes show no name in the poll, so this is the voter's ONLY feedback
-          // that their (un)vote registered — surface it as a modal popup when enabled
+        if (isAnonymous || isHidden) {
+          // Anonymous votes show no name, and hidden polls show no counts — so this is the voter's
+          // ONLY feedback that their (un)vote registered. Surface it as a modal popup when enabled
           // (right after the vote action, so a trigger_id is in hand), ephemeral otherwise.
-          let mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_vote'), {choice: ""});
-          if (removeVote) mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_unvote'), {choice: ""});
+          let mesStr;
+          if (isAnonymous) mesStr = parameterizedString(stri18n(userLang, removeVote ? 'info_anonymous_unvote' : 'info_anonymous_vote'), {choice: ""});
+          else mesStr = stri18n(userLang, removeVote ? 'info_hidden_unvote' : 'info_hidden_vote');
           await notifyUser(body, context, mesStr, userLang);
         }
 
@@ -4883,7 +5057,7 @@ app.shortcut('open_modal_new', async ({ shortcut, ack, context, client }) => {
   }
 });
 
-async function createModal(context, client, trigger_id,response_url,channel) {
+async function createModal(context, client, trigger_id,response_url,channel,existingViewId) {
   try {
     const teamConfig = await getTeamOverride(getTeamOrEnterpriseId(context));
     let appLang= gAppLang;
@@ -4948,29 +5122,54 @@ async function createModal(context, client, trigger_id,response_url,channel) {
         }
       ];
 
-      const result = await client.views.open({
-        token: context.botToken,
-        trigger_id: trigger_id,
-        view: {
-          type: 'modal',
-          callback_id: 'modal_poll_submit',
-          private_metadata: JSON.stringify(privateMetadata),
-          title: {
-            type: 'plain_text',
-            text: stri18n(appLang,'info_create_poll'),
-          },
-          close: {
-            type: 'plain_text',
-            text: stri18n(appLang,'btn_cancel'),
-          },
-          blocks: blocks,
-        }
-      });
+      const cmdOnlyView = {
+        type: 'modal',
+        callback_id: 'modal_poll_submit',
+        private_metadata: JSON.stringify(privateMetadata),
+        title: {
+          type: 'plain_text',
+          text: stri18n(appLang,'info_create_poll'),
+        },
+        close: {
+          type: 'plain_text',
+          text: stri18n(appLang,'btn_cancel'),
+        },
+        blocks: blocks,
+      };
+      const result = existingViewId
+        ? await client.views.update({ token: context.botToken, view_id: existingViewId, view: cmdOnlyView })
+        : await client.views.open({ token: context.botToken, trigger_id: trigger_id, view: cmdOnlyView });
       return;
 
     }
 
     let blocks = [
+      {
+        // Poll-type selector (default single). Switching to "Multi-question form"
+        // swaps to the multi-question builder (handled by app.action('mq_poll_type')).
+        // It's a SECTION accessory (not an input), so the legacy submit never sees it.
+        type: 'section',
+        block_id: 'mq_poll_type_blk',
+        text: { type: 'mrkdwn', text: `*${stri18n(appLang, 'mq_poll_type')}*` },
+        accessory: {
+          type: 'static_select',
+          action_id: 'mq_poll_type',
+          // Reuse the translated multi-question keys (present in all 11 langs).
+          initial_option: { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_single') }, value: 'single' },
+          options: [
+            { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_single') }, value: 'single' },
+            { text: { type: 'plain_text', text: stri18n(appLang, 'mq_type_multi') }, value: 'multi' },
+          ],
+          // Warn before switching — swapping the modal clears whatever was entered.
+          // If the user denies, Slack reverts the dropdown and nothing is lost.
+          confirm: {
+            title: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_title') },
+            text: { type: 'mrkdwn', text: stri18n(appLang, 'mq_switch_text') },
+            confirm: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_ok') },
+            deny: { type: 'plain_text', text: stri18n(appLang, 'mq_switch_deny') },
+          },
+        },
+      },
       {
         type: 'section',
         text: {
@@ -5031,6 +5230,10 @@ async function createModal(context, client, trigger_id,response_url,channel) {
               include: ['private','public']
             },
             action_id: 'modal_poll_channel',
+            // Pre-select the channel the command ran in (when known) so it's the
+            // default and survives a poll-type swap; also makes selected_conversation
+            // non-null at submit so it doesn't clobber private_metadata.channel.
+            ...(channel ? { initial_conversation: channel } : {}),
             placeholder: {
               type: 'plain_text',
               text: stri18n(appLang,'modal_ch_select'),
@@ -5337,28 +5540,29 @@ async function createModal(context, client, trigger_id,response_url,channel) {
     ]);
 
     //logger.debug(JSON.stringify(blocks));
-    const result = await client.views.open({
-      token: context.botToken,
-      trigger_id: trigger_id,
-      view: {
-        type: 'modal',
-        callback_id: 'modal_poll_submit',
-        private_metadata: JSON.stringify(privateMetadata),
-        title: {
-          type: 'plain_text',
-          text: stri18n(appLang,'info_create_poll'),
-        },
-        submit: {
-          type: 'plain_text',
-          text: stri18n(appLang,'btn_create'),
-        },
-        close: {
-          type: 'plain_text',
-          text: stri18n(appLang,'btn_cancel'),
-        },
-        blocks: blocks,
-      }
-    });
+    const viewPayload = {
+      type: 'modal',
+      callback_id: 'modal_poll_submit',
+      private_metadata: JSON.stringify(privateMetadata),
+      title: {
+        type: 'plain_text',
+        text: stri18n(appLang,'info_create_poll'),
+      },
+      submit: {
+        type: 'plain_text',
+        text: stri18n(appLang,'btn_create'),
+      },
+      close: {
+        type: 'plain_text',
+        text: stri18n(appLang,'btn_cancel'),
+      },
+      blocks: blocks,
+    };
+    // existingViewId set ⇒ we're swapping an open modal back to single-question:
+    // update in place (reliable) instead of opening a new modal.
+    const result = existingViewId
+      ? await client.views.update({ token: context.botToken, view_id: existingViewId, view: viewPayload })
+      : await client.views.open({ token: context.botToken, trigger_id: trigger_id, view: viewPayload });
   } catch (error) {
     logger.error(error);
   }

@@ -13,6 +13,11 @@
 #
 #   bash app/update-app-to-ct.sh                 # prompts; pull latest of current branch
 #   APP_REF=4.1.1.1 bash app/update-app-to-ct.sh # deploy a specific release tag
+#   APP_REF=feature/multi-question bash app/update-app-to-ct.sh  # deploy a feature
+#                                                # BRANCH (e.g. to a TEST CT) — the in-CT
+#                                                # step fetches it + checks it out + fast-
+#                                                # forwards to its tip. (Or just type the
+#                                                # branch name at the "Version to deploy" prompt.)
 #
 # Roll back instantly if a release misbehaves:  pct rollback <APP_ID> pre-update
 #

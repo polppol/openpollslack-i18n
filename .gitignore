@@ -16,8 +16,6 @@ yarn-error.log
 # only the *.dist template is tracked (it has no real secrets). Add `!config/<name>.json` if a
 # genuinely secret-free JSON ever needs tracking (e.g. custom-environment-variables.json).
 /config/*.json
-/config/*.bak.*
-/config/*.bak
 config/default.json
 config/open_poll.json
 config/polls.json
@@ -54,3 +52,7 @@ auth.json
 docs/example/proxmox/app/default.json
 docs/example/proxmox/app/cloudflare.env
 docs/example/proxmox/rproxy/cloudflare.env
+/config/default-dev.json
+# Timestamped config backups (the apply-config/deploy scripts create these — CONTAIN SECRETS)
+/config/*.bak.*
+/config/*.bak
