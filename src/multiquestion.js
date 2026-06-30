@@ -634,18 +634,20 @@ async function createAndPost(client, token, { teamOrEnt, userId, channel, title,
     await pollCol().deleteOne({ _id: pollData._id });
     return { ok: false };
   };
+  dbg('createAndPost', { channel: channel || null, hasResponseUrl: !!responseUrl, canUse: canUseResponseUrl(responseUrl), isUseResponseUrl: !!_opts.isUseResponseUrl, nq: questions.length, blocks: blocks.length });
   if (canUseResponseUrl(responseUrl)) {
     // Reuse the single-question poll's response_url posting: posts to the command's
     // channel WITHOUT the bot needing to be a member. No ts is returned — poll_data.ts
     // stays null and the votes doc is created lazily on the first interaction (by poll_id,
     // keyed by the real (channel,ts) from the interaction body) — same model as single.
     let r = null;
-    try { r = await _opts.postChat(responseUrl, 'post', { token, channel, blocks, text }); } catch (e) { r = null; }
-    if (!r || r.status === false) return recoveryFail();
+    try { r = await _opts.postChat(responseUrl, 'post', { token, channel, blocks, text }); } catch (e) { dbg('createAndPost response_url post THREW', { err: e && (e.data ? JSON.stringify(e.data) : e.message) }); r = null; }
+    if (!r || r.status === false) { dbg('createAndPost response_url post FAILED', { r: r ? { status: r.status, message: r.message } : null }); return recoveryFail(); }
   } else {
+    dbg('createAndPost WEB path (no usable response_url) — needs bot in channel', { channel });
     let posted = null;
     try { posted = await client.chat.postMessage({ token, channel, text, blocks }); }
-    catch (e) { return recoveryFail(); }
+    catch (e) { dbg('createAndPost web post THREW', { err: e && (e.data ? e.data.error : e.message) }); return recoveryFail(); }
     if (posted && posted.ts) {
       await pollCol().updateOne({ _id: pollData._id }, { $set: { ts: posted.ts, channel: posted.channel || channel } });
       await votesCol().insertOne({ team: teamOrEnt, channel: posted.channel || channel, ts: posted.ts, poll_id: String(pollData._id), votes: {}, answers: {} });
@@ -1364,6 +1366,7 @@ async function handleBuilderSubmit({ ack, body, view, client, context }) {
   for (const q of questions) { if (q.type === 'choice' && (!q.options || q.options.length < 2)) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_choice_2opts', { q: (q.text || '').slice(0, 40) }) } }); return; } }
   if (estimateBlocks(questions) > MAX_BLOCKS) { await ack({ response_action: 'errors', errors: { [errTarget]: t('mq_err_too_big', { max: MAX_BLOCKS }) } }); return; }
   const channel = draft.channel; const responseUrl = draft.response_url || '';
+  dbg('handleBuilderSubmit', { mode: draft.mode, nq: (draft.questions || []).length, channel: channel || null, draftHasResponseUrl: !!responseUrl });
   if (!channel && !(_opts.isUseResponseUrl && responseUrl)) { await ack({ response_action: 'errors', errors: { mq_channel: t('mq_err_pick_channel') } }); return; }
   await ack(); // close the modal
   const userId = body.user.id;
