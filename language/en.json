@@ -283,5 +283,6 @@
   "mq_qtype_datetime": "Date & time",
   "mq_qtype_email": "Email",
   "mq_qtype_url": "URL",
-  "mq_b_add_option": "Add option"
+  "mq_b_add_option": "Add option",
+  "info_notice_title": "Notice"
 }

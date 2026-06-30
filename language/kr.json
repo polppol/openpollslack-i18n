@@ -224,5 +224,6 @@
   "info_created_via_label": "생성 방법: {{value}}",
   "info_menu_placeholder": "메뉴",
   "info_poll_id_label": "투표 ID: {{value}}",
-  "task_delete_refer_warn": "이 투표를 참조하는 예약 투표가 있는 경우 해당 일정이 작동을 멈춥니다."
+  "task_delete_refer_warn": "이 투표를 참조하는 예약 투표가 있는 경우 해당 일정이 작동을 멈춥니다.",
+  "info_notice_title": "알림"
 }

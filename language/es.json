@@ -224,5 +224,6 @@
   "info_created_via_label": "Creada mediante: {{value}}",
   "info_menu_placeholder": "Menú",
   "info_poll_id_label": "ID de la encuesta: {{value}}",
-  "task_delete_refer_warn": "Si tienes una encuesta programada que hace referencia a esta encuesta, la programación dejará de funcionar."
+  "task_delete_refer_warn": "Si tienes una encuesta programada que hace referencia a esta encuesta, la programación dejará de funcionar.",
+  "info_notice_title": "Aviso"
 }

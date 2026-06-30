@@ -224,5 +224,6 @@
   "info_created_via_label": "Luontitapa: {{value}}",
   "info_menu_placeholder": "Valikko",
   "info_poll_id_label": "Kyselyn ID: {{value}}",
-  "task_delete_refer_warn": "Jos sinulla on ajastettu kysely, joka viittaa tähän kyselyyn, ajastus lakkaa toimimasta."
+  "task_delete_refer_warn": "Jos sinulla on ajastettu kysely, joka viittaa tähän kyselyyn, ajastus lakkaa toimimasta.",
+  "info_notice_title": "Huomautus"
 }

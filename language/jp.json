@@ -224,5 +224,6 @@
   "info_created_via_label": "作成方法: {{value}}",
   "info_menu_placeholder": "メニュー",
   "info_poll_id_label": "投票ID: {{value}}",
-  "task_delete_refer_warn": "この投票を参照する予約投票がある場合、そのスケジュールは動作しなくなります。"
+  "task_delete_refer_warn": "この投票を参照する予約投票がある場合、そのスケジュールは動作しなくなります。",
+  "info_notice_title": "お知らせ"
 }

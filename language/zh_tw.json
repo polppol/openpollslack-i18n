@@ -222,5 +222,6 @@
   "info_created_via_label": "建立方式：{{value}}",
   "info_menu_placeholder": "選單",
   "info_poll_id_label": "投票 ID：{{value}}",
-  "task_delete_refer_warn": "如果你有引用此投票的排程投票，該排程將停止運作。"
+  "task_delete_refer_warn": "如果你有引用此投票的排程投票，該排程將停止運作。",
+  "info_notice_title": "提示"
 }

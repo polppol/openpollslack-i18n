@@ -224,5 +224,6 @@
   "info_created_via_label": "Erstellt über: {{value}}",
   "info_menu_placeholder": "Menü",
   "info_poll_id_label": "Umfrage-ID: {{value}}",
-  "task_delete_refer_warn": "Wenn du eine geplante Umfrage hast, die sich auf diese Umfrage bezieht, funktioniert der Zeitplan nicht mehr."
+  "task_delete_refer_warn": "Wenn du eine geplante Umfrage hast, die sich auf diese Umfrage bezieht, funktioniert der Zeitplan nicht mehr.",
+  "info_notice_title": "Hinweis"
 }

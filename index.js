@@ -131,6 +131,10 @@ const gTrueAnonymous = config.get('true_anonymous');
 const gIsShowNumberInChoice = config.get('add_number_emoji_to_choice');
 const gIsShowNumberInChoiceBtn = config.get('add_number_emoji_to_choice_btn');
 const gIsDeleteDataOnRequest = config.get('delete_data_on_poll_delete');
+// Show system/error notices as a Slack MODAL popup (more visible — some users miss the
+// in-channel ephemeral) instead of an ephemeral message. Workspace-overridable. config.has
+// guard + default true so adding this key never crashes an existing config that lacks it.
+const gSystemMessageViaModal = config.has('system_message_via_modal') ? config.get('system_message_via_modal') : true;
 const gLogLevelApp = config.get('log_level_app');
 const gLogLevelAppFile = config.get('log_level_app_file');
 const gLogLevelBolt = config.get('log_level_bolt');
@@ -152,7 +156,7 @@ const gEnablePollEditKeepVotes = config.has('enable_poll_edit_keep_votes') ? con
 // the same mrkdwn-string storage shape (DB schema unchanged).
 const gIsRichTextInput = config.has('enable_rich_text_input') ? config.get('enable_rich_text_input') : false;
 
-const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input","show_dashboard_link","show_csv_export"];
+const validTeamOverrideConfigTF = ["create_via_cmd_only","app_lang_user_selectable","menu_at_the_end","compact_ui","show_divider","show_help_link","show_command_info","true_anonymous","add_number_emoji_to_choice","add_number_emoji_to_choice_btn","delete_data_on_poll_delete","app_allow_dm","display_poller_name","enable_poll_edit","enable_poll_edit_keep_votes","enable_rich_text_input","show_dashboard_link","show_csv_export","system_message_via_modal"];
 
 // Integer-valued team overrides. Separate from the true/false list so the
 // /poll config write dispatcher knows to parse the value as a non-negative
@@ -4571,14 +4575,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         }
 
         if (isClosed) {
-          let mRequestBody = {
-            token: context.botToken,
-            channel: body.channel.id,
-            user: body.user.id,
-            attachments: [],
-            text: stri18n(userLang, 'err_change_vote_poll_closed'),
-          };
-          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          await notifyUser(body, context, stri18n(userLang, 'err_change_vote_poll_closed'), userLang);
           return;
         }
 
@@ -4709,42 +4706,22 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
         await postChat(body.response_url, 'update', mRequestBody);
 
         if (isAnonymous) {
+          // Anonymous votes show no name in the poll, so this is the voter's ONLY feedback
+          // that their (un)vote registered — surface it as a modal popup when enabled
+          // (right after the vote action, so a trigger_id is in hand), ephemeral otherwise.
           let mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_vote'), {choice: ""});
           if (removeVote) mesStr = parameterizedString(stri18n(userLang, 'info_anonymous_unvote'), {choice: ""});
-          let mRequestBody = {
-            token: context.botToken,
-            channel: body.channel.id,
-            user: body.user.id,
-            attachments: [],
-            text: mesStr
-          };
-          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          await notifyUser(body, context, mesStr, userLang);
         }
 
       } catch (e) {
         logger.error(e);
-        let mRequestBody = {
-          token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: stri18n(userLang, 'err_vote_exception'),
-        };
-        await postChat(body.response_url, 'ephemeral', mRequestBody);
-
+        await notifyUser(body, context, stri18n(userLang, 'err_vote_exception'), userLang);
       } finally {
         release();
       }
     } else {
-      let mRequestBody = {
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: stri18n(userLang, 'err_vote_exception'),
-      };
-      await postChat(body.response_url, 'ephemeral', mRequestBody);
-
+      await notifyUser(body, context, stri18n(userLang, 'err_vote_exception'), userLang);
     }
   } catch (e) {
     logger.error(`UNEXPECTED ERROR in btn_vote :` + e.message);
@@ -4810,14 +4787,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
     }
 
     if (isClosed) {
-      let mRequestBody = {
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: stri18n(userLang, 'err_change_vote_poll_closed'),
-      };
-      await postChat(body.response_url, 'ephemeral', mRequestBody);
+      await notifyUser(body, context, stri18n(userLang, 'err_change_vote_poll_closed'), userLang);
       return;
     }
 
@@ -4984,14 +4954,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
           // and the visible poll would disagree (and a later rebuild would
           // resurrect a choice nobody can see today).
           logger.warn(`add_choice_after_post: message update failed (CH:${channel} ts:${message.ts}): ${firstUpdateRes?.message ?? ''} ${secondUpdateRes?.message ?? ''}`);
-          let mRequestBody = {
-            token: context.botToken,
-            channel: body.channel.id,
-            user: body.user.id,
-            attachments: [],
-            text: stri18n(userLang, 'err_add_choice_exception'),
-          };
-          await postChat(body.response_url, 'ephemeral', mRequestBody);
+          await notifyUser(body, context, stri18n(userLang, 'err_add_choice_exception'), userLang);
           return;
         }
 
@@ -5006,14 +4969,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
 
       } catch (e) {
         logger.error(e);
-        let mRequestBody = {
-          token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: stri18n(userLang, 'err_add_choice_exception'),
-        };
-        await postChat(body.response_url, 'ephemeral', mRequestBody);
+        await notifyUser(body, context, stri18n(userLang, 'err_add_choice_exception'), userLang);
       } finally {
         release();
       }
@@ -7540,13 +7496,9 @@ async function supportAction(body, client, context) {
 // Goes through the click's response_url so the reply still arrives when the
 // bot is not a member of the channel (Web API postEphemeral would fail).
 const makeEphemeralReject = (body, context, userLang) => async (msgKey) => {
-  if (!body.channel?.id && !body.response_url) return;
-  await postChat(body.response_url ?? '', 'ephemeral', {
-    token: context.botToken,
-    channel: body.channel?.id,
-    user: body.user.id,
-    text: stri18n(userLang, msgKey),
-  });
+  if (!body.channel?.id && !body.response_url && !body.trigger_id) return;
+  // Routes through notifyUser → modal popup (system_message_via_modal) or ephemeral fallback.
+  await notifyUser(body, context, stri18n(userLang, msgKey), userLang);
 };
 
 // Open a modal; on failure (content too large, expired trigger_id, ...) tell
@@ -7572,6 +7524,42 @@ async function openModalOrWarn(client, context, body, view, userLang) {
       logger.warn(`Not able to send modal-failure ephemeral: ${e2.message}`);
     }
   }
+}
+
+// Show a system/error NOTICE to the acting user. When system_message_via_modal is on
+// (server default true, workspace-overridable) AND a fresh trigger_id is in hand, show a
+// small MODAL popup (more visible — some users miss the in-channel ephemeral); otherwise,
+// or if views.open fails (expired/used trigger, content too big), FALL BACK to the
+// ephemeral (the original behavior) so there's never a regression. `text` is already
+// localized. Use this for user-facing error/notice ephemerals (NOT DMs / recovery msgs).
+async function notifyUser(body, context, text, userLang) {
+  const lang = userLang || gAppLang;
+  let viaModal = gSystemMessageViaModal;
+  try {
+    const tc = await getTeamOverride(getTeamOrEnterpriseId(body));
+    if (tc && tc.hasOwnProperty('system_message_via_modal')) viaModal = tc.system_message_via_modal;
+  } catch (e) { /* use server default */ }
+  if (viaModal && body && body.trigger_id) {
+    try {
+      await app.client.views.open({
+        token: context.botToken,
+        trigger_id: body.trigger_id,
+        view: {
+          type: 'modal',
+          title: { type: 'plain_text', text: stri18n(lang, 'info_notice_title').slice(0, 24) },
+          close: { type: 'plain_text', text: stri18n(lang, 'btn_close').slice(0, 24) },
+          blocks: [{ type: 'section', text: { type: 'mrkdwn', text: truncateForSection(text) } }],
+        },
+      });
+      return;
+    } catch (e) { /* fall back to ephemeral below */ }
+  }
+  try {
+    await postChat(body && body.response_url ? body.response_url : '', 'ephemeral', {
+      token: context.botToken, channel: body && body.channel ? body.channel.id : undefined,
+      user: body && body.user ? body.user.id : undefined, text,
+    });
+  } catch (e2) { logger.warn(`notifyUser ephemeral fallback failed: ${e2.message}`); }
 }
 
 // Slack caps a section block's text at 3000 chars; keep a margin.
@@ -7752,30 +7740,14 @@ async function usersVotes(body, client, context, value) {
   if(teamConfig.hasOwnProperty("app_lang")) appLang = teamConfig.app_lang;
   if (body.user.id !== value.user) {
     //logger.debug('reject request because not owner');
-    let mRequestBody = {
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      attachments: [],
-      text: stri18n(appLang,'err_see_all_vote_other'),
-    };
-    await postChat(body.response_url,'ephemeral',mRequestBody);
-
+    await notifyUser(body, context, stri18n(appLang, 'err_see_all_vote_other'), appLang);
     return;
   }
 
   if(value.hasOwnProperty('anonymous') && value.hasOwnProperty('true_anonymous'))
   {
     if(value.anonymous===true&&value.true_anonymous===true) {
-      let mRequestBody = {
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: stri18n(appLang,'err_see_all_vote_true_anonymous'),
-      };
-      await postChat(body.response_url,'ephemeral',mRequestBody);
-
+      await notifyUser(body, context, stri18n(appLang, 'err_see_all_vote_true_anonymous'), appLang);
       return;
     }
   }

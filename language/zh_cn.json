@@ -222,5 +222,6 @@
   "info_created_via_label": "创建方式：{{value}}",
   "info_menu_placeholder": "菜单",
   "info_poll_id_label": "投票 ID：{{value}}",
-  "task_delete_refer_warn": "如果你有引用此投票的定时投票，该定时任务将停止工作。"
+  "task_delete_refer_warn": "如果你有引用此投票的定时投票，该定时任务将停止工作。",
+  "info_notice_title": "提示"
 }
