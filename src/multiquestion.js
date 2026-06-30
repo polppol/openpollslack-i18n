@@ -1204,9 +1204,18 @@ async function openBuilder({ client, triggerId, viewId, channel, responseUrl, te
 }
 
 // Re-render the root builder modal from the current draft (after an action).
+// Surface the Slack API error detail (e.data.error + which field, when present) for the
+// builder's otherwise-swallowed views.open/update/push calls — invalid-view rejections are
+// invisible in the journal otherwise (the handler acked, so nothing else logs).
+function logBuilderErr(where, e) {
+  const d = e && e.data;
+  const detail = d ? `${d.error}${d.response_metadata && d.response_metadata.messages ? ' :: ' + d.response_metadata.messages.join(' | ') : ''}` : (e && e.message);
+  console.error(`[mq builder] ${where} failed: ${detail}`);
+}
+
 async function rerenderBuilder(client, token, draft, viewId) {
   const ro = await builderRenderOpts(draft);
-  try { await client.views.update({ token, view_id: viewId, view: buildBuilderView(draft, ro.useResponseUrl, ro.langSelectable) }); } catch (e) { /* user may have closed it */ }
+  try { await client.views.update({ token, view_id: viewId, view: buildBuilderView(draft, ro.useResponseUrl, ro.langSelectable) }); } catch (e) { logBuilderErr('rerenderBuilder views.update', e); }
 }
 
 async function handleBuilderMode({ ack, body, action, client, context }) {
@@ -1229,7 +1238,7 @@ async function handleAddQuestion({ ack, body, client, context }) {
   if ((draft.questions || []).length >= MAX_QUESTIONS) return;
   const lang = (draft.settings && draft.settings.user_lang) || 'en';
   const ctx = { draft_id: String(draft._id), root_view_id: body.view.id, qIndex: -1, lang };
-  try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, null) }); } catch (e) { /* noop */ }
+  try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, null) }); } catch (e) { logBuilderErr('handleAddQuestion views.push', e); }
 }
 
 async function handleQMenu({ ack, body, action, client, context }) {
@@ -1244,7 +1253,7 @@ async function handleQMenu({ ack, body, action, client, context }) {
   if (a === 'edit') {
     const lang = (draft.settings && draft.settings.user_lang) || 'en';
     const ctx = { draft_id: String(draft._id), root_view_id: body.view.id, qIndex: i, lang };
-    try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, qs[i]) }); } catch (e) { /* noop */ }
+    try { await client.views.push({ token: context.botToken, trigger_id: body.trigger_id, view: buildQuestionView(ctx, qs[i]) }); } catch (e) { logBuilderErr('handleQMenu edit views.push', e); }
     return;
   }
   if (a === 'del') qs.splice(i, 1);
@@ -1268,7 +1277,7 @@ async function handleQType({ ack, body, action, client, context }) {
   else if (q.options && q.options.length) ctx.optsStash = q.options.slice();
   q.type = (action.selected_option && action.selected_option.value) || q.type;
   if (q.type === 'choice' && (!q.options || !q.options.length) && ctx.optsStash && ctx.optsStash.length) q.options = ctx.optsStash.slice();
-  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
+  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { logBuilderErr('handleQType views.update', e); }
 }
 
 // "Add option" — render one more option row (capturing what's already typed).
@@ -1278,7 +1287,7 @@ async function handleQAddOpt({ ack, body, client, context }) {
   const q = readQuestionFromView(body.view);
   const cur = Math.max(ctx.optRows || 0, (q.options || []).length, 2);
   ctx.optRows = Math.min(MAX_OPTIONS, cur + 1);
-  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { /* noop */ }
+  try { await client.views.update({ token: context.botToken, view_id: body.view.id, view: buildQuestionView(ctx, q) }); } catch (e) { logBuilderErr('handleQAddOpt views.update', e); }
 }
 
 async function handleQuestionSubmit({ ack, body, view, client, context }) {
