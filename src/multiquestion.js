@@ -237,7 +237,12 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   // results currently shown. Effective hidden = hidden && !revealed && !closed.
   // (Kept separate so reveal/hide is a true two-way toggle.)
   const revealed = !!(pollData.para && pollData.para.revealed);
-  const hidden = !!(pollData.para && pollData.para.hidden) && !revealed && !opts.isClosed;
+  const _pp = pollData.para || {};
+  // Effective "votes hidden right now". Single-question lets ANY poll hide/reveal votes
+  // anytime, so the multi must too: a live `para.hide_active` flag drives it (set by the
+  // menu toggle). Backward-compat for polls created before this: fall back to the old
+  // (created-hidden && !revealed) model when hide_active was never set.
+  const hidden = (_pp.hide_active !== undefined ? !!_pp.hide_active : (!!_pp.hidden && !revealed)) && !opts.isClosed;
   const votes = (votesDoc && votesDoc.votes) || {};
   const answers = (votesDoc && votesDoc.answers) || {};
   const pollId = String(pollData._id);
@@ -251,7 +256,8 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   const mtext = (k) => ({ type: 'plain_text', emoji: true, text: trimText(stri18n(userLang, k), 75) });
   const mopt = (k, val) => ({ text: mtext(k), value: JSON.stringify(val) });
   const pollActions = [];
-  if (para.hidden) pollActions.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
+  // Hide/reveal is ALWAYS available (any poll, like single) — toggles para.hide_active.
+  pollActions.push(mopt(hidden ? 'menu_reveal_vote' : 'menu_hide_vote', { a: 'reveal', poll_id: pollId, reveal: hidden ? 1 : 0 }));
   if (!(anonymous && para.true_anonymous)) pollActions.push(mopt('menu_all_user_vote', { a: 'allvotes', poll_id: pollId }));
   pollActions.push(mopt(opts.isClosed ? 'menu_reopen_poll' : 'menu_close_poll', { a: opts.isClosed ? 'reopen' : 'close', poll_id: pollId }));
   // Delete is destructive — guard with a native confirm dialog (mirrors the single-poll
@@ -281,7 +287,7 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
   // (same i18n keys; creator shown per display_poller_name "tag"/"none", not a bool).
   const els = [];
   if (anonymous) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_anonymous') });
-  if (para.hidden) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_hidden') });
+  if (hidden) els.push({ type: 'mrkdwn', text: stri18n(userLang, 'info_hidden') }); // reflect the live hidden state (hide_active toggle)
   const showPoller = (para.display_poller_name === 'tag' || para.display_poller_name === true);
   if (pollData.user_id && showPoller) els.push({ type: 'mrkdwn', text: parameterizedString(stri18n(userLang, 'info_by'), { user_id: pollData.user_id }) });
   const nq = pollData.questions.length;
@@ -804,9 +810,11 @@ async function handleAnswerSubmit({ ack, body, view, client, context }) {
 // Shared menu actions — used by mq_menu (new polls) AND the legacy mq_reveal/mq_close
 // buttons that already-posted polls still carry.
 async function doReveal(client, token, pollData, channel, ts, reveal, responseUrl) {
-  // Flip the LIVE reveal state (para.revealed), not the immutable hide setting.
-  await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.revealed': reveal === 1 } });
-  pollData.para = { ...pollData.para, revealed: reveal === 1 };
+  // Live hide toggle (any poll, like single): reveal=1 → show (hide_active=false);
+  // reveal=0 → hide (hide_active=true). Keeps para.revealed in sync for back-compat reads.
+  const hideActive = (reveal === 0);
+  await pollCol().updateOne({ _id: pollData._id }, { $set: { 'para.hide_active': hideActive, 'para.revealed': !hideActive } });
+  pollData.para = { ...pollData.para, hide_active: hideActive, revealed: !hideActive };
   await rebuildMessage(client, token, pollData, channel, ts, responseUrl);
 }
 async function doSetClosed(client, token, pollData, channel, ts, closed, responseUrl) {
