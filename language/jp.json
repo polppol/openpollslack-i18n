@@ -217,5 +217,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "選択肢を追加",
   "info_vote_count_one": "{{count}} 票",
-  "info_vote_count_many": "{{count}} 票"
+  "info_vote_count_many": "{{count}} 票",
+  "err_action_other": "この投票の作成者ではないため、この操作はできません。",
+  "err_delete_failed": "投票メッセージを削除できませんでした。投票とそのデータはそのまま残っています。もう一度お試しください。",
+  "err_modal_open_failed": "ダイアログを開けませんでした。投票の内容が大きすぎるか、リクエストの有効期限が切れた可能性があります。もう一度お試しください。",
+  "info_created_via_label": "作成方法: {{value}}",
+  "info_menu_placeholder": "メニュー",
+  "info_poll_id_label": "投票ID: {{value}}",
+  "task_delete_refer_warn": "この投票を参照する予約投票がある場合、そのスケジュールは動作しなくなります。"
 }

@@ -217,5 +217,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "Lisää vaihtoehto",
   "info_vote_count_one": "{{count}} ääni",
-  "info_vote_count_many": "{{count}} ääntä"
+  "info_vote_count_many": "{{count}} ääntä",
+  "err_action_other": "Et voi tehdä tätä, koska et ole tämän kyselyn omistaja.",
+  "err_delete_failed": "Kyselyviestin poistaminen epäonnistui. Kyselyä ja sen tietoja ei muutettu – yritä uudelleen.",
+  "err_modal_open_failed": "Valintaikkunan avaaminen epäonnistui – kyselyn sisältö voi olla liian suuri tai pyyntö vanheni. Yritä uudelleen.",
+  "info_created_via_label": "Luontitapa: {{value}}",
+  "info_menu_placeholder": "Valikko",
+  "info_poll_id_label": "Kyselyn ID: {{value}}",
+  "task_delete_refer_warn": "Jos sinulla on ajastettu kysely, joka viittaa tähän kyselyyn, ajastus lakkaa toimimasta."
 }

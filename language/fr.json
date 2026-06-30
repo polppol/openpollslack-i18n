@@ -245,5 +245,10 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "Ajouter une option",
   "info_vote_count_one": "{{count}} vote",
-  "info_vote_count_many": "{{count}} votes"
+  "info_vote_count_many": "{{count}} votes",
+  "err_delete_failed": "Impossible de supprimer le message du sondage. Le sondage et ses données n'ont pas été modifiés – veuillez réessayer.",
+  "err_modal_open_failed": "Impossible d'ouvrir la boîte de dialogue : le contenu du sondage est peut-être trop volumineux ou la requête a expiré. Veuillez réessayer.",
+  "info_created_via_label": "Créé via : {{value}}",
+  "info_menu_placeholder": "Menu",
+  "info_poll_id_label": "ID du sondage : {{value}}"
 }

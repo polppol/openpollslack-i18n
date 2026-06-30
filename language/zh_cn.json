@@ -215,5 +215,12 @@
   "mq_qtype_url": "网址",
   "mq_b_add_option": "添加选项",
   "info_vote_count_one": "{{count}} 票",
-  "info_vote_count_many": "{{count}} 票"
+  "info_vote_count_many": "{{count}} 票",
+  "err_action_other": "你无法执行此操作，因为你不是此投票的创建者。",
+  "err_delete_failed": "无法删除投票消息。投票及其数据未受影响，请重试。",
+  "err_modal_open_failed": "无法打开对话框——投票内容可能过大，或请求已过期。请重试。",
+  "info_created_via_label": "创建方式：{{value}}",
+  "info_menu_placeholder": "菜单",
+  "info_poll_id_label": "投票 ID：{{value}}",
+  "task_delete_refer_warn": "如果你有引用此投票的定时投票，该定时任务将停止工作。"
 }

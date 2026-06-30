@@ -217,5 +217,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "Añadir opción",
   "info_vote_count_one": "{{count}} voto",
-  "info_vote_count_many": "{{count}} votos"
+  "info_vote_count_many": "{{count}} votos",
+  "err_action_other": "No puedes hacer esto porque no eres el propietario de esta encuesta.",
+  "err_delete_failed": "No se pudo eliminar el mensaje de la encuesta. La encuesta y sus datos no se modificaron; inténtalo de nuevo.",
+  "err_modal_open_failed": "No se pudo abrir el cuadro de diálogo: el contenido de la encuesta puede ser demasiado grande o la solicitud expiró. Inténtalo de nuevo.",
+  "info_created_via_label": "Creada mediante: {{value}}",
+  "info_menu_placeholder": "Menú",
+  "info_poll_id_label": "ID de la encuesta: {{value}}",
+  "task_delete_refer_warn": "Si tienes una encuesta programada que hace referencia a esta encuesta, la programación dejará de funcionar."
 }

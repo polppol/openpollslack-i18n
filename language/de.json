@@ -217,5 +217,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "Option hinzufügen",
   "info_vote_count_one": "{{count}} Stimme",
-  "info_vote_count_many": "{{count}} Stimmen"
+  "info_vote_count_many": "{{count}} Stimmen",
+  "err_action_other": "Du kannst dies nicht tun, da du nicht der Ersteller dieser Umfrage bist.",
+  "err_delete_failed": "Die Umfragenachricht konnte nicht gelöscht werden. Die Umfrage und ihre Daten wurden nicht verändert – bitte versuche es erneut.",
+  "err_modal_open_failed": "Der Dialog konnte nicht geöffnet werden – der Umfrageinhalt ist möglicherweise zu groß oder die Anfrage ist abgelaufen. Bitte versuche es erneut.",
+  "info_created_via_label": "Erstellt über: {{value}}",
+  "info_menu_placeholder": "Menü",
+  "info_poll_id_label": "Umfrage-ID: {{value}}",
+  "task_delete_refer_warn": "Wenn du eine geplante Umfrage hast, die sich auf diese Umfrage bezieht, funktioniert der Zeitplan nicht mehr."
 }

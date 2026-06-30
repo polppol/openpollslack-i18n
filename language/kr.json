@@ -217,5 +217,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "선택지 추가",
   "info_vote_count_one": "{{count}}표",
-  "info_vote_count_many": "{{count}}표"
+  "info_vote_count_many": "{{count}}표",
+  "err_action_other": "이 투표의 작성자가 아니므로 이 작업을 수행할 수 없습니다.",
+  "err_delete_failed": "투표 메시지를 삭제하지 못했습니다. 투표와 데이터는 변경되지 않았습니다. 다시 시도해 주세요.",
+  "err_modal_open_failed": "대화 상자를 열지 못했습니다. 투표 내용이 너무 크거나 요청이 만료되었을 수 있습니다. 다시 시도해 주세요.",
+  "info_created_via_label": "생성 방법: {{value}}",
+  "info_menu_placeholder": "메뉴",
+  "info_poll_id_label": "투표 ID: {{value}}",
+  "task_delete_refer_warn": "이 투표를 참조하는 예약 투표가 있는 경우 해당 일정이 작동을 멈춥니다."
 }

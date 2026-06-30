@@ -215,5 +215,12 @@
   "mq_qtype_url": "URL",
   "mq_b_add_option": "新增選項",
   "info_vote_count_one": "{{count}} 票",
-  "info_vote_count_many": "{{count}} 票"
+  "info_vote_count_many": "{{count}} 票",
+  "err_action_other": "你無法執行此操作，因為你不是此投票的建立者。",
+  "err_delete_failed": "無法刪除投票訊息。投票及其資料未受影響，請重試。",
+  "err_modal_open_failed": "無法開啟對話方塊——投票內容可能過大，或請求已逾時。請重試。",
+  "info_created_via_label": "建立方式：{{value}}",
+  "info_menu_placeholder": "選單",
+  "info_poll_id_label": "投票 ID：{{value}}",
+  "task_delete_refer_warn": "如果你有引用此投票的排程投票，該排程將停止運作。"
 }
