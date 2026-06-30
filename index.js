@@ -1991,14 +1991,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
 
           if (ignoreOwnerCheck) {
             if (userId !== validConfigUser) {
-              let mRequestBody = {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                //blocks: blocks,
-                text: stri18n(userLang, 'err_only_installer'),
-              };
-              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              await notifyUser(body, context, stri18n(userLang, 'err_only_installer'), userLang);
               return;
             }
           }
@@ -2425,14 +2418,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
 
           } else if (cmdMode === "list_all") {
             if (userId !== validConfigUser) {
-              let mRequestBody = {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                //blocks: blocks,
-                text: stri18n(userLang, 'err_only_installer'),
-              };
-              await postChat(body.response_url, 'ephemeral', mRequestBody);
+              await notifyUser(body, context, stri18n(userLang, 'err_only_installer'), userLang);
               return;
             }
             const queryRes = await scheduleCol.aggregate([
@@ -2737,12 +2723,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
             const testTeam = await getTeamInfo(teamId);
             if (testTeam?.user?.id) testConfigUser = testTeam.user.id;
             if (userId !== testConfigUser) {
-              await postChat(body.response_url, 'ephemeral', {
-                token: context.botToken,
-                channel: channel,
-                user: userId,
-                text: stri18n(userLang, 'err_only_installer'),
-              });
+              await notifyUser(body, context, stri18n(userLang, 'err_only_installer'), userLang);
               return;
             }
 
@@ -2930,14 +2911,7 @@ async function processCommand(ack, body, client, command, context, say, respond)
           }
 
           if (body.user_id !== validConfigUser) {
-            let mRequestBody = {
-              token: context.botToken,
-              channel: channel,
-              user: userId,
-              //blocks: blocks,
-              text: stri18n(userLang, 'err_only_installer'),
-            };
-            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            await notifyUser(body, context, stri18n(userLang, 'err_only_installer'), userLang);
             return;
           }
 
@@ -4585,14 +4559,7 @@ app.action('btn_vote', async ({ action, ack, body, context }) => {
           }
 
           if (voteCount >= value.limit) {
-            let mRequestBody = {
-              token: context.botToken,
-              channel: channel,
-              user: body.user.id,
-              attachments: [],
-              text: parameterizedString(stri18n(userLang, 'err_vote_over_limit'), {limit: value.limit}),
-            };
-            await postChat(body.response_url, 'ephemeral', mRequestBody);
+            await notifyUser(body, context, parameterizedString(stri18n(userLang, 'err_vote_over_limit'), {limit: value.limit}), userLang);
             return;
           }
         }
@@ -4773,14 +4740,7 @@ app.action('add_choice_after_post', async ({ ack, body, action, context,client }
                   }
 
                   if (thisChoice === value) {
-                    let mRequestBody = {
-                      token: context.botToken,
-                      channel: body.channel.id,
-                      user: body.user.id,
-                      attachments: [],
-                      text: parameterizedString(stri18n(userLang, 'err_duplicate_add_choice'), {text: value}),
-                    };
-                    await postChat(body.response_url, 'ephemeral', mRequestBody);
+                    await notifyUser(body, context, parameterizedString(stri18n(userLang, 'err_duplicate_add_choice'), {text: value}), userLang);
                     return;
                   }
 
@@ -7810,28 +7770,13 @@ async function revealOrHideVotes(body, context, value) {
 
   if (body.user.id !== value.user) {
     //logger.debug('reject request because not owner');
-    let mRequestBody = {
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      attachments: [],
-      text: stri18n(appLang,'err_reveal_other'),
-    };
-    await postChat(body.response_url,'ephemeral',mRequestBody);
-
+    await notifyUser(body, context, stri18n(appLang, 'err_reveal_other'), appLang);
     return;
   }
 
   if (!value.hasOwnProperty('revealed')) {
     logger.info('Missing `revealed` information on poll');
-    let mRequestBody = {
-      token: context.botToken,
-      channel: body.channel.id,
-      user: body.user.id,
-      attachments: [],
-      text: stri18n(appLang,'err_poll_unconsistent_exception'),
-    };
-    await postChat(body.response_url,'ephemeral',mRequestBody);
+    await notifyUser(body, context, stri18n(appLang, 'err_poll_unconsistent_exception'), appLang);
     return;
   }
 
@@ -8012,14 +7957,7 @@ async function revealOrHideVotes(body, context, value) {
       await postChat(body.response_url,'update',mRequestBody);
     } catch (e) {
       logger.error(e);
-      let mRequestBody = {
-        token: context.botToken,
-        channel: body.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: (isHidden ? stri18n(userLang,'err_poll_hide_exception'): stri18n(userLang,'err_poll_reveal_exception')),
-      };
-      await postChat(body.response_url,'ephemeral',mRequestBody);
+      await notifyUser(body, context, (isHidden ? stri18n(userLang,'err_poll_hide_exception'): stri18n(userLang,'err_poll_reveal_exception')), userLang);
     } finally {
       release();
     }
@@ -8060,14 +7998,7 @@ async function deletePoll(body, client, context, value) {
 
     if (body.user.id !== value.user) {
       //logger.debug('reject request because not owner');
-      let mRequestBody = {
-        token: context.botToken,
-        channel: value.channel.id,
-        user: body.user.id,
-        attachments: [],
-        text: stri18n(appLang,'err_delete_other'),
-      };
-      await postChat(value.response_url,'ephemeral',mRequestBody);
+      await notifyUser(body, context, stri18n(appLang, 'err_delete_other'), appLang);
       return;
     }
 
@@ -8475,14 +8406,7 @@ async function closePoll(body, client, context, value) {
   }
   if (body.user.id !== value.user) {
     //logger.debug('reject request because not owner');
-    let mRequestBody = {
-      token: context.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          attachments: [],
-          text: stri18n(appLang,'err_close_other'),
-    };
-    await postChat(body.response_url,'ephemeral',mRequestBody);
+    await notifyUser(body, context, stri18n(appLang, 'err_close_other'), appLang);
     return;
   }
 
