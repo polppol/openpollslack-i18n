@@ -554,12 +554,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"config@npm:^4.4.1":
-  version: 4.4.1
-  resolution: "config@npm:4.4.1"
+"config@npm:^4.4.2":
+  version: 4.4.2
+  resolution: "config@npm:4.4.2"
   dependencies:
     json5: "npm:^2.2.3"
-  checksum: 10c0/f92c7b61d2456f933a53da1fea06abe116584df99dd1254a93e7b10c9487ddf17a1f865bd7ab8e4cf0cca23777dd89b6b1ba81e1c71e06111d36fbb00b49c28f
+  checksum: 10c0/2ef94db31c8f573d2beefa6682ec16f142f9f56710c43e4fc8a8d5bb48cc056b1f8174ae8fa4554af23c041e366dc8c940e7e6d9664904c6ef0ed2e60fe51216
   languageName: node
   linkType: hard
 
@@ -607,12 +607,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"cronstrue@npm:^3.21.0":
-  version: 3.21.0
-  resolution: "cronstrue@npm:3.21.0"
+"cronstrue@npm:^3.24.0":
+  version: 3.24.0
+  resolution: "cronstrue@npm:3.24.0"
   bin:
     cronstrue: bin/cli.js
-  checksum: 10c0/6896a5685a841436ab057fe7e8ea545341db77f414b286f032a4b4d26c87320a65da5cc774d5b7ef132ff25a6eae8779c56ecc48cfd6d5da8ef9a14483adfd76
+  checksum: 10c0/7e723c2f798fea2a8c67b018670c8128e71d6bd02e9a835b070f039a62985a32ab05b70410b178da1bd40709103a1b938a3565f53b0070ace6c453ee90dfd36e
   languageName: node
   linkType: hard
 
@@ -1402,9 +1402,9 @@ __metadata:
     body-parser: "npm:^2.3.0"
     cli-progress: "npm:^3.12.0"
     compression: "npm:^1.8.1"
-    config: "npm:^4.4.1"
+    config: "npm:^4.4.2"
     cron-parser: "npm:^5.6.1"
-    cronstrue: "npm:^3.21.0"
+    cronstrue: "npm:^3.24.0"
     glob: "npm:^13.0.6"
     helmet: "npm:^8.2.0"
     moment-timezone: "npm:^0.6.2"
