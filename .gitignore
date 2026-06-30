@@ -49,3 +49,7 @@ auth.json
 docs/example/proxmox/app/default.json
 docs/example/proxmox/app/cloudflare.env
 docs/example/proxmox/rproxy/cloudflare.env
+/config/default-dev.json
+# Timestamped config backups (the apply-config/deploy scripts create these — CONTAIN SECRETS)
+/config/*.bak.*
+/config/*.bak
