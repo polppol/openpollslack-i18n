@@ -7873,7 +7873,9 @@ async function usersVotes(body, client, context, value) {
     type: 'modal',
     title: {
       type: 'plain_text',
-      text: stri18n(userLang,'info_all_user_vote'),
+      // Slack rejects view titles > 24 chars (ru/es translations overflowed -> the
+      // whole "See all votes" modal failed to open). Backstop for every language.
+      text: stri18n(userLang,'info_all_user_vote').slice(0, 24),
     },
     close: {
       type: 'plain_text',
@@ -9018,14 +9020,24 @@ async function updateVoteBlock(team,channel,ts,blocks,poll,userLang,isHidden,isC
       } else if (poll[val.id].length === 0) {
         newVoters = stri18n(userLang, 'info_no_vote');
       } else {
+        // Cap the @mention list so the rendered text can't exceed Slack's 3000-char
+        // section/context limit. Without this, a popular non-anonymous option (~185+
+        // voters) freezes the poll: the vote is persisted to Mongo BEFORE chat.update,
+        // so once over the cap the message stops re-rendering while votes keep saving.
+        // Mirrors the usersVotes "+N" truncation; vCount stays the true total. Reserve
+        // headroom (2700) for the count string + the option text prepended in compact UI.
         newVoters = '';
-        for (const voter of poll[val.id]) {
-          if (!val.anonymous) {
-            newVoters += `<@${voter}> `;
-          }
-        }
-
         const vCount = poll[val.id].length;
+        if (!val.anonymous) {
+          let shown = 0;
+          for (const voter of poll[val.id]) {
+            const mention = `<@${voter}> `;
+            if (newVoters.length + mention.length > 2700) break;
+            newVoters += mention;
+            shown++;
+          }
+          if (shown < vCount) newVoters += `+${vCount - shown} `;
+        }
         newVoters += parameterizedString(stri18n(userLang, vCount === 1 ? 'info_vote_count_one' : 'info_vote_count_many'), { count: vCount });
       }
 

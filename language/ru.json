@@ -17,7 +17,7 @@
   "info_close": "Закрыть",
   "info_by": ":writing_hand: от <@{{user_id}}>",
   "info_addon": "",
-  "info_all_user_vote": "Голоса всех пользователей",
+  "info_all_user_vote": "Голоса пользователей",
   "info_need_help": "Нужна помощь? | <mailto:{{email}}|E-Mail> | <{{link}}|URL>\nЕсли есть неправильный перевод, сообщите нам, мы исправим его для вас!",
   "info_create_poll": "Создать опрос",
   "info_command_source": ":information_source:",
