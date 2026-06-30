@@ -1441,8 +1441,13 @@ const postChat = async (url,type,requestBody) => {
       }
       ret.slack_response = await sendMessageUsingUrl(url,requestBody);
       if(ret.slack_response?.status!==200) {
+        // Capture Slack's response BODY — a non-200 from a response_url carries the real
+        // reason (e.g. invalid_blocks + which field); the status text alone is opaque.
+        let _body = '';
+        try { _body = await ret.slack_response.text(); } catch (e) { /* noop */ }
+        logger.error(`response_url POST non-200: status=${ret.slack_response?.status} statusText=${ret.slack_response?.statusText} body=${(_body||'').slice(0,800)}`);
         ret.status = false;
-        ret.message = ret.slack_response?.statusText+` ${addChNotFoundErr}`;
+        ret.message = `${ret.slack_response?.status} ${ret.slack_response?.statusText} :: ${(_body||'').slice(0,300)} ${addChNotFoundErr}`;
         return ret;
       }
     }
