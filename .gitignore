@@ -12,7 +12,10 @@ yarn-error.log
 !.yarn/versions
 .pnp.*
 
-# Per-deployment config (CONTAINS SECRETS — never commit)
+# Per-deployment config (CONTAINS SECRETS — never commit). Ignore ALL config JSON to be safe;
+# only the *.dist template is tracked (it has no real secrets). Add `!config/<name>.json` if a
+# genuinely secret-free JSON ever needs tracking (e.g. custom-environment-variables.json).
+/config/*.json
 config/default.json
 config/open_poll.json
 config/polls.json
