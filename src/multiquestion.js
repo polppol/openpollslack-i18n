@@ -917,7 +917,7 @@ async function sendMyVotes(client, token, body, pollData, ts, lang) {
 // (a missing creator blocks everyone); public is visible to anyone.
 async function sendAllVotes(client, token, body, pollData, ts, lang) {
   const userId = body.user.id; const para = pollData.para || {};
-  const reject = async (k) => { try { await client.chat.postEphemeral({ token, channel: body.channel.id, user: userId, text: stri18n(lang, k) }); } catch (e) { /* noop */ } };
+  const reject = async (k) => { try { if (_opts.notify) await _opts.notify(body, token, stri18n(lang, k), lang); else await client.chat.postEphemeral({ token, channel: body.channel.id, user: userId, text: stri18n(lang, k) }); } catch (e) { /* noop */ } };
   // CREATOR-ONLY, always — exactly like the single-question poll's usersVotes
   // (index.js usersVotes: body.user.id !== value.user → reject). This also prevents a
   // non-creator from seeing hidden/un-revealed voters or free-text answers early.
@@ -959,7 +959,7 @@ async function handleMenu({ ack, body, action, client, context }) {
   const lang = (pollData.para && pollData.para.user_lang) || 'en';
   const ownerOnly = (a === 'reveal' || a === 'close' || a === 'reopen' || a === 'delete');
   if (ownerOnly && pollData.user_id && body.user.id !== pollData.user_id) {
-    try { await client.chat.postEphemeral({ token, channel, user: body.user.id, text: stri18n(lang, 'err_action_other') }); } catch (e) { /* noop */ }
+    try { if (_opts.notify) await _opts.notify(body, token, stri18n(lang, 'err_action_other'), lang); else await client.chat.postEphemeral({ token, channel, user: body.user.id, text: stri18n(lang, 'err_action_other') }); } catch (e) { /* noop */ }
     return;
   }
   if (a === 'reveal') await doReveal(client, token, pollData, channel, ts, value.reveal, body.response_url);

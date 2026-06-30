@@ -565,6 +565,9 @@ try {
     // votes-doc create (response_url mode) is serialized — no duplicate votes docs
     // under concurrent first-interactions. Same key shape btn_vote uses.
     lock: async (key) => { if (!mutexes.hasOwnProperty(key)) mutexes[key] = new Mutex(); return await mutexes[key].acquire(); },
+    // System notice routing: modal popup (system_message_via_modal) or ephemeral fallback —
+    // mirrors the single-poll path. mq passes (body, token, text, lang).
+    notify: (body, token, text, lang) => notifyUser(body, { botToken: token }, text, lang),
     resolveTeamDefaults: async (teamId) => {
       let tc = {};
       try { tc = await getTeamOverride(teamId) || {}; } catch (e) { tc = {}; }
