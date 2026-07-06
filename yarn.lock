@@ -1337,10 +1337,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"node-cron@npm:^4.5.0":
-  version: 4.5.0
-  resolution: "node-cron@npm:4.5.0"
-  checksum: 10c0/b0b8aa52740a96fd3fcae629d072fdcdc94e56f910b88a035e1fbd7bd5525f6ff6f87d30699b62b9bc270def928573b548f4d9339d88552b20360f601f507cf6
+"node-cron@npm:^4.6.0":
+  version: 4.6.0
+  resolution: "node-cron@npm:4.6.0"
+  checksum: 10c0/6523219aedd60441b43acb65670d98751a875185d88666d32ee62b044f15ffdd6a5d5422f0a060a324df918990f218fe9e400bf1db54d308a72642e396a1fbd2
   languageName: node
   linkType: hard
 
@@ -1409,7 +1409,7 @@ __metadata:
     helmet: "npm:^8.2.0"
     moment-timezone: "npm:^0.6.2"
     mongodb: "npm:^7.4.0"
-    node-cron: "npm:^4.5.0"
+    node-cron: "npm:^4.6.0"
     uuid: "npm:^14.0.1"
     winston: "npm:^3.19.0"
     winston-daily-rotate-file: "npm:^5.0.0"
