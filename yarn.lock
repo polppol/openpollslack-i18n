@@ -598,12 +598,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"cron-parser@npm:^5.6.1":
-  version: 5.6.1
-  resolution: "cron-parser@npm:5.6.1"
+"cron-parser@npm:^5.6.2":
+  version: 5.6.2
+  resolution: "cron-parser@npm:5.6.2"
   dependencies:
     luxon: "npm:^3.7.2"
-  checksum: 10c0/a495e9e6606f6294dc1bcff551bde57fc2730c7b946c15f74461eac652e15928c46778c8b30b24a3b67921cd205daf07b70a3429bf6716012811e02611d01b7a
+  checksum: 10c0/c65b33329c2d69d385d07906250d0961685d0416270950a34eae5efb423cc5e878f9f62c890390bf6aa3bd7e0e5e92442db0aec8a97d6396e2473c459dce24ad
   languageName: node
   linkType: hard
 
@@ -1403,7 +1403,7 @@ __metadata:
     cli-progress: "npm:^3.12.0"
     compression: "npm:^1.8.1"
     config: "npm:^4.4.2"
-    cron-parser: "npm:^5.6.1"
+    cron-parser: "npm:^5.6.2"
     cronstrue: "npm:^3.24.0"
     glob: "npm:^13.0.6"
     helmet: "npm:^8.2.0"
