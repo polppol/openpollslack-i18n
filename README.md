@@ -92,7 +92,7 @@ You can switch between **Visual** and **Advanced** at any time — your question
 
 **Via command (no modal):** `/poll multi Q: ... [type] | - opt | - opt | Q: ...` (use ` | ` between lines). Add `preview` (e.g. `/poll multi preview …`) to open the builder pre-filled instead, and lead with `anonymous` / `hidden` to set those.
 
-Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. Regular single-question polls work exactly as before — this is an additional option, not a replacement.
+Notes: a form supports up to 10 questions and 10 options each (a Slack message has a hard block limit, so very large forms are rejected at create time). Anonymous / hidden-until-revealed settings apply to the whole form. In an **anonymous** form, answers to open questions (text, number, date, …) are shown in the poll **without names**, sorted (so their order doesn't reveal who answered when), just as choice questions show counts without voters; a **hidden** form shows them only after the creator reveals votes. Regular single-question polls work exactly as before — this is an additional option, not a replacement.
 
 ### Simple poll via command
 ```

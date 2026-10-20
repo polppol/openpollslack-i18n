@@ -13,11 +13,12 @@
 #
 #   bash app/update-app-to-ct.sh                 # prompts; pull latest of current branch
 #   APP_REF=4.1.1.1 bash app/update-app-to-ct.sh # deploy a specific release tag
-#   APP_REF=feature/multi-question bash app/update-app-to-ct.sh  # deploy a feature
-#                                                # BRANCH (e.g. to a TEST CT) — the in-CT
-#                                                # step fetches it + checks it out + fast-
-#                                                # forwards to its tip. (Or just type the
-#                                                # branch name at the "Version to deploy" prompt.)
+#   APP_ID=5001 APP_REF=feature/multi-question bash app/update-app-to-ct.sh
+#                                                # deploy a feature BRANCH to another (e.g.
+#                                                # TEST) CT — the in-CT step fetches it and
+#                                                # checks out exactly origin's tip (even if
+#                                                # the branch was force-pushed). (Or type the
+#                                                # CT id / branch name at the prompts.)
 #
 # Roll back instantly if a release misbehaves:  pct rollback <APP_ID> pre-update
 #
@@ -31,7 +32,7 @@ _p="${HERE}/../lib/ask.sh"
 . "${_p}"
 
 # ─────────────────────────── settings to review ────────────────────────────
-APP_ID=5000                                  # the App CT to update
+APP_ID="${APP_ID:-5000}"                     # the App CT to update (env override honored — run once per app CT)
 APP_PORT="${APP_PORT:-}"                      # health-check port ONLY; auto-detected from the CT's config when blank. The update NEVER changes the port or writes config.
 APP_REF="${APP_REF:-}"                       # tag/branch to deploy; empty = pull current branch
 SNAPSHOT=true                                # take a pre-update snapshot first (rollback safety)

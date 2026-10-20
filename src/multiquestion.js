@@ -230,6 +230,14 @@ function formatAnswer(type, value) {
   return String(value);
 }
 
+/** Raw answer values of one question WITHOUT their authors, for anonymous display.
+ *  Sorted (number-aware, so "9" < "10" and epoch datetimes run in time order) so
+ *  the list order can't be matched to the order people answered in. */
+function unattributedAnswers(qa) {
+  return Object.values(qa || {}).map(String)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
 // ───────────────────────── Slack block rendering (pure) ─────────────────────
 
 function divider() { return { type: 'divider' }; }
@@ -395,15 +403,23 @@ function buildBlocks(pollData, votesDoc, opts = {}) {
       let summary;
       if (hidden) summary = stri18n(userLang, 'info_wait_reveal');
       else if (answeredBy.length === 0) summary = stri18n(userLang, 'info_no_vote');
-      else if (anonymous) summary = parameterizedString(stri18n(userLang, 'mq_answered'), { count: answeredBy.length });
       else {
+        // One line per answer: line breaks in a multiline answer fold into spaces, so an
+        // answer can't fake extra "• …" / "<@user>: …" lines in the summary.
+        const answerText = (v) => trimText(formatAnswer(q.type, v).replace(/\s*[\r\n]+\s*/g, ' '), 80);
+        // Anonymous: show the answers themselves but never who wrote them (the input
+        // analogue of a choice option's count-without-voters), under an "N answered" line.
+        const lines = anonymous
+          ? unattributedAnswers(qa).map((v) => `• ${answerText(v)}`)
+          : answeredBy.map((u) => `<@${u}>: ${answerText(qa[u])}`);
         // Cap rendered answers (long free text) so the section can't exceed Slack's
         // 3000-char limit. A dedicated, smaller cap than option-voter @mentions: each
         // answer line is ~80+ chars, so 25 × ~95 ≈ 2375 stays comfortably under.
         const ANS_CAP = 25;
-        const shown = answeredBy.slice(0, ANS_CAP).map((u) => `<@${u}>: ${trimText(formatAnswer(q.type, qa[u]), 80)}`).join('\n');
-        const extra = answeredBy.length - Math.min(answeredBy.length, ANS_CAP);
-        summary = shown + (extra > 0 ? `\n${parameterizedString(stri18n(userLang, 'mq_more'), { count: extra })}` : '');
+        const extra = lines.length - Math.min(lines.length, ANS_CAP);
+        summary = (anonymous ? parameterizedString(stri18n(userLang, 'mq_answered'), { count: answeredBy.length }) + '\n' : '')
+          + lines.slice(0, ANS_CAP).join('\n')
+          + (extra > 0 ? `\n${parameterizedString(stri18n(userLang, 'mq_more'), { count: extra })}` : '');
       }
       blocks.push({
         type: 'section',
@@ -1589,7 +1605,7 @@ module.exports = {
   init, register, isMulti, openCreateModal, openBuilder, createFromCommand, formToCommandDSL,
   buildBuilderView, buildQuestionView, readQuestionFromView, // exported for structural tests
   // exported for unit tests:
-  parseForm, applyVote, applyAnswer, formatAnswer, buildBlocks, parseCreateSubmit, effectiveLimit,
+  parseForm, applyVote, applyAnswer, formatAnswer, unattributedAnswers, buildBlocks, parseCreateSubmit, effectiveLimit,
   buildCreateModalView, buildAnswerModalView, answerElement, readAnswerValue, estimateBlocks,
   MAX_QUESTIONS, MAX_OPTIONS, MAX_BLOCKS, ALL_TYPES,
 };

@@ -572,7 +572,13 @@ ownership, restarts the service, and waits for a healthy start:
 bash app/update-app-to-ct.sh                  # prompts: CT id, version (blank = pull latest), snapshot? (Y)
 # or non-interactively:
 APP_REF=4.1.1.1 NONINTERACTIVE=1 bash app/update-app-to-ct.sh   # deploy a specific release tag
+APP_ID=5001 APP_REF=feature/x NONINTERACTIVE=1 bash app/update-app-to-ct.sh   # another CT (e.g. a test CT), a branch
 ```
+
+A **branch** is always deployed at exactly `origin/<branch>` (so a branch that was
+force‑pushed or re‑cut upstream still updates cleanly); a **tag** is checked out
+as‑is. If the CT is currently on a tag, give the version explicitly (`APP_REF=master`
+or a tag) — a blank version means "latest of the current branch".
 
 It prompts for the App CT id, the version to deploy (a **tag/branch**, or blank
 to pull the latest of the current branch), and whether to snapshot first
@@ -584,7 +590,7 @@ pct rollback <APP_ID> pre-update
 
 Works for **both** bundled and app‑only CTs (it only touches the Node app, never
 Caddy). Run it once per app CT in the split topology. Under the hood it runs
-`app/update-app.in-ct.sh` inside the CT (`git pull`/`checkout` →
+`app/update-app.in-ct.sh` inside the CT (`git fetch` + `checkout` →
 `corepack yarn install --immutable` → `chown` → `systemctl restart openpoll` →
 wait on `/healthz`).
 

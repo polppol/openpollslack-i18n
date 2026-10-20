@@ -6,7 +6,7 @@
 # pushes this in and runs it. (To run it manually: pct enter <App CT ID>, then
 #  APP_REF=4.1.1.1 bash update-app.in-ct.sh .)
 #
-# It git-pulls (or checks out a specific tag/branch), re-syncs dependencies to
+# It fetches + checks out the ref (a branch at exactly origin's tip, or a tag), re-syncs dependencies to
 # that ref's yarn.lock, fixes ownership, restarts the service, and waits for a
 # healthy start. Works for BOTH bundled and app-only CTs — it only touches the
 # Node app, never Caddy.
@@ -41,19 +41,35 @@ cd "${APP_DIR}"
 _ver() { git describe --tags --always 2>/dev/null || git rev-parse --short HEAD; }
 echo ">>> Current version: $(_ver)"
 
-if [ -n "${APP_REF}" ]; then
-  echo ">>> Fetching, then checking out '${APP_REF}' ..."
+# Bring the checkout to the ref being deployed — exactly what origin has.
+#   BRANCH (APP_REF, or the current branch when APP_REF is blank): reset the local
+#     branch to origin/<branch>. A plain `git pull --ff-only` wedges with "Not
+#     possible to fast-forward" when the branch was force-pushed / re-cut upstream
+#     (e.g. a feature branch reset after a squash-merge); a deploy checkout carries
+#     no local commits, so following the remote tip is the right behavior.
+#   TAG / commit: checked out as a detached HEAD.
+# Uncommitted local edits that the new ref would overwrite make git refuse, so the
+# script stops here — BEFORE the restart — and the running app is untouched.
+sync_to_ref() {
   git fetch --tags --prune origin
-  git checkout "${APP_REF}"
-  # If APP_REF is a BRANCH (HEAD is a symbolic ref), fast-forward to its tip.
-  # If it's a TAG (detached HEAD), there is nothing to pull — skip cleanly.
-  if git symbolic-ref -q HEAD >/dev/null 2>&1; then
-    git pull --ff-only
+  local target="${APP_REF:-$(git symbolic-ref -q --short HEAD || true)}"
+  if [ -z "${target}" ]; then
+    echo "ERROR: the checkout is on a detached tag/commit ($(_ver)), so there is no branch to pull." >&2
+    echo "       Name the version to deploy, e.g.  APP_REF=master  or  APP_REF=<tag>" >&2
+    return 1
   fi
-else
-  echo ">>> Pulling latest of the current branch ..."
-  git pull --ff-only
-fi
+  if git show-ref --verify --quiet "refs/remotes/origin/${target}"; then
+    echo ">>> Checking out branch '${target}' at origin/${target} ..."
+    git checkout -B "${target}" "origin/${target}"
+  elif [ -n "${APP_REF}" ]; then
+    echo ">>> Checking out '${APP_REF}' ..."
+    git checkout "${APP_REF}"
+  else
+    echo "ERROR: branch '${target}' has no origin/${target} to update from." >&2
+    return 1
+  fi
+}
+sync_to_ref
 echo ">>> New version:     $(_ver)"
 
 # --- Sync dependencies to this ref's yarn.lock ------------------------------
