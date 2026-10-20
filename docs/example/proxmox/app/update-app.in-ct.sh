@@ -26,6 +26,7 @@ APP_DIR="${APP_DIR:-/opt/openpollslack-i18n}"
 APP_USER="${APP_USER:-openpoll}"
 APP_PORT="${APP_PORT:-5000}"        # the port the app listens on (for the health check)
 APP_REF="${APP_REF:-}"              # tag/branch to deploy; empty = pull the current branch
+UPGRADE_NODE="${UPGRADE_NODE:-false}" # true = also upgrade Node.js within its installed major (npm comes with it)
 # ────────────────────────────────────────────────────────────────────────────
 
 [ -d "${APP_DIR}/.git" ] || {
@@ -71,6 +72,19 @@ sync_to_ref() {
 }
 sync_to_ref
 echo ">>> New version:     $(_ver)"
+
+# --- Optional: upgrade Node.js within its installed major (UPGRADE_NODE=true) -----
+# apt only offers what the NodeSource repo set up at install provides (setup_<major>.x),
+# so this never jumps a major. npm and Corepack ship inside the nodejs package and
+# update with it. Runs after the node-side snapshot and BEFORE the restart, so a
+# failure stops the update here with the old Node still serving.
+if [ "${UPGRADE_NODE}" = true ]; then
+  echo ">>> Upgrading Node.js within its major (now $(node -v), npm $(npm -v)) ..."
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --only-upgrade nodejs
+  hash -r
+  echo ">>> Node.js is now $(node -v), npm $(npm -v)"
+fi
 
 # --- Sync dependencies to this ref's yarn.lock ------------------------------
 # Node <=24 bundles Corepack; Node 25+ unbundled it — install from npm if missing.

@@ -19,6 +19,9 @@
 #                                                # checks out exactly origin's tip (even if
 #                                                # the branch was force-pushed). (Or type the
 #                                                # CT id / branch name at the prompts.)
+#   bash app/update-app-to-ct.sh --upgrade-node  # ALSO upgrade Node.js to the newest
+#                                                # release of its installed major (npm +
+#                                                # Corepack come with it), after the snapshot
 #
 # Roll back instantly if a release misbehaves:  pct rollback <APP_ID> pre-update
 #
@@ -37,21 +40,24 @@ APP_PORT="${APP_PORT:-}"                      # health-check port ONLY; auto-det
 APP_REF="${APP_REF:-}"                       # tag/branch to deploy; empty = pull current branch
 SNAPSHOT=true                                # take a pre-update snapshot first (rollback safety)
 SNAPSHOT_NAME=pre-update
+UPGRADE_NODE="${UPGRADE_NODE:-false}"        # also upgrade Node.js within its installed major (updates npm too); --upgrade-node
 # ────────────────────────────────────────────────────────────────────────────
 
 for _arg in "$@"; do
   case "$(printf '%s' "${_arg}" | tr '[:upper:]' '[:lower:]')" in
-    -y|--yes)       NONINTERACTIVE=1 ;;
-    --no-snapshot)  SNAPSHOT=false ;;
-    *) echo "ERROR: unknown argument '${_arg}' (supported: --no-snapshot, --yes)" >&2; exit 1 ;;
+    -y|--yes)        NONINTERACTIVE=1 ;;
+    --no-snapshot)   SNAPSHOT=false ;;
+    --upgrade-node)  UPGRADE_NODE=true ;;
+    *) echo "ERROR: unknown argument '${_arg}' (supported: --no-snapshot, --upgrade-node, --yes)" >&2; exit 1 ;;
   esac
 done
 export NONINTERACTIVE
 
-ask_active || echo ">>> non-interactive: keeping defaults (App CT ${APP_ID}, ref '${APP_REF:-current branch}', snapshot=${SNAPSHOT})." >&2
-ask     APP_ID   "App CT id to update"
-ask     APP_REF  "Version to deploy — tag/branch (blank = pull current branch)"
-confirm SNAPSHOT "Take a pre-update snapshot first (instant rollback)?"
+ask_active || echo ">>> non-interactive: keeping defaults (App CT ${APP_ID}, ref '${APP_REF:-current branch}', snapshot=${SNAPSHOT}, upgrade-node=${UPGRADE_NODE})." >&2
+ask     APP_ID       "App CT id to update"
+ask     APP_REF      "Version to deploy — tag/branch (blank = pull current branch)"
+confirm SNAPSHOT     "Take a pre-update snapshot first (instant rollback)?"
+confirm UPGRADE_NODE "Also upgrade Node.js to the latest of its major version (updates npm too)?"
 
 command -v pct >/dev/null 2>&1 || {
   echo "ERROR: 'pct' not found — run this ON a Proxmox node, not inside a CT." >&2; exit 1; }
@@ -88,7 +94,7 @@ fi
 
 echo ">>> Updating the app inside CT ${APP_ID} ..."
 pct push "${APP_ID}" "${HERE}/update-app.in-ct.sh" /root/update-app.in-ct.sh
-if ! pct exec "${APP_ID}" -- env APP_REF="${APP_REF}" APP_PORT="${APP_PORT}" bash /root/update-app.in-ct.sh; then
+if ! pct exec "${APP_ID}" -- env APP_REF="${APP_REF}" APP_PORT="${APP_PORT}" UPGRADE_NODE="${UPGRADE_NODE}" bash /root/update-app.in-ct.sh; then
   echo "ERROR: the update did not finish healthily inside CT ${APP_ID}." >&2
   [ "${SNAPSHOT}" = true ] && echo "       roll back with:  pct rollback ${APP_ID} ${SNAPSHOT_NAME}" >&2
   echo "       inspect:  pct exec ${APP_ID} -- journalctl -u openpoll -n 50 --no-pager" >&2
@@ -100,5 +106,6 @@ echo "App container ${APP_ID} updated. Check:"
 echo "  pct exec ${APP_ID} -- journalctl -u openpoll -n 30 --no-pager   # expect 'Bolt app is running!'"
 [ "${SNAPSHOT}" = true ] && echo "  roll back if needed:  pct rollback ${APP_ID} ${SNAPSHOT_NAME}"
 echo
-echo "Note: if a release bumped the Node MAJOR version, re-run app/deploy-app-to-ct.sh"
-echo "(or the Node install step in app/setup-app.in-ct.sh) first, then update again."
+echo "Note: --upgrade-node stays within the installed Node major. If a release bumped the"
+echo "Node MAJOR version, re-run app/deploy-app-to-ct.sh (or the Node install step in"
+echo "app/setup-app.in-ct.sh) first, then update again."

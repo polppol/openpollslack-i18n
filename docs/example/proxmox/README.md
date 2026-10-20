@@ -573,7 +573,14 @@ bash app/update-app-to-ct.sh                  # prompts: CT id, version (blank =
 # or non-interactively:
 APP_REF=4.1.1.1 NONINTERACTIVE=1 bash app/update-app-to-ct.sh   # deploy a specific release tag
 APP_ID=5001 APP_REF=feature/x NONINTERACTIVE=1 bash app/update-app-to-ct.sh   # another CT (e.g. a test CT), a branch
+bash app/update-app-to-ct.sh --upgrade-node   # also upgrade Node.js (+ its npm/Corepack) within its major
 ```
+
+`--upgrade-node` (or answering **y** at its prompt, or `UPGRADE_NODE=true`) runs
+`apt-get install --only-upgrade nodejs` inside the CT after the snapshot and before
+the restart. It only takes what the NodeSource repo for the installed major offers
+(e.g. the newest 24.x), so it never jumps a major; npm and Corepack are bundled with
+Node and update with it. Off by default so a normal update never changes the runtime.
 
 A **branch** is always deployed at exactly `origin/<branch>` (so a branch that was
 force‑pushed or re‑cut upstream still updates cleanly); a **tag** is checked out
