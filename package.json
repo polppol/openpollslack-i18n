@@ -28,21 +28,21 @@
     "async-mutex": "^0.5.0",
     "body-parser": "^2.3.0",
     "cli-progress": "^3.12.0",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "config": "^4.4.2",
-    "cron-parser": "^5.6.1",
-    "cronstrue": "^3.24.0",
+    "cron-parser": "^5.10.2",
+    "cronstrue": "^3.33.0",
     "glob": "^13.0.6",
-    "helmet": "^8.2.0",
-    "moment-timezone": "^0.6.2",
-    "mongodb": "^7.4.0",
-    "node-cron": "^4.5.0",
-    "uuid": "^14.0.1",
+    "helmet": "^8.3.0",
+    "moment-timezone": "^0.6.5",
+    "mongodb": "^7.7.0",
+    "node-cron": "^4.6.0",
+    "uuid": "^14.0.3",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   },
   "engines": {
     "node": ">=20.19"
   },
-  "packageManager": "yarn@4.14.1"
+  "packageManager": "yarn@4.18.1+sha512.b2e1e7524f654f2749d32b4ebcb4622473cb5bcbc485df2007e12a154e50162a4d795526768bc5f5b8f81717bfd79deb2472813d86fb5ae2eb551fa9c872b08f"
 }

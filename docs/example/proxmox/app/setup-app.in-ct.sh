@@ -40,6 +40,7 @@ apt-get install -y nodejs
 # Node <=24 bundles Corepack; Node 25+ unbundled it — install from npm if missing.
 command -v corepack >/dev/null 2>&1 || npm install -g corepack
 corepack enable
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0   # fetch the pinned Yarn without a [Y/n] prompt
 
 # --- Dedicated, unprivileged service account --------------------------------
 id -u "${APP_USER}" >/dev/null 2>&1 || \
